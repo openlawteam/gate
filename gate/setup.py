@@ -180,7 +180,7 @@ def prompt_repo_config(defaults: dict | None = None) -> dict:
     defaults = defaults or {}
 
     while True:
-        repo = input(f"Repository to review (owner/repo): ").strip()
+        repo = input("Repository to review (owner/repo): ").strip()
         if repo.count("/") == 1 and all(repo.split("/")):
             break
         print("  Invalid format. Use owner/repo (e.g. myorg/myapp)")
@@ -208,11 +208,13 @@ def prompt_repo_config(defaults: dict | None = None) -> dict:
     detected_type = profiles.detect_project_type(Path(clone))
     if detected_type != "none":
         print(f"  Detected project type: {detected_type}")
-        type_answer = input(f"  Use this project type? [Y/n/other]: ").strip().lower()
+        type_answer = input("  Use this project type? [Y/n/other]: ").strip().lower()
         if type_answer in ("", "y", "yes"):
             project_type = detected_type
         elif type_answer in ("n", "no"):
-            project_type = input("  Enter project type (node/python/go/rust/none): ").strip() or "none"
+            project_type = input(
+                "  Enter project type (node/python/go/rust/none): "
+            ).strip() or "none"
         else:
             project_type = type_answer
     else:

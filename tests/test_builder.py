@@ -1,6 +1,5 @@
 """Tests for gate.builder module."""
 
-from pathlib import Path
 
 from gate.builder import (
     _parse_generic,

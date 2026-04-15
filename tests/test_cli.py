@@ -1,7 +1,7 @@
 """Tests for gate.cli module."""
 
 import tomllib
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from gate.cli import cmd_add_repo, cmd_cancel, cmd_doctor, cmd_init, cmd_review, print_help
 

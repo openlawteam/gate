@@ -5,9 +5,7 @@ Real git repos are used for _setup_artifact_exclusions tests.
 """
 
 import subprocess
-from pathlib import Path
-
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 from gate.workspace import _setup_artifact_exclusions, prepare_context_files, remove_worktree
 

@@ -234,8 +234,13 @@ class GateServer:
             review_id = message.get("review_id")
             review = self._find_review(review_id)
             if review:
+                incoming_status = message.get("status", "")
+                if (review.get("status") == "fixing"
+                        and incoming_status != "fixing"):
+                    review["updated_at"] = _current_ms()
+                    return
                 review["stage"] = message.get("stage", "")
-                review["status"] = message.get("status", "")
+                review["status"] = incoming_status
                 review["updated_at"] = _current_ms()
                 self.broadcast({"type": "review_updated", "review": review})
 
@@ -266,8 +271,8 @@ class GateServer:
             review_id = message.get("review_id")
             review = self._find_review(review_id)
             if review:
-                review["stage"] = message.get("stage", "")
                 if review.get("status") != "fixing":
+                    review["stage"] = message.get("stage", "")
                     review["status"] = "running"
                 review["tmux_pane"] = message.get("tmux_pane", "")
                 review["pid"] = message.get("pid")

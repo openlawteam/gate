@@ -222,7 +222,9 @@ def cleanup_orphans() -> None:
                 stale_prefixes.append(f"{slug}-{pr_name}-")
             else:
                 stale_prefixes.append(f"{pr_name}-")
-            logger.info(f"Removed stale active marker: {slug}/{pr_name}" if slug else f"Removed stale active marker: {pr_name}")
+            msg = f"Removed stale active marker: {slug}/{pr_name}" if slug else \
+                f"Removed stale active marker: {pr_name}"
+            logger.info(msg)
         except (OSError, json.JSONDecodeError, ValueError):
             pass
 

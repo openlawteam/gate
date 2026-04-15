@@ -255,7 +255,10 @@ def build_vars(
         "blocklist": blocklist or "(no blocklist configured)",
         "prep_context": prep_context or "(prep phase skipped)",
         "fix_plan": fix_plan or "(plan phase skipped — fix all findings using your judgment)",
-        "previous_attempt_context": _read_file(workspace / "fix-previous-attempt.txt") or "(first attempt)",
+        "previous_attempt_context": (
+            _read_file(workspace / "fix-previous-attempt.txt")
+            or "(first attempt)"
+        ),
         "bot_account": (config or {}).get("repo", {}).get("bot_account", "gate-bot"),
         # Project profile variables
         "project_language": profile.get("language", "Unknown"),

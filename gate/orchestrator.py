@@ -115,7 +115,10 @@ class ReviewOrchestrator:
         """Execute the full review pipeline."""
         self.start_time = time.monotonic()
         review_id = self._review_id()
-        write_live_log(self.pr_number, f"Review started sha={self.head_sha[:8]}", "orchestrator", repo=self.repo)
+        write_live_log(
+            self.pr_number, f"Review started sha={self.head_sha[:8]}",
+            "orchestrator", repo=self.repo,
+        )
 
         self._emit(
             "review_started",
@@ -131,7 +134,10 @@ class ReviewOrchestrator:
         try:
             # === PRE-FLIGHT: Wait for GitHub connectivity ===
             if not github._wait_for_connectivity(max_wait=60.0):
-                logger.warning(f"PR #{self.pr_number}: GitHub unreachable at start, proceeding anyway (fail-open)")
+                logger.warning(
+                    f"PR #{self.pr_number}: GitHub unreachable"
+                    " at start, proceeding anyway (fail-open)"
+                )
 
             # === CREATE CHECK RUN FIRST ===
             self.check_run_id = github.create_check_run(
@@ -266,7 +272,10 @@ class ReviewOrchestrator:
                 triage = self._load_cached_triage()
             else:
                 self._update_check("Stage 1: Triage (Sonnet)...")
-                self._emit("review_stage_update", review_id=review_id, stage="triage", status="running")
+                self._emit(
+                    "review_stage_update", review_id=review_id,
+                    stage="triage", status="running",
+                )
                 write_live_log(self.pr_number, "Triage starting", "stage", repo=self.repo)
                 triage = self._run_structured_stage("triage")
                 self._save_stage_result("triage", triage)
@@ -290,7 +299,10 @@ class ReviewOrchestrator:
                         self._emit("review_completed", review_id=review_id, decision="skip")
                         return
                     self._update_check("Stage 3: Architecture review (Sonnet)...")
-                    self._emit("review_stage_update", review_id=review_id, stage="architecture", status="running")
+                    self._emit(
+                        "review_stage_update", review_id=review_id,
+                        stage="architecture", status="running",
+                    )
                     write_live_log(self.pr_number, "Architecture starting", "stage", repo=self.repo)
                     arch_result = self._run_agent_stage("architecture")
                     self._save_stage_result("architecture", arch_result)
@@ -301,7 +313,10 @@ class ReviewOrchestrator:
                         self._emit("review_completed", review_id=review_id, decision="skip")
                         return
                     self._update_check("Stage 4: Security review (Opus)...")
-                    self._emit("review_stage_update", review_id=review_id, stage="security", status="running")
+                    self._emit(
+                        "review_stage_update", review_id=review_id,
+                        stage="security", status="running",
+                    )
                     write_live_log(self.pr_number, "Security starting", "stage", repo=self.repo)
                     sec_result = self._run_agent_stage("security")
                     self._save_stage_result("security", sec_result)
@@ -311,7 +326,10 @@ class ReviewOrchestrator:
                     self._emit("review_completed", review_id=review_id, decision="skip")
                     return
                 self._update_check("Stage 5: Logic review (Opus)...")
-                self._emit("review_stage_update", review_id=review_id, stage="logic", status="running")
+                self._emit(
+                    "review_stage_update", review_id=review_id,
+                    stage="logic", status="running",
+                )
                 write_live_log(self.pr_number, "Logic starting", "stage", repo=self.repo)
                 logic_result = self._run_agent_stage("logic")
                 self._save_stage_result("logic", logic_result)
@@ -321,10 +339,13 @@ class ReviewOrchestrator:
 
             # === STAGE 6: VERDICT (structured — inline) ===
             self._update_check("Stage 6: Rendering verdict (Sonnet)...")
-            self._emit("review_stage_update", review_id=review_id, stage="verdict", status="running")
+            self._emit(
+                "review_stage_update", review_id=review_id,
+                stage="verdict", status="running",
+            )
             write_live_log(self.pr_number, "Verdict starting", "stage", repo=self.repo)
-            elapsed = int(time.monotonic() - self.start_time)
             verdict = self._run_structured_stage("verdict")
+            elapsed = int(time.monotonic() - self.start_time)
             verdict.data["review_time_seconds"] = elapsed
             self._save_stage_result("verdict", verdict)
 
@@ -370,11 +391,15 @@ class ReviewOrchestrator:
             )
 
             # === FIX PIPELINE (if warranted) ===
+            fix_completed = False
             if self._should_fix(verdict.data):
-                self._emit("review_stage_update", review_id=review_id,
-                           stage="fix-bootstrap", status="fixing")
+                self._emit(
+                    "review_stage_update", review_id=review_id,
+                    stage="fix-bootstrap", status="fixing",
+                )
                 fix_check_id = github.create_check_run(
-                    self.repo, self.head_sha, name="Gate Auto-Fix", status="in_progress"
+                    self.repo, self.head_sha,
+                    name="Gate Auto-Fix", status="in_progress",
                 )
                 try:
                     from gate.fixer import FixPipeline
@@ -386,20 +411,27 @@ class ReviewOrchestrator:
                         check_run_id=fix_check_id,
                         cancelled=self._cancelled,
                         socket_path=self.socket_path,
+                        review_id=review_id,
                     )
                     fixer.branch = self.branch
 
-                    self._emit("review_stage_update", review_id=review_id,
-                               stage="fix-session", status="fixing")
+                    self._emit(
+                        "review_stage_update", review_id=review_id,
+                        stage="fix-session", status="fixing",
+                    )
+                    fix_start = time.monotonic()
                     fix_result = fixer.run()
+                    fix_elapsed = int(time.monotonic() - fix_start)
 
                     if fixer.fix_pane_id:
                         with self._panes_lock:
                             self._active_panes["fix-senior"] = fixer.fix_pane_id
 
                     fix_conclusion = "success" if fix_result.success else "failure"
-                    self._emit("review_stage_update", review_id=review_id,
-                               stage="fix-commit", status="fixing")
+                    self._emit(
+                        "review_stage_update", review_id=review_id,
+                        stage="fix-commit", status="fixing",
+                    )
                     github.complete_check_run(
                         self.repo, fix_check_id, fix_conclusion,
                         output_title=(
@@ -410,12 +442,20 @@ class ReviewOrchestrator:
                         output_summary=fix_result.summary,
                         sha=self.head_sha,
                     )
+                    self._emit(
+                        "review_completed",
+                        review_id=review_id, decision=decision,
+                    )
+                    fix_completed = True
                     log_fix_result(
                         self.pr_number, fix_result.success,
                         fix_result.summary, decision, repo=self.repo,
+                        fix_elapsed_seconds=fix_elapsed,
                     )
                 except Exception as fix_err:
-                    logger.exception(f"Fix pipeline crashed for PR #{self.pr_number}")
+                    logger.exception(
+                        f"Fix pipeline crashed for PR #{self.pr_number}"
+                    )
                     github.complete_check_run(
                         self.repo, fix_check_id, "failure",
                         output_title="Gate Auto-Fix: crashed",
@@ -426,7 +466,11 @@ class ReviewOrchestrator:
                     with self._panes_lock:
                         self._active_panes.pop("fix-senior", None)
 
-            self._emit("review_completed", review_id=review_id, decision=decision)
+            if not fix_completed:
+                self._emit(
+                    "review_completed",
+                    review_id=review_id, decision=decision,
+                )
 
         except Exception as e:
             # Fail-open

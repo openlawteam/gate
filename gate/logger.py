@@ -87,6 +87,7 @@ def log_fix_result(
     fix_summary: str,
     original_decision: str,
     repo: str = "",
+    fix_elapsed_seconds: int = 0,
 ) -> None:
     """Append a fix result entry to reviews.jsonl."""
     entry = {
@@ -97,6 +98,7 @@ def log_fix_result(
         "original_decision": original_decision,
         "fix_summary": fix_summary,
         "is_fix_followup": True,
+        "review_time_seconds": fix_elapsed_seconds,
     }
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     with open(REVIEWS_JSONL, "a") as f:

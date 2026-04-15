@@ -125,7 +125,11 @@ def persist_review_state(
     (state_dir / "verdict.json").write_text(json.dumps(verdict, indent=2))
 
     # Copy ancillary files if they exist
-    for filename in ("build.json", "triage.json", "architecture.json", "security.json", "logic.json"):
+    ancillary = (
+        "build.json", "triage.json", "architecture.json",
+        "security.json", "logic.json",
+    )
+    for filename in ancillary:
         src = workspace / filename
         if src.exists():
             try:

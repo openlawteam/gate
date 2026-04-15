@@ -8,6 +8,7 @@ from gate.tui import (
     _parse_timestamp,
     compute_metrics,
     format_elapsed,
+    format_fix_pipeline,
     format_uptime,
     read_recent_reviews,
 )
@@ -143,3 +144,27 @@ class TestComputeMetrics:
         with patch("gate.tui.REVIEWS_JSONL", jsonl_path):
             m = compute_metrics()
         assert m["total"] == 0
+
+
+class TestFormatFixPipeline:
+    def test_known_stage_highlights(self):
+        result = format_fix_pipeline("fix-session")
+        plain = result.plain
+        assert "[ses]" in plain
+        assert "boo" in plain
+
+    def test_fix_senior_maps_to_fix_session(self):
+        result = format_fix_pipeline("fix-senior")
+        plain = result.plain
+        assert "[ses]" in plain
+
+    def test_unknown_stage_no_highlight(self):
+        result = format_fix_pipeline("unknown-stage")
+        plain = result.plain
+        assert "[" not in plain
+
+    def test_all_stages_present(self):
+        result = format_fix_pipeline("fix-bootstrap")
+        plain = result.plain
+        for abbrev in ("boo", "ses", "bui", "rer", "com"):
+            assert abbrev in plain

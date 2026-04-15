@@ -3,10 +3,7 @@
 import json
 import subprocess
 import tomllib
-from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from gate import setup
 
@@ -271,8 +268,8 @@ class TestFormatFullConfig:
         }]
         content = setup.format_full_config(repos)
         assert "\n[repo]\n" in content
-        lines = [l for l in content.splitlines() if not l.startswith("#")]
-        assert not any(l.strip() == "[[repos]]" for l in lines)
+        lines = [ln for ln in content.splitlines() if not ln.startswith("#")]
+        assert not any(ln.strip() == "[[repos]]" for ln in lines)
         parsed = tomllib.loads(content)
         assert parsed["repo"]["name"] == "org/repo"
         assert parsed["models"]["triage"] == "sonnet"

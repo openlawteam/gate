@@ -445,6 +445,7 @@ class FixPipeline:
         check_run_id: int | None = None,
         cancelled: threading.Event | None = None,
         socket_path: Path | None = None,
+        review_id: str = "",
     ):
         self.pr_number = pr_number
         self.repo = repo
@@ -455,6 +456,7 @@ class FixPipeline:
         self.check_run_id = check_run_id
         self._cancelled = cancelled or threading.Event()
         self.socket_path = socket_path
+        self.review_id = review_id
         self.session_id: str | None = None
         self.codex_thread_id: str = ""
         self.branch = ""
@@ -462,10 +464,26 @@ class FixPipeline:
         self.is_polish = verdict.get("decision") == "approve_with_notes"
         self._state_dir = state.get_pr_state_dir(pr_number, repo)
 
+    def _emit_fix_stage(self, stage: str) -> None:
+        """Emit a fix stage update to the server (no-op if no connection)."""
+        if self._connection:
+            self._connection.emit(
+                "review_stage_update",
+                review_id=self.review_id,
+                stage=stage,
+                status="fixing",
+            )
+
     def run(self) -> FixResult:
         """Execute the fix pipeline."""
         if self._cancelled.is_set():
             return FixResult(success=False, summary="Cancelled before start")
+
+        self._connection = None
+        if self.socket_path and self.review_id:
+            from gate.client import GateConnection
+            self._connection = GateConnection(self.socket_path)
+            self._connection.start()
 
         findings = self.verdict.get("findings", [])
         actionable = [f for f in findings if f.get("severity", "") != "info"]
@@ -531,6 +549,7 @@ class FixPipeline:
                 )
 
                 # Run or resume the fix session
+                self._emit_fix_stage("fix-session")
                 if iteration == 1:
                     fix_result = self._run_fix_session()
                 else:
@@ -553,6 +572,7 @@ class FixPipeline:
                     continue
 
                 # Post-fix verification
+                self._emit_fix_stage("fix-build")
                 enforce_blocklist(self.workspace, config=self.config)
                 cleanup_gate_tests(self.workspace)
 
@@ -562,7 +582,8 @@ class FixPipeline:
                 if not build_result["pass"]:
                     write_live_log(
                         self.pr_number,
-                        f"Build failed, resuming with errors (typecheck={build_result['typecheck_errors']})",
+                        "Build failed, resuming with errors"
+                        f" (typecheck={build_result['typecheck_errors']})",
                         prefix="fix",
                         repo=self.repo,
                     )
@@ -588,6 +609,7 @@ class FixPipeline:
                 # Generate diff and run re-review
                 write_diff(self.workspace)
 
+                self._emit_fix_stage("fix-rereview")
                 write_live_log(self.pr_number, "Running re-review...", prefix="fix", repo=self.repo)
                 rereview_pass = self._run_rereview()
 
@@ -617,6 +639,10 @@ class FixPipeline:
             notify.fix_failed(self.pr_number, str(e), 0, self.repo)
             state.record_fix_attempt(self.pr_number, repo=self.repo)
             return FixResult(success=False, error=str(e), summary=f"Crash: {e}")
+        finally:
+            if self._connection:
+                self._connection.stop()
+                self._connection = None
 
     def _run_fix_session(self) -> dict:
         """Run the initial fix-senior session in tmux.
@@ -631,7 +657,10 @@ class FixPipeline:
         result_file.unlink(missing_ok=True)
 
         from gate.config import repo_slug
-        review_id = f"{repo_slug(self.repo)}-pr{self.pr_number}" if self.repo else f"pr{self.pr_number}"
+        review_id = (
+            f"{repo_slug(self.repo)}-pr{self.pr_number}"
+            if self.repo else f"pr{self.pr_number}"
+        )
         pane_id = spawn_review_stage(
             review_id=review_id,
             stage="fix-senior",
@@ -759,7 +788,10 @@ class FixPipeline:
 
         Ported from commitAndPush() in run-fix-loop.js.
         """
-        write_live_log(self.pr_number, "Re-review passed, committing...", prefix="fix", repo=self.repo)
+        write_live_log(
+            self.pr_number, "Re-review passed, committing...",
+            prefix="fix", repo=self.repo,
+        )
 
         fixed_count = len(all_fixed)
         not_fixed = (last_fix_json or {}).get("not_fixed", [])
@@ -797,7 +829,7 @@ class FixPipeline:
                 f"- {f.get('reason', '?')}: {f.get('detail', '')}"
                 for f in not_fixed
             )
-            body = f"## Gate Auto-Fix Applied\n\n"
+            body = "## Gate Auto-Fix Applied\n\n"
             body += f"Fixed {fixed_count}/{finding_count} findings "
             body += f"in {iteration} iteration(s) ({new_sha[:8]}).\n\n"
             if fixed_lines:

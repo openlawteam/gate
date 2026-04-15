@@ -109,6 +109,7 @@ STAGE_COLORS = {
     "fix-build": "bright_yellow",
     "fix-rereview": "bright_yellow",
     "fix-commit": "bright_yellow",
+    "fix-senior": "bright_yellow",
 }
 
 LOG_PREFIX_COLORS = {
@@ -179,7 +180,8 @@ def format_pipeline(current_stage: str) -> Text:
 def format_fix_pipeline(current_stage: str) -> Text:
     """Format fix pipeline visualization, same structure as format_pipeline."""
     text = Text()
-    idx = FIX_STAGES.index(current_stage) if current_stage in FIX_STAGES else -1
+    mapped = "fix-session" if current_stage == "fix-senior" else current_stage
+    idx = FIX_STAGES.index(mapped) if mapped in FIX_STAGES else -1
     for i, stage in enumerate(FIX_STAGES):
         abbrev = stage.replace("fix-", "")[:3]
         if i < idx:
@@ -615,6 +617,9 @@ class CompletedDetailScreen(ModalScreen):
             t.append("Repo:       ", style="dim")
             t.append(f"{repo}\n")
 
+        if e.get("is_fix_followup"):
+            return self._build_fix_info(e, t)
+
         decision = e.get("decision", "?")
         t.append("Decision:   ", style="dim")
         t.append(format_decision(decision))
@@ -630,7 +635,10 @@ class CompletedDetailScreen(ModalScreen):
         t.append(f"{e.get('stages_run', '?')}\n")
         t.append("Build:      ", style="dim")
         build_ok = e.get("build_pass", True)
-        t.append("pass\n" if build_ok else "fail\n", style="bright_green" if build_ok else "bright_red")
+        build_style = "bright_green" if build_ok else "bright_red"
+        t.append(
+            "pass\n" if build_ok else "fail\n", style=build_style,
+        )
         t.append("Fast-track: ", style="dim")
         t.append(f"{'yes' if e.get('fast_track_eligible') else 'no'}\n")
 
@@ -663,6 +671,27 @@ class CompletedDetailScreen(ModalScreen):
         if ts:
             t.append(f"\nTimestamp: {ts}\n", style="dim")
 
+        return t
+
+    def _build_fix_info(self, e: dict, t: Text) -> Text:
+        """Render fix-specific fields for CompletedDetailScreen."""
+        decision = e.get("decision", "?")
+        t.append("Decision:   ", style="dim")
+        t.append(format_decision(decision))
+        t.append("\n")
+        t.append("Original:   ", style="dim")
+        t.append(f"{e.get('original_decision', '?')}\n")
+        dur = e.get("review_time_seconds", "?")
+        t.append("Duration:   ", style="dim")
+        t.append(f"{dur}s\n" if isinstance(dur, (int, float)) else "?\n")
+
+        t.append("\n")
+        t.append("Fix Summary\n", style="bold underline")
+        t.append(f"  {e.get('fix_summary', 'No summary')}\n")
+
+        ts = e.get("timestamp", "")
+        if ts:
+            t.append(f"\nTimestamp: {ts}\n", style="dim")
         return t
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -853,7 +882,9 @@ class GateTUI(App):
         self.theme = "gate"
 
         reviews_table = self.query_one("#reviews-table", DataTable)
-        self._reviews_cols = reviews_table.add_columns("", "Repo", "PR", "Stage", "Pipeline", "Status", "Elapsed")
+        self._reviews_cols = reviews_table.add_columns(
+            "", "Repo", "PR", "Stage", "Pipeline", "Status", "Elapsed",
+        )
 
         queue_table = self.query_one("#queue-table", DataTable)
         queue_table.add_columns("#", "PR", "Repo")
@@ -1025,7 +1056,12 @@ class GateTUI(App):
             usage = shutil.disk_usage("/")
             free_gb = usage.free / (1024**3)
             t.append("Disk free:  ", style="dim")
-            color = "bright_green" if free_gb > 10 else ("bright_yellow" if free_gb > 2 else "bright_red")
+            if free_gb > 10:
+                color = "bright_green"
+            elif free_gb > 2:
+                color = "bright_yellow"
+            else:
+                color = "bright_red"
             t.append(f"{free_gb:.0f} GB\n", style=color)
         except OSError:
             pass
@@ -1158,7 +1194,10 @@ class GateTUI(App):
                 )
                 self._log_panes["activity"] = {"widget_id": pane_id, "file_pos": 0}
             elif "activity" not in desired_keys:
-                keys_to_add = desired_keys - current_keys if not switching_category else desired_keys
+                keys_to_add = (
+                    desired_keys if switching_category
+                    else desired_keys - current_keys
+                )
                 for repo, pr in active_reviews:
                     slug = repo_slug(repo) if repo else ""
                     key = f"{slug}:{pr}" if slug else str(pr)
@@ -1218,7 +1257,7 @@ class GateTUI(App):
                     content = f.read()
                     lines = content.strip().split("\n")[-20:]
                     if is_activity:
-                        lines = [l for l in lines if " DEBUG " not in l]
+                        lines = [ln for ln in lines if " DEBUG " not in ln]
                     widget.clear()
                     for line in lines:
                         widget.write(format_log_line(line))

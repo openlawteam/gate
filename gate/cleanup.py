@@ -1,6 +1,7 @@
 """Log rotation, worktree pruning, state cleanup, daily digest.
 
 Ported from cleanup-old-logs.sh and daily-digest.sh.
+Supports multi-repo cleanup via get_all_repos().
 """
 
 import gzip

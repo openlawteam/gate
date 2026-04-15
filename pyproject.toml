@@ -6,6 +6,8 @@ build-backend = "hatchling.build"
 name = "gate"
 version = "0.1.0"
 description = "AI-powered PR review system"
+license = {text = "MIT"}
+authors = [{name = "Tribute Labs", email = "wally@tributelabs.xyz"}]
 requires-python = ">=3.11"
 dependencies = [
     "textual>=1.0.0",
@@ -19,6 +21,11 @@ dev = ["pytest", "pytest-asyncio", "ruff"]
 [project.scripts]
 gate = "gate.cli:main"
 gate-code = "gate.code:main"
+
+[project.urls]
+Homepage = "https://github.com/openlawteam/gate"
+Repository = "https://github.com/openlawteam/gate"
+Issues = "https://github.com/openlawteam/gate/issues"
 
 [tool.ruff]
 line-length = 100

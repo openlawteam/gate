@@ -395,12 +395,13 @@ class TestCheckCodexAuth:
         assert "ChatGPT account login" in detail
 
     @patch.dict("os.environ", {"OPENAI_API_KEY": "sk-abc"}, clear=True)
-    def test_api_key_fallback(self, tmp_path):
+    def test_env_var_fallback_removed(self, tmp_path):
+        """OPENAI_API_KEY env var alone is not accepted — auth.json is required."""
         with patch("gate.setup.Path.home", return_value=tmp_path):
             label, ok, detail = setup.check_codex_auth()
+        # No auth.json, so we fall through to "not configured" regardless of env var.
         assert ok is True
-        assert "API key" in detail
-        assert "6 chars" in detail
+        assert "not configured" in detail
 
     @patch.dict("os.environ", {}, clear=True)
     def test_nothing_configured(self, tmp_path):
@@ -413,6 +414,15 @@ class TestCheckCodexAuth:
         codex_dir = tmp_path / ".codex"
         codex_dir.mkdir()
         (codex_dir / "auth.json").write_text("not valid json{{{")
+        with patch("gate.setup.Path.home", return_value=tmp_path):
+            label, ok, detail = setup.check_codex_auth()
+        assert ok is False
+        assert "unreadable" in detail
+
+    def test_malformed_non_dict(self, tmp_path):
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        (codex_dir / "auth.json").write_text("[]")
         with patch("gate.setup.Path.home", return_value=tmp_path):
             label, ok, detail = setup.check_codex_auth()
         assert ok is False

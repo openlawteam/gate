@@ -352,8 +352,7 @@ def validate_env_vars() -> list[tuple[str, bool, str]]:
 def check_codex_auth() -> tuple[str, bool, str]:
     """Check Codex CLI authentication status.
 
-    Checks ~/.codex/auth.json for ChatGPT account login,
-    falls back to OPENAI_API_KEY env var.
+    Checks ~/.codex/auth.json for ChatGPT account login.
     """
     auth_path = Path.home() / ".codex" / "auth.json"
     if auth_path.exists():
@@ -365,12 +364,13 @@ def check_codex_auth() -> tuple[str, bool, str]:
             if data.get("OPENAI_API_KEY"):
                 return ("Codex auth", True, "API key (via auth.json)")
             return ("Codex auth", False, f"auth.json exists but auth_mode={mode!r}")
-        except (OSError, json.JSONDecodeError) as e:
+        except (OSError, json.JSONDecodeError, AttributeError) as e:
             return ("Codex auth", False, f"auth.json unreadable: {e}")
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    if api_key:
-        return ("Codex auth", True, f"API key ({len(api_key)} chars)")
-    return ("Codex auth", True, "not configured (optional — needed for Codex fix pipeline)")
+    return (
+        "Codex auth",
+        True,
+        "not configured (optional — needed for Codex fix pipeline; run `codex login`)",
+    )
 
 
 def is_placeholder_config(config_path: Path) -> bool:

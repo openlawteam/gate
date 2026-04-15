@@ -1,6 +1,8 @@
 """Tests for gate.builder module."""
 
-from gate.builder import _parse_lint, _parse_test, _parse_tsc, compare_builds
+from pathlib import Path
+
+from gate.builder import _parse_lint, _parse_test, _parse_tsc, compare_builds, run_build
 
 
 class TestParseTsc:
@@ -67,6 +69,22 @@ class TestParseTest:
         result = _parse_test(log, 1)
         assert result["passed"] == 3
         assert result["failed"] == 1
+
+
+class TestRunBuildSkip:
+    def test_run_build_skips_without_package_json(self, tmp_path):
+        result = run_build(tmp_path)
+        assert result["overall_pass"] is True
+        assert result["skipped"] is True
+        assert result["blocking_issues"] == []
+        assert result["typescript"]["pass"] is True
+        assert result["lint"]["pass"] is True
+        assert result["tests"]["pass"] is True
+
+    def test_run_build_does_not_skip_with_package_json(self, tmp_path):
+        (tmp_path / "package.json").write_text("{}")
+        result = run_build(tmp_path)
+        assert "skipped" not in result or result["skipped"] is not True
 
 
 class TestCompareBuilds:

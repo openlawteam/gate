@@ -1,0 +1,43 @@
+# Thin GHA trigger workflow — replaces the 1072-line gate-review.yml.
+# The gate CLI enqueues the review and returns in ~1s.
+# All review logic runs in Python/tmux on the self-hosted runner.
+#
+# Branch protection requires check context "gate-review".
+# The Python orchestrator creates Checks API runs with name="gate-review"
+# — same name, so existing branch protection applies automatically.
+
+name: Gate Review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, closed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  trigger:
+    runs-on: [self-hosted, macos, gate-reviewer]
+    timeout-minutes: 2
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.action != 'closed' &&
+      (github.event.action != 'labeled' ||
+       github.event.label.name == 'gate-rerun')
+    steps:
+      - name: Dispatch to Gate
+        run: |
+          gate review \
+            --pr "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" \
+            --event "${{ github.event.action }}" \
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --branch "${{ github.event.pull_request.head.ref }}" \
+            --labels "${{ join(github.event.pull_request.labels.*.name, ',') }}"
+
+  cleanup:
+    runs-on: [self-hosted, macos, gate-reviewer]
+    if: github.event.action == 'closed'
+    steps:
+      - name: Cleanup PR state
+        run: gate cleanup-pr --pr "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}"

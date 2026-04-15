@@ -202,9 +202,12 @@ def create_worktree(
 
     prepare_context_files(worktree_path, config=config)
 
-    # Install dependencies with retry
-    logger.info(f"Running npm ci in {worktree_path}")
-    _npm_install_with_retry(worktree_path)
+    # Install dependencies with retry (Node.js projects only)
+    if (worktree_path / "package.json").exists():
+        logger.info(f"Running npm ci in {worktree_path}")
+        _npm_install_with_retry(worktree_path)
+    else:
+        logger.info(f"No package.json in {worktree_path}, skipping npm ci")
 
     return worktree_path
 

@@ -200,7 +200,18 @@ def build_verify(workspace: Path, original_build: dict | None = None) -> dict:
 
     Ported from buildVerify() in fix-loop-helpers.js.
     Returns dict with pass, tsc_errors, lint_errors, test_failures, tsc_log, lint_log.
+    Skips for non-Node.js projects (no package.json).
     """
+    if not (workspace / "package.json").exists():
+        return {
+            "pass": True,
+            "tsc_errors": 0,
+            "lint_errors": 0,
+            "test_failures": 0,
+            "tsc_log": "",
+            "lint_log": "",
+        }
+
     cwd = str(workspace)
     build_dir = workspace / "fix-build"
     build_dir.mkdir(exist_ok=True)

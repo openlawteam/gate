@@ -274,6 +274,10 @@ def _format_build_section(build: dict | None) -> str:
     if not build:
         return ""
 
+    if build.get("skipped"):
+        reason = build.get("skip_reason", "not a Node.js project")
+        return f"\n### Build Results\n- Build verification skipped ({reason})\n"
+
     md = "\n### Build Results\n"
 
     ts = build.get("typescript", {})

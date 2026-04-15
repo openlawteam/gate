@@ -27,7 +27,6 @@ CLAUDE_ENV_KEYS = {
     "CLAUDE_STREAM_IDLE_TIMEOUT_MS": lambda: "90000",
     "GATE_CODEX_THREAD_ID": lambda: os.environ.get("GATE_CODEX_THREAD_ID", ""),
     "GATE_FIX_WORKSPACE": lambda: os.environ.get("GATE_FIX_WORKSPACE", ""),
-    "OPENAI_API_KEY": lambda: os.environ.get("OPENAI_API_KEY", ""),
     "GATE_PAT": lambda: os.environ.get("GATE_PAT", ""),
     "GH_TOKEN": lambda: os.environ.get("GATE_PAT", ""),
 }

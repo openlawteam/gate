@@ -40,7 +40,7 @@
 
 - Never log token values — only log presence and length (e.g., `f"set ({len(val)} chars)"`).
 - Use `config.build_claude_env()` to construct agent environments — never manually set `CLAUDE_CODE_OAUTH_TOKEN` or `GH_TOKEN`.
-- `GATE_PAT`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY` must never appear in log output, error messages, or exception strings.
+- `GATE_PAT`, `CLAUDE_CODE_OAUTH_TOKEN` must never appear in log output, error messages, or exception strings.
 - FLAG any `os.environ.get("GATE_PAT")` outside of `config.py` or `setup.py`.
 - FLAG any string formatting that could include a token value.
 

@@ -10,7 +10,7 @@ Gate is an autonomous AI-powered PR review system that runs on a trusted self-ho
 - **The host machine** — physically secured, single-user, operator-controlled
 - **Gate source code** — maintained in a private repo, changes go through review
 - **Configuration files** — `gate.toml`, `fix-blocklist.txt`, prompt templates
-- **Secrets** — `GATE_PAT`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY` stored in environment/Keychain
+- **Secrets** — `GATE_PAT`, `CLAUDE_CODE_OAUTH_TOKEN` stored in environment/Keychain; Codex tokens stored in `~/.codex/auth.json`
 
 ### Semi-Trusted
 - **PR content** — authored by known team members on a private repo, but could contain adversarial patterns (prompt injection via code comments, PR body, file names)
@@ -58,9 +58,9 @@ PR content (title, body, diff, file contents) is injected into prompt templates 
 |--------|---------|----------|
 | `GATE_PAT` | Environment variable | Passed to `gh` CLI and git via `GIT_CONFIG` extraheader; visible to child processes via `build_claude_env()` allowlist |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Environment + macOS Keychain | Passed to Claude CLI; read from Keychain for quota checks |
-| `OPENAI_API_KEY` | Environment variable | Passed to Codex via `code.py` |
+| Codex tokens | `~/.codex/auth.json` (ChatGPT OAuth) | Read by Codex CLI directly; Gate does not pass or read these tokens |
 
-**Note:** `code.py` currently uses `build_claude_env()` (after the env leakage fix) to avoid passing the full parent environment to Codex.
+**Note:** `code.py` uses `build_claude_env()` to construct a minimal environment for Codex. Codex authenticates independently via its own `auth.json` file.
 
 ## What a Sandbox Would Look Like
 

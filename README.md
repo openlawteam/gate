@@ -134,7 +134,7 @@ max_review_cycles = 5
 |----------|---------|
 | `GATE_PAT` | GitHub Personal Access Token (push, checks, reviews) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude CLI authentication |
-| `OPENAI_API_KEY` | Codex CLI authentication |
+| Codex auth | `codex login` (ChatGPT account) or `OPENAI_API_KEY` env var |
 | `GATE_NTFY_TOPIC` | ntfy.sh topic for push notifications |
 | `GATE_DISCORD_WEBHOOK` | Discord webhook URL (optional) |
 

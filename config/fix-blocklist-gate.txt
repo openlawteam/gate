@@ -1,0 +1,27 @@
+# Gate fix blocklist — files the auto-fix agent cannot modify.
+# One glob pattern per line. Lines starting with # are comments.
+# Enforced in two layers: prompt instruction + post-agent git diff check.
+
+# Prompt templates (changes alter model behavior across all reviews)
+prompts/**
+
+# Config files and templates (deployment-specific, operator-controlled)
+config/**
+
+# GHA workflow templates
+workflows/**
+
+# Build and project metadata
+pyproject.toml
+Makefile
+.gitignore
+
+# Environment and secrets
+.env*
+
+# JSON schemas (drive validation and orchestration outcomes)
+gate/schemas.py
+
+# Documentation (operator-authored, not auto-fixable)
+docs/**
+README.md

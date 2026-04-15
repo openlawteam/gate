@@ -16,7 +16,26 @@ def run_build(worktree: Path) -> dict:
     """Run tsc, lint, and vitest in the worktree. Return build results dict.
 
     Runs each tool independently so partial failures don't block later tools.
+    Skips entirely for non-Node.js projects (no package.json).
     """
+    if not (worktree / "package.json").exists():
+        logger.info(f"No package.json in {worktree}, skipping Node.js build")
+        return {
+            "typescript": {"pass": True, "errors": [], "error_count": 0},
+            "lint": {
+                "pass": True, "warnings": [], "errors": [],
+                "warning_count": 0, "error_count": 0,
+            },
+            "tests": {
+                "pass": True, "total": 0, "passed": 0,
+                "failed": 0, "skipped": 0, "failures": [],
+            },
+            "overall_pass": True,
+            "blocking_issues": [],
+            "skipped": True,
+            "skip_reason": "no package.json (not a Node.js project)",
+        }
+
     cwd = str(worktree)
     logger.info(f"Running build in {cwd}")
 

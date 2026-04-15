@@ -143,3 +143,20 @@ class TestBuildComment:
         build = {"typescript": {"pass": True, "error_count": 0}}
         result = _build_comment(verdict, build)
         assert "Build Results" in result
+
+
+class TestFormatBuildSectionSkipped:
+    def test_format_build_section_skipped(self):
+        build = {
+            "skipped": True,
+            "skip_reason": "no package.json (not a Node.js project)",
+            "overall_pass": True,
+        }
+        result = _format_build_section(build)
+        assert "skipped" in result.lower()
+        assert "no package.json" in result
+
+    def test_format_build_section_skipped_default_reason(self):
+        build = {"skipped": True, "overall_pass": True}
+        result = _format_build_section(build)
+        assert "not a Node.js project" in result

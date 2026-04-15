@@ -8,12 +8,24 @@ from gate.fixer import (
     _build_build_error_prompt,
     _build_rereview_feedback_prompt,
     _match_glob,
+    build_verify,
     cleanup_artifacts,
     cleanup_gate_tests,
     enforce_blocklist,
     sort_findings_by_severity,
     write_diff,
 )
+
+
+class TestBuildVerifySkip:
+    def test_build_verify_skips_without_package_json(self, tmp_path):
+        result = build_verify(tmp_path)
+        assert result["pass"] is True
+        assert result["tsc_errors"] == 0
+        assert result["lint_errors"] == 0
+        assert result["test_failures"] == 0
+        assert result["tsc_log"] == ""
+        assert result["lint_log"] == ""
 
 
 class TestMatchGlob:

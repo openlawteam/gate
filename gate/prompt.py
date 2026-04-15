@@ -242,7 +242,7 @@ def build_vars(
         "prior_review_json": prior_review_json or '{ "has_prior": false }',
         "fix_diff": _read_file(workspace / "fix-diff.txt"),
         "tsc_errors": (
-            _read_file(workspace / "fix-build-tsc-errors.txt") or "(no TypeScript errors)"
+            _read_file(workspace / "fix-build-tsc-errors.txt") or "(no build errors)"
         ),
         "lint_errors": (
             _read_file(workspace / "fix-build-lint-errors.txt") or "(no lint errors)"

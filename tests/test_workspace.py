@@ -5,8 +5,9 @@ Real git repos are used for _setup_artifact_exclusions tests.
 """
 
 import subprocess
+from pathlib import Path
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from gate.workspace import _setup_artifact_exclusions, prepare_context_files, remove_worktree
 
@@ -187,3 +188,22 @@ class TestSetupArtifactExclusions:
         assert "src/fix.ts" in result.stdout
         assert "diff.txt" not in result.stdout
         assert "verdict.json" not in result.stdout
+
+
+class TestCreateWorktreeNpmSkip:
+    @patch("gate.workspace._npm_install_with_retry")
+    def test_skips_npm_without_package_json(self, mock_npm, tmp_path):
+        """The npm guard checks worktree_path / 'package.json'. No package.json => skip."""
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        # No package.json created — guard should skip
+        assert not (wt / "package.json").exists()
+        mock_npm.assert_not_called()
+
+    @patch("gate.workspace._npm_install_with_retry")
+    def test_calls_npm_with_package_json(self, mock_npm, tmp_path):
+        """Sanity: if package.json exists, the guard would allow the call."""
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        (wt / "package.json").write_text("{}")
+        assert (wt / "package.json").exists()

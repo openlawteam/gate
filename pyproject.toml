@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gate"
+version = "0.1.0"
+description = "AI-powered PR review system"
+requires-python = ">=3.11"
+dependencies = [
+    "textual>=1.0.0",
+    "platformdirs",
+    "setproctitle",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio", "ruff"]
+
+[project.scripts]
+gate = "gate.cli:main"
+gate-code = "gate.code:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

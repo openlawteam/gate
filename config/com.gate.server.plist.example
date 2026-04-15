@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.gate.server</string>
+    <key>ProgramArguments</key>
+    <array>
+        <!-- Replace with your Gate installation path -->
+        <string>/path/to/gate/.venv/bin/gate</string>
+        <string>up</string>
+        <string>--headless</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/path/to/gate/logs/server-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/path/to/gate/logs/server-stderr.log</string>
+    <key>WorkingDirectory</key>
+    <string>/path/to/gate</string>
+</dict>
+</plist>

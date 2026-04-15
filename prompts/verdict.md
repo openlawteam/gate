@@ -85,7 +85,7 @@ If a stage labeled something "error" but the finding lacks evidence (a), (b), or
 ## Decision Rules
 
 **Approve** if:
-- Build passes (tsc, lint, tests)
+- Build passes (typecheck, lint, tests)
 - No error-severity findings with `introduced_by_pr: true` AND `evidence_level` of `test_confirmed` or `code_trace`
 - No critical or high security findings introduced by this PR
 - No warning-level findings with `introduced_by_pr: true`
@@ -97,7 +97,7 @@ If a stage labeled something "error" but the finding lacks evidence (a), (b), or
 - Findings exist about pre-existing code patterns worth noting at warning level
 
 **Request Changes** only if ANY:
-- Build fails (tsc errors, test failures)
+- Build fails (typecheck/build errors, test failures)
 - Critical or high security finding **introduced by this PR** with a concrete exploit scenario
 - Architecture error that will cause runtime failure (not a convention warning)
 - Logic error with `evidence_level` of `test_confirmed` or `code_trace` and `introduced_by_pr: true`
@@ -150,7 +150,7 @@ Respond with ONLY valid JSON (no markdown fences). Do NOT generate a PR comment 
       "source_stage": "build | architecture | security | logic",
       "severity": "critical | error | warning | info",
       "evidence_level": "test_confirmed | code_trace | pattern_match | speculative",
-      "file": "path/to/file.ts",
+      "file": "path/to/source.file",
       "line": 42,
       "introduced_by_pr": true,
       "message": "...",
@@ -159,7 +159,7 @@ Respond with ONLY valid JSON (no markdown fences). Do NOT generate a PR comment 
   ],
   "resolved_findings": [
     {
-      "file": "path/to/file.ts",
+      "file": "path/to/source.file",
       "message": "Description of the previously flagged issue",
       "resolution": "fixed_by_author | no_longer_applicable"
     }

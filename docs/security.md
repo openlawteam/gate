@@ -17,7 +17,7 @@ Gate is an autonomous AI-powered PR review system that runs on a trusted self-ho
 - **AI model outputs** — Claude and Codex produce review verdicts and code changes that are validated but not formally verified
 
 ### Untrusted
-- **External network** — GitHub API responses, npm registry, AI API endpoints
+- **External network** — GitHub API responses, package registries (npm, PyPI, etc.), AI API endpoints
 
 ## Dangerous Permission Flags
 
@@ -25,12 +25,12 @@ Gate is an autonomous AI-powered PR review system that runs on a trusted self-ho
 
 Used in `fixer.py` when Claude runs the fix-senior stage. This flag allows Claude to read/write files and execute commands without per-action approval.
 
-**Why it's needed:** The fix pipeline must edit source files, run builds (`tsc`, `eslint`, `vitest`), and validate changes — all requiring filesystem and process access.
+**Why it's needed:** The fix pipeline must edit source files, run configured build, lint, and test commands, and validate changes — all requiring filesystem and process access.
 
 **Mitigations:**
 - **Ephemeral worktrees** — each fix session runs in a disposable `git worktree` under `/tmp/gate-worktrees/`, removed after completion
 - **Blocklist** — `config/fix-blocklist.txt` prevents modifications to schema files, lockfiles, env files, CI config, and Cursor rules
-- **Build verification** — `build_verify()` runs tsc/lint/test before and after fixes; regressions are rejected
+- **Build verification** — `build_verify()` runs configured typecheck/lint/test commands before and after fixes; regressions are rejected
 - **Re-review** — a separate Claude session (`fix-rereview`) evaluates the diff independently
 - **Env allowlist** — `build_claude_env()` in `config.py` passes only explicitly listed environment variables to Claude, not the full parent environment
 
@@ -68,9 +68,9 @@ If stronger isolation were needed, fix sessions could be wrapped in a container 
 
 ### Option A: Docker wrapper
 - Run each fix session in a Docker container with the worktree bind-mounted
-- Share npm-cache via a read-only volume
+- Share dependency cache via a read-only volume
 - Restrict network to only the AI API endpoints
-- **Trade-offs:** Adds 5-10s latency per fix session; requires Docker on the host; npm-cache sharing becomes read-only (no writes from container)
+- **Trade-offs:** Adds 5-10s latency per fix session; requires Docker on the host; dependency cache sharing becomes read-only (no writes from container)
 
 ### Option B: macOS `sandbox-exec` / `pf` firewall
 - Use macOS `sandbox-exec` profiles to restrict filesystem access to the worktree

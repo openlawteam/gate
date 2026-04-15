@@ -85,7 +85,35 @@ def run_code_stage(
         logger.error(f"Prompt template not found: gate-{stage}.md")
         return 1
 
-    prompt_text = safe_substitute(template, {"request": request}, f"gate-code-{stage}")
+    # Merge profile variables so $typecheck_cmd etc. resolve in gate-implement.md
+    from gate import profiles
+
+    workspace_path = workspace
+    repo_config = {}
+    try:
+        env_json = workspace_path / "fix-env.json"
+        if env_json.exists():
+            import json as _json
+            _env = _json.loads(env_json.read_text())
+        pr_meta = workspace_path / "pr-metadata.json"
+        if pr_meta.exists():
+            import json as _json
+            meta = _json.loads(pr_meta.read_text())
+            repo_name = meta.get("repo", "")
+            if repo_name:
+                from gate.config import resolve_repo_config
+                try:
+                    full_cfg = resolve_repo_config(repo_name)
+                    repo_config = full_cfg.get("repo", {})
+                except ValueError:
+                    pass
+    except Exception:
+        pass
+
+    profile = profiles.resolve_profile(repo_config, workspace_path)
+    vars_dict = {"request": request}
+    vars_dict.update({k: v for k, v in profile.items() if isinstance(v, str)})
+    prompt_text = safe_substitute(template, vars_dict, f"gate-code-{stage}")
 
     version = _next_version(workspace, stage)
     suffix = stage if version is None else f"{stage}_{version}"

@@ -79,11 +79,21 @@ def get_repo_config(repo_name: str, config: dict | None = None) -> dict:
 
 
 def resolve_repo_config(repo_name: str, config: dict | None = None) -> dict:
-    """Return a copy of config with config['repo'] set to the matching repo entry."""
+    """Return a copy of config with config['repo'] set to the matching repo entry.
+
+    Per-repo overrides for limits, timeouts, and retry are merged into the
+    global sections so downstream code sees them transparently.
+    """
     if config is None:
         config = load_config()
     config = dict(config)
-    config["repo"] = get_repo_config(repo_name, config)
+    repo = get_repo_config(repo_name, config)
+    config["repo"] = repo
+    for section in ("limits", "timeouts", "retry"):
+        if section in repo:
+            merged = dict(config.get(section, {}))
+            merged.update(repo[section])
+            config[section] = merged
     return config
 
 

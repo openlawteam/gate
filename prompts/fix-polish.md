@@ -25,7 +25,7 @@ $compiled_cursor_rules
 - Do NOT fix findings that were not part of this fix session
 - Do NOT refactor code that works correctly
 - Do NOT add new features or improvements
-- Do NOT modify any file matching the blocklist (`.github/**`, `.env*`, `src/db/schema/**`, `drizzle/**`, `package.json`, `package-lock.json`, `tsconfig.json`, `.cursor/rules/**`)
+- Do NOT modify any file matching the blocklist (`.github/**`, `.env*`, `src/db/schema/**`, `drizzle/**`, `$dep_file`, lockfiles, `$config_files`, `.cursor/rules/**`)
 
 ## Constraints
 
@@ -35,7 +35,7 @@ $compiled_cursor_rules
 
 ## After Corrections
 
-Run `npx tsc --noEmit 2>&1 | tail -20` to verify your corrections compile.
+Run `$typecheck_cmd 2>&1 | tail -20` to verify your corrections compile.
 
 ## Output
 
@@ -43,7 +43,7 @@ Respond with ONLY valid JSON (no markdown fences):
 
 {
   "corrections": [
-    { "file": "path/to/file.ts", "description": "Added missing import for ExtractedComponent" }
+    { "file": "path/to/source.file", "description": "Added missing import for ExtractedComponent" }
   ],
   "clean": false
 }

@@ -195,59 +195,82 @@ def cleanup_gate_tests(workspace: Path) -> None:
                     pass
 
 
-def build_verify(workspace: Path, original_build: dict | None = None) -> dict:
+def build_verify(
+    workspace: Path,
+    original_build: dict | None = None,
+    config: dict | None = None,
+) -> dict:
     """Run build and compare to original for pre-existing failure detection.
 
-    Ported from buildVerify() in fix-loop-helpers.js.
-    Returns dict with pass, tsc_errors, lint_errors, test_failures, tsc_log, lint_log.
-    Skips for non-Node.js projects (no package.json).
+    Uses the project profile to determine which commands to run.
+    Returns dict with pass, typecheck_errors, lint_errors, test_failures,
+    typecheck_log, lint_log, and typecheck_tool.
     """
-    if not (workspace / "package.json").exists():
+    from gate import profiles
+
+    repo_cfg = (config or {}).get("repo", {})
+    profile = profiles.resolve_profile(repo_cfg, workspace)
+    project_type = profile.get("project_type", "none")
+
+    typecheck_cmd = profile.get("typecheck_cmd", "")
+    lint_cmd = profile.get("lint_cmd", "")
+    test_cmd = profile.get("test_cmd", "")
+
+    if not typecheck_cmd and not lint_cmd and not test_cmd:
         return {
             "pass": True,
-            "tsc_errors": 0,
+            "typecheck_errors": 0,
             "lint_errors": 0,
             "test_failures": 0,
-            "tsc_log": "",
+            "typecheck_log": "",
             "lint_log": "",
+            "typecheck_tool": "",
         }
 
     cwd = str(workspace)
     build_dir = workspace / "fix-build"
     build_dir.mkdir(exist_ok=True)
 
-    tsc_out = _run_silent("npx tsc --noEmit 2>&1", cwd=cwd)
-    (build_dir / "tsc.log").write_text(tsc_out)
-    tsc_exit = 1 if "error TS" in tsc_out else 0
+    typecheck_tool = typecheck_cmd.split()[0] if typecheck_cmd else ""
+    lint_tool = lint_cmd.split()[0] if lint_cmd else ""
+    test_tool = test_cmd.split()[0] if test_cmd else ""
 
-    lint_out = _run_silent("npm run lint:check 2>&1", cwd=cwd)
+    if typecheck_cmd:
+        tc_out, tc_exit = _run_silent(f"{typecheck_cmd} 2>&1", cwd=cwd)
+    else:
+        tc_out, tc_exit = "", 0
+    (build_dir / "typecheck.log").write_text(tc_out)
+
+    if lint_cmd:
+        lint_out, lint_exit = _run_silent(f"{lint_cmd} 2>&1", cwd=cwd)
+    else:
+        lint_out, lint_exit = "", 0
     (build_dir / "lint.log").write_text(lint_out)
-    lint_exit = 1 if ("error" in lint_out and "0 errors" not in lint_out) else 0
 
-    test_out = _run_silent(
-        "npx vitest run --exclude 'tests/gate/**' "
-        "--exclude '**/__gate_test_*' --exclude '**/__gate_fix_test_*' 2>&1",
-        cwd=cwd,
-    )
+    if test_cmd:
+        test_out, test_exit = _run_silent(f"{test_cmd} 2>&1", cwd=cwd)
+    else:
+        test_out, test_exit = "", 0
     (build_dir / "test.log").write_text(test_out)
-    test_exit = 1 if ("Tests  failed" in test_out or "FAIL" in test_out) else 0
 
     build_result = builder.compile_build(
-        tsc_log=tsc_out,
-        tsc_exit=tsc_exit,
+        typecheck_log=tc_out,
+        typecheck_exit=tc_exit,
         lint_log=lint_out,
         lint_exit=lint_exit,
         test_log=test_out,
         test_exit=test_exit,
+        project_type=project_type,
+        typecheck_tool=typecheck_tool,
+        lint_tool=lint_tool,
+        test_tool=test_tool,
     )
 
-    # Write fix-build.json
     fix_build_path = workspace / "fix-build.json"
     fix_build_path.write_text(json.dumps(build_result, indent=2))
 
     passed = build_result.get("overall_pass", False)
 
-    # Pre-existing failure comparison
     if not passed and original_build:
         compared = builder.compare_builds(original_build, build_result)
         passed = compared.get("overall_pass", False)
@@ -256,11 +279,12 @@ def build_verify(workspace: Path, original_build: dict | None = None) -> dict:
 
     return {
         "pass": passed,
-        "tsc_errors": build_result.get("typescript", {}).get("error_count", 0),
+        "typecheck_errors": build_result.get("typecheck", {}).get("error_count", 0),
         "lint_errors": build_result.get("lint", {}).get("error_count", 0),
         "test_failures": build_result.get("tests", {}).get("failed", 0),
-        "tsc_log": tsc_out[:5000],
+        "typecheck_log": tc_out[:5000],
         "lint_log": lint_out[:5000],
+        "typecheck_tool": typecheck_tool,
     }
 
 
@@ -269,7 +293,7 @@ def write_diff(workspace: Path) -> None:
 
     Ported from writeDiff() in run-fix-phases.js.
     """
-    diff = _run_silent("git diff HEAD 2>/dev/null", cwd=str(workspace))
+    diff, _ = _run_silent("git diff HEAD 2>/dev/null", cwd=str(workspace))
     (workspace / "fix-diff.txt").write_text(diff or "(no changes)")
 
 
@@ -326,8 +350,8 @@ def _revert_all(workspace: Path) -> None:
     subprocess.run(["git", "clean", "-fd"], capture_output=True, cwd=cwd)
 
 
-def _run_silent(cmd: str, cwd: str | None = None) -> str:
-    """Run a shell command silently, returning stdout. Never raises."""
+def _run_silent(cmd: str, cwd: str | None = None) -> tuple[str, int]:
+    """Run a shell command silently, returning (stdout, exit_code). Never raises."""
     try:
         result = subprocess.run(
             cmd,
@@ -337,9 +361,9 @@ def _run_silent(cmd: str, cwd: str | None = None) -> str:
             cwd=cwd,
             timeout=600,
         )
-        return result.stdout
+        return result.stdout, result.returncode
     except (subprocess.SubprocessError, OSError):
-        return ""
+        return "", 1
 
 
 # ── Prompt Builders ──────────────────────────────────────────
@@ -350,6 +374,7 @@ def _build_build_error_prompt(build_result: dict) -> str:
 
     Ported from buildBuildErrorPrompt() in run-fix-loop.js.
     """
+    tool_name = build_result.get("typecheck_tool") or "Type Check"
     parts = [
         "# Build Errors After Fix",
         "",
@@ -357,10 +382,10 @@ def _build_build_error_prompt(build_result: dict) -> str:
         "You still have full context of what you changed. Fix these errors.",
         "",
     ]
-    if build_result.get("tsc_errors", 0) > 0:
-        parts.append(f"## TypeScript Errors ({build_result['tsc_errors']})")
+    if build_result.get("typecheck_errors", 0) > 0:
+        parts.append(f"## {tool_name} Errors ({build_result['typecheck_errors']})")
         parts.append("```")
-        parts.append(build_result.get("tsc_log", "(no log captured)"))
+        parts.append(build_result.get("typecheck_log", "(no log captured)"))
         parts.append("```")
         parts.append("")
     if build_result.get("lint_errors", 0) > 0:
@@ -531,13 +556,13 @@ class FixPipeline:
                 enforce_blocklist(self.workspace, config=self.config)
                 cleanup_gate_tests(self.workspace)
 
-                build_result = build_verify(self.workspace, self.build)
+                build_result = build_verify(self.workspace, self.build, config=self.config)
 
                 # If build fails, resume session with build error context
                 if not build_result["pass"]:
                     write_live_log(
                         self.pr_number,
-                        f"Build failed, resuming with errors (tsc={build_result['tsc_errors']})",
+                        f"Build failed, resuming with errors (typecheck={build_result['typecheck_errors']})",
                         prefix="fix",
                         repo=self.repo,
                     )
@@ -546,7 +571,7 @@ class FixPipeline:
 
                     enforce_blocklist(self.workspace, config=self.config)
                     cleanup_gate_tests(self.workspace)
-                    build_result = build_verify(self.workspace, self.build)
+                    build_result = build_verify(self.workspace, self.build, config=self.config)
 
                 if not build_result["pass"]:
                     logger.info(f"Build still failing after iteration {iteration}")

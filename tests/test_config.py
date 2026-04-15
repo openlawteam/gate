@@ -28,8 +28,9 @@ class TestLoadConfig:
     def test_loads_toml(self):
         config = load_config()
         assert isinstance(config, dict)
-        assert "repo" in config
-        assert config["repo"]["name"]
+        assert "repos" in config
+        assert len(config["repos"]) > 0
+        assert config["repos"][0]["name"]
 
     def test_models_section(self):
         config = load_config()
@@ -122,6 +123,59 @@ class TestResolveRepoConfig:
         import pytest
         with pytest.raises(ValueError):
             resolve_repo_config("nonexistent/repo", sample_config)
+
+    def test_per_repo_limits_override(self):
+        config = {
+            "repos": [
+                {
+                    "name": "org/repo",
+                    "clone_path": "~/repo",
+                    "limits": {"max_fix_attempts_total": 0},
+                },
+            ],
+            "limits": {"max_fix_attempts_total": 6, "max_review_cycles": 5},
+        }
+        resolved = resolve_repo_config("org/repo", config)
+        assert resolved["limits"]["max_fix_attempts_total"] == 0
+        assert resolved["limits"]["max_review_cycles"] == 5
+
+    def test_per_repo_timeouts_override(self):
+        config = {
+            "repos": [
+                {
+                    "name": "org/repo",
+                    "clone_path": "~/repo",
+                    "timeouts": {"agent_stage_s": 600},
+                },
+            ],
+            "timeouts": {"agent_stage_s": 900, "hard_timeout_s": 1200},
+        }
+        resolved = resolve_repo_config("org/repo", config)
+        assert resolved["timeouts"]["agent_stage_s"] == 600
+        assert resolved["timeouts"]["hard_timeout_s"] == 1200
+
+    def test_per_repo_retry_override(self):
+        config = {
+            "repos": [
+                {
+                    "name": "org/repo",
+                    "clone_path": "~/repo",
+                    "retry": {"max_retries": 2},
+                },
+            ],
+            "retry": {"max_retries": 4, "base_delay_s": 60},
+        }
+        resolved = resolve_repo_config("org/repo", config)
+        assert resolved["retry"]["max_retries"] == 2
+        assert resolved["retry"]["base_delay_s"] == 60
+
+    def test_no_per_repo_overrides_leaves_globals_intact(self):
+        config = {
+            "repos": [{"name": "org/repo", "clone_path": "~/repo"}],
+            "limits": {"max_review_cycles": 5},
+        }
+        resolved = resolve_repo_config("org/repo", config)
+        assert resolved["limits"]["max_review_cycles"] == 5
 
 
 class TestBuildClaudeEnv:

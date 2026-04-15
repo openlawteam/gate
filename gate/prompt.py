@@ -11,6 +11,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from gate import profiles
 from gate.config import gate_dir
 
 logger = logging.getLogger(__name__)
@@ -212,7 +213,10 @@ def build_vars(
     prep_context = _read_file(workspace / "fix-prep.json")
     fix_plan = _read_file(workspace / "fix-plan.json")
 
-    return {
+    # Resolve project profile for template variables
+    profile = profiles.resolve_profile(repo_cfg, workspace)
+
+    result = {
         "pr_title": env_vars.get("pr_title", ""),
         "pr_body": truncate(env_vars.get("pr_body", ""), max_pr_body, "PR body"),
         "pr_author": env_vars.get("pr_author", ""),
@@ -253,4 +257,16 @@ def build_vars(
         "fix_plan": fix_plan or "(plan phase skipped — fix all findings using your judgment)",
         "previous_attempt_context": _read_file(workspace / "fix-previous-attempt.txt") or "(first attempt)",
         "bot_account": (config or {}).get("repo", {}).get("bot_account", "gate-bot"),
+        # Project profile variables
+        "project_language": profile.get("language", "Unknown"),
+        "project_type": profile.get("project_type", ""),
+        "typecheck_cmd": profile.get("typecheck_cmd", ""),
+        "lint_cmd": profile.get("lint_cmd", ""),
+        "test_cmd": profile.get("test_cmd", ""),
+        "test_file_pattern": profile.get("test_file_pattern", ""),
+        "dep_file": profile.get("dep_file", ""),
+        "config_files": profile.get("config_files", ""),
+        "env_access_pattern": profile.get("env_access_pattern", ""),
+        "import_style": profile.get("import_style", ""),
     }
+    return result

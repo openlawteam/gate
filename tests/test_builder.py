@@ -2,7 +2,16 @@
 
 from pathlib import Path
 
-from gate.builder import _parse_lint, _parse_test, _parse_tsc, compare_builds, run_build
+from gate.builder import (
+    _parse_generic,
+    _parse_generic_test,
+    _parse_lint,
+    _parse_test,
+    _parse_tsc,
+    compare_builds,
+    compile_build,
+    run_build,
+)
 
 
 class TestParseTsc:
@@ -71,13 +80,37 @@ class TestParseTest:
         assert result["failed"] == 1
 
 
+class TestParseGeneric:
+    def test_passing(self):
+        result = _parse_generic("all good", 0)
+        assert result["pass"] is True
+        assert result["error_count"] == 0
+
+    def test_failing(self):
+        result = _parse_generic("error: something broke\nline2", 1)
+        assert result["pass"] is False
+        assert result["error_count"] == 2
+
+
+class TestParseGenericTest:
+    def test_passing(self):
+        result = _parse_generic_test("ok", 0)
+        assert result["pass"] is True
+        assert result["failed"] == 0
+
+    def test_failing(self):
+        result = _parse_generic_test("FAILED", 1)
+        assert result["pass"] is False
+        assert result["failed"] == 1
+
+
 class TestRunBuildSkip:
-    def test_run_build_skips_without_package_json(self, tmp_path):
+    def test_run_build_skips_without_commands(self, tmp_path):
         result = run_build(tmp_path)
         assert result["overall_pass"] is True
         assert result["skipped"] is True
         assert result["blocking_issues"] == []
-        assert result["typescript"]["pass"] is True
+        assert result["typecheck"]["pass"] is True
         assert result["lint"]["pass"] is True
         assert result["tests"]["pass"] is True
 
@@ -87,21 +120,56 @@ class TestRunBuildSkip:
         assert "skipped" not in result or result["skipped"] is not True
 
 
+class TestCompileBuild:
+    def test_node_project_uses_structured_parsers(self):
+        result = compile_build(
+            typecheck_log="src/foo.ts(1,1): error TS2322: msg",
+            typecheck_exit=1,
+            lint_log="", lint_exit=0,
+            test_log="", test_exit=0,
+            project_type="node",
+            typecheck_tool="npx",
+        )
+        assert result["typecheck"]["error_count"] == 1
+        assert result["typecheck"]["errors"][0]["code"] == "TS2322"
+
+    def test_python_project_uses_generic_parsers(self):
+        result = compile_build(
+            typecheck_log="", typecheck_exit=0,
+            lint_log="error: something\n", lint_exit=1,
+            test_log="", test_exit=0,
+            project_type="python",
+            lint_tool="ruff",
+        )
+        assert result["lint"]["pass"] is False
+        assert result["lint"]["tool"] == "ruff"
+
+    def test_has_project_type_in_result(self):
+        result = compile_build(
+            typecheck_log="", typecheck_exit=0,
+            lint_log="", lint_exit=0,
+            test_log="", test_exit=0,
+            project_type="go",
+        )
+        assert result["project_type"] == "go"
+        assert result["overall_pass"] is True
+
+
 class TestCompareBuilds:
     def test_passing_build_unchanged(self):
-        build = {"overall_pass": True, "typescript": {"pass": True}, "lint": {"pass": True}}
+        build = {"overall_pass": True, "typecheck": {"pass": True}, "lint": {"pass": True}}
         result = compare_builds({}, build)
         assert result["overall_pass"] is True
 
     def test_pre_existing_failures_accepted(self):
         before = {
-            "typescript": {"pass": False},
+            "typecheck": {"pass": False},
             "lint": {"pass": True},
             "tests": {"failed": 2},
         }
         after = {
             "overall_pass": False,
-            "typescript": {"pass": False},
+            "typecheck": {"pass": False},
             "lint": {"pass": True},
             "tests": {"failed": 1},
         }
@@ -110,12 +178,29 @@ class TestCompareBuilds:
         assert result["pre_existing_failures_accepted"] is True
 
     def test_new_failures_not_accepted(self):
-        before = {"typescript": {"pass": True}, "lint": {"pass": True}, "tests": {"failed": 0}}
+        before = {"typecheck": {"pass": True}, "lint": {"pass": True}, "tests": {"failed": 0}}
         after = {
             "overall_pass": False,
-            "typescript": {"pass": False},
+            "typecheck": {"pass": False},
             "lint": {"pass": True},
             "tests": {"failed": 0},
         }
         result = compare_builds(before, after)
         assert result["overall_pass"] is False
+
+    def test_backward_compat_typescript_key(self):
+        """Old build.json files use 'typescript' key; compare_builds handles both."""
+        before = {
+            "typescript": {"pass": False},
+            "lint": {"pass": True},
+            "tests": {"failed": 1},
+        }
+        after = {
+            "overall_pass": False,
+            "typecheck": {"pass": False},
+            "lint": {"pass": True},
+            "tests": {"failed": 1},
+        }
+        result = compare_builds(before, after)
+        assert result["overall_pass"] is True
+        assert result["pre_existing_failures_accepted"] is True

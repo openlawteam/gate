@@ -71,27 +71,47 @@ class TestFormatBuildSection:
     def test_none_build(self):
         assert _format_build_section(None) == ""
 
-    def test_all_passing(self):
+    def test_all_passing_with_tools(self):
+        build = {
+            "typecheck": {"pass": True, "error_count": 0, "tool": "npx"},
+            "lint": {"pass": True, "warning_count": 0, "tool": "eslint"},
+            "tests": {"pass": True, "passed": 42, "total": 42, "tool": "vitest"},
+        }
+        result = _format_build_section(build)
+        assert "npx: ✅" in result
+        assert "eslint: ✅" in result
+        assert "vitest: ✅" in result
+
+    def test_failures_with_tools(self):
+        build = {
+            "typecheck": {"pass": False, "error_count": 3, "tool": "npx"},
+            "lint": {"pass": False, "error_count": 2, "warning_count": 5, "tool": "eslint"},
+            "tests": {"pass": False, "failed": 1, "passed": 41, "total": 42, "tool": "vitest"},
+        }
+        result = _format_build_section(build)
+        assert "npx: ❌" in result
+        assert "eslint: ❌" in result
+        assert "vitest: ❌" in result
+
+    def test_default_tool_names(self):
+        build = {
+            "typecheck": {"pass": True, "error_count": 0},
+            "lint": {"pass": True, "warning_count": 0},
+            "tests": {"pass": True, "passed": 10, "total": 10},
+        }
+        result = _format_build_section(build)
+        assert "Type check: ✅" in result
+        assert "Lint: ✅" in result
+        assert "Tests: ✅" in result
+
+    def test_backward_compat_typescript_key(self):
         build = {
             "typescript": {"pass": True, "error_count": 0},
             "lint": {"pass": True, "warning_count": 0},
             "tests": {"pass": True, "passed": 42, "total": 42},
         }
         result = _format_build_section(build)
-        assert "TypeScript: ✅" in result
-        assert "Lint: ✅" in result
-        assert "Tests: ✅" in result
-
-    def test_failures(self):
-        build = {
-            "typescript": {"pass": False, "error_count": 3},
-            "lint": {"pass": False, "error_count": 2, "warning_count": 5},
-            "tests": {"pass": False, "failed": 1, "passed": 41, "total": 42},
-        }
-        result = _format_build_section(build)
-        assert "TypeScript: ❌" in result
-        assert "Lint: ❌" in result
-        assert "Tests: ❌" in result
+        assert "Type check: ✅" in result
 
 
 class TestBuildComment:
@@ -140,7 +160,7 @@ class TestBuildComment:
             "findings": [],
             "stats": {"stages_run": 4},
         }
-        build = {"typescript": {"pass": True, "error_count": 0}}
+        build = {"typecheck": {"pass": True, "error_count": 0, "tool": "tsc"}}
         result = _build_comment(verdict, build)
         assert "Build Results" in result
 
@@ -149,14 +169,14 @@ class TestFormatBuildSectionSkipped:
     def test_format_build_section_skipped(self):
         build = {
             "skipped": True,
-            "skip_reason": "no package.json (not a Node.js project)",
+            "skip_reason": "no build commands (project_type=none)",
             "overall_pass": True,
         }
         result = _format_build_section(build)
         assert "skipped" in result.lower()
-        assert "no package.json" in result
+        assert "no build commands" in result
 
     def test_format_build_section_skipped_default_reason(self):
         build = {"skipped": True, "overall_pass": True}
         result = _format_build_section(build)
-        assert "not a Node.js project" in result
+        assert "no build commands configured" in result

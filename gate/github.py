@@ -270,40 +270,43 @@ def _format_resolved(resolved: list[dict]) -> str:
 
 
 def _format_build_section(build: dict | None) -> str:
-    """Format build results. Ported from formatBuildSection()."""
+    """Format build results. Uses tool names from build result when available."""
     if not build:
         return ""
 
     if build.get("skipped"):
-        reason = build.get("skip_reason", "not a Node.js project")
+        reason = build.get("skip_reason", "no build commands configured")
         return f"\n### Build Results\n- Build verification skipped ({reason})\n"
 
     md = "\n### Build Results\n"
 
-    ts = build.get("typescript", {})
-    if ts:
-        if ts.get("pass"):
-            md += f"- TypeScript: ✅ ({ts.get('error_count', 0)} errors)\n"
+    tc = build.get("typecheck", build.get("typescript", {}))
+    if tc:
+        tool_name = tc.get("tool") or "Type check"
+        if tc.get("pass"):
+            md += f"- {tool_name}: ✅ ({tc.get('error_count', 0)} errors)\n"
         else:
-            md += f"- TypeScript: ❌ ({ts.get('error_count', '?')} errors)\n"
+            md += f"- {tool_name}: ❌ ({tc.get('error_count', '?')} errors)\n"
 
     lint = build.get("lint", {})
     if lint:
+        lint_name = lint.get("tool") or "Lint"
         if lint.get("pass"):
-            md += f"- Lint: ✅ ({lint.get('warning_count', 0)} warnings)\n"
+            md += f"- {lint_name}: ✅ ({lint.get('warning_count', 0)} warnings)\n"
         else:
             md += (
-                f"- Lint: ❌ ({lint.get('error_count', '?')} errors, "
+                f"- {lint_name}: ❌ ({lint.get('error_count', '?')} errors, "
                 f"{lint.get('warning_count', 0)} warnings)\n"
             )
 
     tests = build.get("tests", {})
     if tests:
+        test_name = tests.get("tool") or "Tests"
         if tests.get("pass"):
-            md += f"- Tests: ✅ ({tests.get('passed', 0)}/{tests.get('total', 0)} passed)\n"
+            md += f"- {test_name}: ✅ ({tests.get('passed', 0)}/{tests.get('total', 0)} passed)\n"
         else:
             md += (
-                f"- Tests: ❌ ({tests.get('failed', 0)} failed, "
+                f"- {test_name}: ❌ ({tests.get('failed', 0)} failed, "
                 f"{tests.get('passed', 0)}/{tests.get('total', 0)} passed)\n"
             )
 

@@ -18,14 +18,21 @@ from gate.fixer import (
 
 
 class TestBuildVerifySkip:
-    def test_build_verify_skips_without_package_json(self, tmp_path):
+    def test_build_verify_skips_without_commands(self, tmp_path):
         result = build_verify(tmp_path)
         assert result["pass"] is True
-        assert result["tsc_errors"] == 0
+        assert result["typecheck_errors"] == 0
         assert result["lint_errors"] == 0
         assert result["test_failures"] == 0
-        assert result["tsc_log"] == ""
+        assert result["typecheck_log"] == ""
         assert result["lint_log"] == ""
+
+    def test_build_verify_with_python_config(self, tmp_path):
+        (tmp_path / "pyproject.toml").write_text("")
+        config = {"repo": {"project_type": "python"}}
+        result = build_verify(tmp_path, config=config)
+        assert "typecheck_errors" in result
+        assert "lint_errors" in result
 
 
 class TestMatchGlob:
@@ -115,39 +122,48 @@ class TestSortFindingsBySeverity:
 class TestWriteDiff:
     @patch("gate.fixer._run_silent")
     def test_writes_diff_file(self, mock_run, tmp_path):
-        mock_run.return_value = "diff --git a/foo.ts\n+line\n"
+        mock_run.return_value = ("diff --git a/foo.ts\n+line\n", 0)
         write_diff(tmp_path)
         assert (tmp_path / "fix-diff.txt").exists()
         assert "diff" in (tmp_path / "fix-diff.txt").read_text()
 
     @patch("gate.fixer._run_silent")
     def test_no_changes(self, mock_run, tmp_path):
-        mock_run.return_value = ""
+        mock_run.return_value = ("", 0)
         write_diff(tmp_path)
         assert (tmp_path / "fix-diff.txt").read_text() == "(no changes)"
 
 
 class TestBuildErrorPrompt:
-    def test_includes_tsc_errors(self):
+    def test_includes_typecheck_errors(self):
         result = _build_build_error_prompt({
-            "tsc_errors": 3,
+            "typecheck_errors": 3,
             "lint_errors": 0,
-            "tsc_log": "error TS2322: Type mismatch",
+            "typecheck_log": "error TS2322: Type mismatch",
+            "typecheck_tool": "npx",
         })
-        assert "TypeScript Errors (3)" in result
+        assert "npx Errors (3)" in result
         assert "TS2322" in result
 
     def test_includes_lint_errors(self):
         result = _build_build_error_prompt({
-            "tsc_errors": 0,
+            "typecheck_errors": 0,
             "lint_errors": 2,
             "lint_log": "no-unused-vars",
         })
         assert "Lint Errors (2)" in result
 
     def test_no_errors(self):
-        result = _build_build_error_prompt({"tsc_errors": 0, "lint_errors": 0})
+        result = _build_build_error_prompt({"typecheck_errors": 0, "lint_errors": 0})
         assert "Build Errors After Fix" in result
+
+    def test_default_tool_name(self):
+        result = _build_build_error_prompt({
+            "typecheck_errors": 1,
+            "lint_errors": 0,
+            "typecheck_log": "some error",
+        })
+        assert "Type Check Errors (1)" in result
 
 
 class TestRereviewFeedbackPrompt:

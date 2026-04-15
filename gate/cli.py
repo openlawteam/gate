@@ -86,6 +86,8 @@ def cmd_init(args: list[str]) -> int:
     parser.add_argument("--bot", default="", help="Bot account name")
     parser.add_argument("--worktree-base", default="/tmp/gate-worktrees",
                         help="Worktree base directory")
+    parser.add_argument("--project-type", default="",
+                        help="Project type (node/python/go/rust/none). Auto-detected if omitted.")
     try:
         parsed = parse_args(parser, args)
     except SystemExit:
@@ -118,6 +120,8 @@ def cmd_init(args: list[str]) -> int:
             print(f"error: {detail}")
             return 1
         bot = parsed.bot or setup.detect_gh_user() or "gate-bot"
+        from gate import profiles
+        project_type = parsed.project_type or profiles.detect_project_type(Path(parsed.clone_path))
         repo_config = {
             "name": parsed.repo,
             "clone_path": parsed.clone_path,
@@ -125,6 +129,7 @@ def cmd_init(args: list[str]) -> int:
             "bot_account": bot,
             "worktree_base": parsed.worktree_base,
             "escalation_reviewers": "",
+            "project_type": project_type,
         }
     else:
         print("Configure your repository:\n")
@@ -200,6 +205,8 @@ def cmd_add_repo(args: list[str]) -> int:
     parser.add_argument("--bot", default="", help="Bot account name")
     parser.add_argument("--worktree-base", default="/tmp/gate-worktrees",
                         help="Worktree base directory")
+    parser.add_argument("--project-type", default="",
+                        help="Project type (node/python/go/rust/none). Auto-detected if omitted.")
     try:
         parsed = parse_args(parser, args)
     except SystemExit:
@@ -237,6 +244,8 @@ def cmd_add_repo(args: list[str]) -> int:
             print(f"error: {detail}")
             return 1
         bot = parsed.bot or setup.detect_gh_user() or "gate-bot"
+        from gate import profiles
+        project_type = parsed.project_type or profiles.detect_project_type(Path(parsed.clone_path))
         new_repo = {
             "name": parsed.repo,
             "clone_path": parsed.clone_path,
@@ -244,6 +253,7 @@ def cmd_add_repo(args: list[str]) -> int:
             "bot_account": bot,
             "worktree_base": parsed.worktree_base,
             "escalation_reviewers": "",
+            "project_type": project_type,
         }
     else:
         print("Configure the new repository:\n")

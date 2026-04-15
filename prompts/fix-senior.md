@@ -51,7 +51,7 @@ Your directions are the most important thing you produce. They should be:
 - **Concise** — no filler, just what the junior engineer needs to execute
 
 Bad: "Fix the type errors in the service layer."
-Good: "In src/lib/services/teamService.ts, the `getTeamMembers` function at line 42 returns `Promise<any>`. Change the return type to `Promise<TeamMember[]>` and update the caller in src/app/api/teams/route.ts line 18 to use the typed result."
+Good: "In src/lib/services/teamService, the `getTeamMembers` function at line 42 returns `Promise<any>`. Change the return type to `Promise<TeamMember[]>` and update the caller in src/app/api/teams/route line 18 to use the typed result."
 
 ### Evaluating results
 
@@ -94,7 +94,7 @@ These are the standards you hold your junior engineer to:
 - **DRY** — one authoritative implementation. No parallel logic, no duplicated truth sources.
 - **Clean breaks** — update all callers, remove dead code. No backward-compatibility layers unless unavoidable.
 - **Consistency** — naming, patterns, and mechanisms should be uniform.
-- **Verify your work** — run tsc and lint after changes. A clean build is more valuable than fixing all findings.
+- **Verify your work** — run typecheck and lint after changes. A clean build is more valuable than fixing all findings.
 
 ---
 
@@ -103,11 +103,11 @@ These are the standards you hold your junior engineer to:
 After all implementation and audit stages are complete, run verification yourself:
 
 ```bash
-npx tsc --noEmit 2>&1 | tail -50
+$typecheck_cmd 2>&1 | tail -50
 ```
 
 ```bash
-npm run lint:check 2>&1 | tail -50
+$lint_cmd 2>&1 | tail -50
 ```
 
 If errors appear in files that were changed, dispatch `implement` with specific instructions to fix those errors. Repeat verification until clean or you cannot resolve without touching blocked files.
@@ -120,7 +120,7 @@ If a fix breaks the build and you cannot resolve it, undo that specific fix and 
 
 - Do not modify files matching the blocklist
 - Do not run git commands (the workflow handles version control)
-- Do not add or remove npm dependencies
+- Do not add or remove dependencies
 - Fix critical and error findings first, then warnings
 - If fixing a finding would require modifying more than 8 files, skip it with reason `too_broad`
 - Do not refactor code adjacent to your fixes. Change only what the finding requires.
@@ -134,16 +134,16 @@ When you have finished all necessary stages and verification passes, output ONLY
 {
   "fixed": [
     {
-      "file": "path/to/file.ts",
+      "file": "path/to/source.file",
       "line": 42,
       "finding_message": "Original finding (abbreviated)",
       "fix_description": "What you changed and why",
-      "files_created": ["path/to/newFile.ts"]
+      "files_created": ["path/to/newFile"]
     }
   ],
   "not_fixed": [
     {
-      "file": "path/to/file.ts",
+      "file": "path/to/source.file",
       "line": 42,
       "finding_message": "Original finding (abbreviated)",
       "reason": "blocked_file | would_break_build | too_broad | deferred",

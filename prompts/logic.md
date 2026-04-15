@@ -62,7 +62,7 @@ $prior_review_json
 - Callers that weren't updated after an interface change
 - Missing database migrations for schema changes
 - Missing barrel exports after file splits
-- Console.log statements (should be console.warn/error or removed)
+- Ad-hoc debug logging to stdout (in $project_language, use the project's standard logger or structured logging; remove stray debug prints)
 - Unused imports or variables (should be removed or prefixed with _)
 
 ## Differential Scope
@@ -97,10 +97,10 @@ Before assigning error severity, ask yourself: **can I prove this is wrong, or d
 
 If you suspect a correctness issue but aren't certain, you SHOULD write a test to verify. This is how you earn error severity — with proof.
 
-1. Create the test file in the repo root with prefix `__gate_test_` (e.g., `__gate_test_payment.test.ts`)
+1. Create the test file in the repo root with prefix `__gate_test_` (e.g., names following `__gate_test_$test_file_pattern`)
 2. **NEVER** place test files in `tests/gate/`, `tests/`, or any other directory — they MUST be in the repo root with the `__gate_test_` prefix
 3. Keep it under 80 lines — test one specific suspicion
-4. Run it: `npx vitest run __gate_test_*.test.ts --reporter=verbose`
+4. Run it: `$test_cmd` (targeting files matching `__gate_test_$test_file_pattern`, with your test runner's verbose reporter if applicable)
 5. Include the result in your findings as evidence
 6. Maximum 5 test files per review
 
@@ -166,7 +166,7 @@ The JSON must have this exact structure:
       "category": "correctness | edge_case | error_handling | test_coverage | completeness | data_flow | performance",
       "severity": "error | warning | info",
       "evidence_level": "test_confirmed | code_trace | pattern_match | speculative",
-      "file": "path/to/file.ts",
+      "file": "path/to/source.file",
       "line": 42,
       "introduced_by_pr": true,
       "message": "Clear description of the issue",
@@ -178,7 +178,7 @@ The JSON must have this exact structure:
   "commands_run": ["list of commands you executed"],
   "tests_written": [
     {
-      "file": "__gate_test_example.test.ts",
+      "file": "__gate_test_example",
       "hypothesis": "what you were testing",
       "result": "pass | fail",
       "output": "relevant test output"

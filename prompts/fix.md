@@ -47,7 +47,7 @@ $blocklist
 - Modify any file matching the blocklist
 - Run git commands (the workflow handles version control)
 - Run tests (the workflow runs the test suite after your fixes)
-- Add or remove npm dependencies
+- Add or remove dependencies
 - Fix info-severity findings (only fix critical, error, and warning)
 
 ## Process
@@ -68,9 +68,9 @@ Follow the fix plan step by step. Each step tells you what to change and what de
 
 After applying ALL fixes:
 
-1. Run `npx tsc --noEmit 2>&1 | tail -50`
-2. If TypeScript errors appear in files you touched, fix them
-3. Run `npm run lint:check 2>&1 | tail -50`
+1. Run `$typecheck_cmd 2>&1 | tail -50`
+2. If typecheck/compiler errors appear in files you touched, fix them
+3. Run `$lint_cmd 2>&1 | tail -50`
 4. If lint errors appear in files you touched, fix them
 5. Repeat until both pass or you cannot resolve without touching blocked files
 6. If a fix breaks the build and you cannot resolve it, undo that specific fix and mark it `not_fixed` with reason `would_break_build`
@@ -81,7 +81,7 @@ A clean build is more valuable than fixing all findings.
 
 - Follow the plan step by step. If you disagree with a plan step, execute it anyway — the re-review phase will catch real problems. Do not improvise alternative approaches.
 - If fixing a finding would require modifying more than 8 files, skip it with reason "too_broad" rather than attempting a sprawling fix that risks regressions.
-- Verification limit: run tsc/lint at most 3 cycles. If errors persist after 3 cycles, undo the problematic fix and mark it "would_break_build" rather than spiraling.
+- Verification limit: run typecheck/lint at most 3 cycles. If errors persist after 3 cycles, undo the problematic fix and mark it "would_break_build" rather than spiraling.
 - Fix critical and error findings first. If you run out of turns before reaching warnings, that is acceptable — mark remaining warnings as "not_fixed" with reason "deferred".
 - Do not refactor code adjacent to your fixes. Do not rename variables for consistency. Do not add improvements. Change only what the finding requires.
 
@@ -92,16 +92,16 @@ After fixing everything you can, output ONLY valid JSON (no markdown fences) as 
 {
   "fixed": [
     {
-      "file": "path/to/file.ts",
+      "file": "path/to/source.file",
       "line": 42,
       "finding_message": "Original finding (abbreviated)",
       "fix_description": "What you changed and why",
-      "files_created": ["path/to/newFile.ts"]
+      "files_created": ["path/to/newFile"]
     }
   ],
   "not_fixed": [
     {
-      "file": "path/to/file.ts",
+      "file": "path/to/source.file",
       "line": 42,
       "finding_message": "Original finding (abbreviated)",
       "reason": "blocked_file | would_break_build | out_of_scope",

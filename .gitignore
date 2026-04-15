@@ -27,3 +27,4 @@ server.sock
 config/gate.toml
 config/cursor-rules.md
 config/fix-blocklist.txt
+*.bak

@@ -60,8 +60,8 @@ $diff_or_summary
 ## Fast-Track Eligibility
 
 Set `fast_track_eligible: true` if ALL:
-- Only .md files changed, OR only config files (eslint, tsconfig, prettier, .json config) changed
-- No source code changed (.ts, .tsx, .js, .jsx, .mjs, .cjs, .css, .scss, .py, .sh, .sql)
+- Only .md files changed, OR only config files ($config_files, .json config) changed
+- No application source code changed (implementation files, styles, scripts, etc. — not limited to a single language)
 
 Note: the final fast-track decision is made after build verification passes. You only determine eligibility based on file types.
 

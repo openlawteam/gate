@@ -75,15 +75,38 @@ gate add-repo
 | `gate cleanup-pr --pr N` | Clean up state for a closed PR |
 | `gate process <id> <stage>` | Run a review stage in tmux (internal) |
 
+## Supported Languages
+
+Gate supports any project type through built-in profiles and custom build commands:
+
+| Language | Profile | Typecheck | Lint | Tests |
+|----------|---------|-----------|------|-------|
+| TypeScript/JS | `node` | `npx tsc --noEmit` | `npm run lint:check` | `npm run test:run` |
+| Python | `python` | — | `ruff check .` | `python -m pytest` |
+| Go | `go` | `go vet ./...` | `golangci-lint run` | `go test ./...` |
+| Rust | `rust` | `cargo check` | `cargo clippy` | `cargo test` |
+
+`gate init` auto-detects the project type. You can override any command per-repo via `build.*` keys in `gate.toml`.
+
 ## Configuration
 
 ### `config/gate.toml`
 
 ```toml
-[repo]
+[[repos]]
 name = "your-org/your-repo"
 clone_path = "~/your-repo"
+project_type = "node"    # auto-detected: node, python, go, rust, none
 worktree_base = "/tmp/gate-worktrees"
+
+# Override default build commands per-repo:
+# build.typecheck_cmd = "npx tsc --noEmit"
+# build.lint_cmd = "npm run lint:check"
+# build.test_cmd = "npm run test:run"
+
+# Per-repo limit overrides:
+# limits.max_fix_attempts_total = 0
+# timeouts.agent_stage_s = 600
 
 [models]
 triage = "sonnet"
@@ -139,7 +162,8 @@ gate/
 │   ├── health.py              # Infrastructure health monitoring
 │   ├── cleanup.py             # Log rotation, worktree pruning, digest
 │   ├── logger.py              # reviews.jsonl, live logs
-│   ├── builder.py             # Build verification (tsc, lint)
+│   ├── builder.py             # Build verification (per-project: typecheck, lint, tests)
+│   ├── profiles.py            # Project type profiles (node, python, go, rust)
 │   ├── quota.py               # Anthropic API quota checking
 │   ├── workspace.py           # Git worktree management
 │   ├── tui.py                 # Textual TUI dashboard

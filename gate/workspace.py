@@ -95,14 +95,16 @@ def _git_fetch_with_retry(repo_path: str, branch: str, max_retries: int = 3) -> 
             raise
 
 
-def _npm_install_with_retry(worktree_path: Path, max_retries: int = 2) -> None:
-    """Run npm ci with retry logic."""
+def _install_deps_with_retry(
+    worktree_path: Path, cmd: str, max_retries: int = 2,
+) -> None:
+    """Run a dependency install command with retry logic."""
     env = os.environ.copy()
     env["npm_config_cache"] = str(gate_dir() / "npm-cache")
     for attempt in range(1, max_retries + 1):
         try:
             subprocess.run(
-                ["npm", "ci"],
+                cmd.split(),
                 cwd=str(worktree_path),
                 check=True,
                 capture_output=True,
@@ -112,7 +114,7 @@ def _npm_install_with_retry(worktree_path: Path, max_retries: int = 2) -> None:
             return
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
             if attempt < max_retries:
-                logger.warning(f"npm ci retry {attempt}/{max_retries}: {e}")
+                logger.warning(f"dep install retry {attempt}/{max_retries} ({cmd}): {e}")
                 time.sleep(10)
                 continue
             raise
@@ -202,12 +204,16 @@ def create_worktree(
 
     prepare_context_files(worktree_path, config=config)
 
-    # Install dependencies with retry (Node.js projects only)
-    if (worktree_path / "package.json").exists():
-        logger.info(f"Running npm ci in {worktree_path}")
-        _npm_install_with_retry(worktree_path)
+    # Install dependencies using profile
+    from gate import profiles
+
+    profile = profiles.resolve_profile(repo_cfg, worktree_path)
+    dep_cmd = profile.get("dep_install_cmd", "")
+    if dep_cmd:
+        logger.info(f"Installing dependencies: {dep_cmd}")
+        _install_deps_with_retry(worktree_path, dep_cmd)
     else:
-        logger.info(f"No package.json in {worktree_path}, skipping npm ci")
+        logger.info(f"No dep install command for {worktree_path}, skipping")
 
     return worktree_path
 

@@ -102,6 +102,7 @@ class TestValidateClonePath:
 
 
 class TestPromptRepoConfig:
+    @patch("gate.setup.profiles.detect_project_type", return_value="node")
     @patch("gate.setup.detect_gh_user", return_value="testuser")
     @patch("gate.setup.validate_clone_path", return_value=(True, "/home/user/myrepo"))
     @patch("builtins.input", side_effect=[
@@ -110,8 +111,9 @@ class TestPromptRepoConfig:
         "",                   # branch (default)
         "",                   # bot (default)
         "",                   # worktree_base (default)
+        "",                   # project type confirm (Y)
     ])
-    def test_valid_inputs(self, _inp, _val, _gh):
+    def test_valid_inputs(self, _inp, _val, _gh, _detect):
         result = setup.prompt_repo_config()
         assert result["name"] == "myorg/myrepo"
         assert result["clone_path"] == "/home/user/myrepo"
@@ -119,7 +121,9 @@ class TestPromptRepoConfig:
         assert result["bot_account"] == "testuser"
         assert result["worktree_base"] == "/tmp/gate-worktrees"
         assert result["escalation_reviewers"] == ""
+        assert result["project_type"] == "node"
 
+    @patch("gate.setup.profiles.detect_project_type", return_value="none")
     @patch("gate.setup.detect_gh_user", return_value=None)
     @patch("gate.setup.validate_clone_path", return_value=(True, "/tmp/repo"))
     @patch("builtins.input", side_effect=[
@@ -129,13 +133,15 @@ class TestPromptRepoConfig:
         "develop",        # branch
         "",               # bot (defaults to gate-bot since gh user is None)
         "/tmp/wt",        # worktree_base
+        "python",         # project type (manual since detect returned "none")
     ])
-    def test_invalid_repo_then_valid(self, _inp, _val, _gh):
+    def test_invalid_repo_then_valid(self, _inp, _val, _gh, _detect):
         result = setup.prompt_repo_config()
         assert result["name"] == "org/repo"
         assert result["default_branch"] == "develop"
         assert result["bot_account"] == "gate-bot"
         assert result["worktree_base"] == "/tmp/wt"
+        assert result["project_type"] == "python"
 
 
 class TestFormatRepoToml:
@@ -170,6 +176,89 @@ class TestFormatRepoToml:
         result = setup.format_repo_toml(cfg, header="[repo]")
         parsed = tomllib.loads(result)
         assert parsed["repo"]["clone_path"] == "/path with spaces/repo"
+
+
+class TestFormatRepoTomlExtended:
+    def test_project_type_key(self):
+        cfg = {
+            "name": "org/repo", "clone_path": "~/repo",
+            "worktree_base": "/tmp/wt", "bot_account": "bot",
+            "escalation_reviewers": "", "default_branch": "main",
+            "project_type": "python",
+        }
+        result = setup.format_repo_toml(cfg, header="[repo]")
+        parsed = tomllib.loads(result)
+        assert parsed["repo"]["project_type"] == "python"
+
+    def test_nested_build_overrides(self):
+        cfg = {
+            "name": "org/repo", "clone_path": "~/repo",
+            "project_type": "python",
+            "build": {
+                "lint_cmd": "ruff check gate/",
+                "test_cmd": "pytest tests/",
+            },
+        }
+        result = setup.format_repo_toml(cfg, header="[repo]")
+        parsed = tomllib.loads(result)
+        assert parsed["repo"]["build"]["lint_cmd"] == "ruff check gate/"
+        assert parsed["repo"]["build"]["test_cmd"] == "pytest tests/"
+
+    def test_list_values(self):
+        cfg = {
+            "name": "org/repo", "clone_path": "~/repo",
+            "escalation_reviewers": ["user1", "user2"],
+        }
+        result = setup.format_repo_toml(cfg, header="[repo]")
+        parsed = tomllib.loads(result)
+        assert parsed["repo"]["escalation_reviewers"] == ["user1", "user2"]
+
+    def test_cursor_rules_key(self):
+        cfg = {
+            "name": "org/repo", "clone_path": "~/repo",
+            "cursor_rules": "/path/to/rules.md",
+            "fix_blocklist": "/path/to/blocklist.txt",
+        }
+        result = setup.format_repo_toml(cfg, header="[repo]")
+        parsed = tomllib.loads(result)
+        assert parsed["repo"]["cursor_rules"] == "/path/to/rules.md"
+        assert parsed["repo"]["fix_blocklist"] == "/path/to/blocklist.txt"
+
+    def test_nested_limits_overrides(self):
+        cfg = {
+            "name": "org/repo", "clone_path": "~/repo",
+            "limits": {"max_fix_attempts_total": 0},
+        }
+        result = setup.format_repo_toml(cfg, header="[repo]")
+        parsed = tomllib.loads(result)
+        assert parsed["repo"]["limits"]["max_fix_attempts_total"] == 0
+
+    def test_round_trip_all_keys(self):
+        cfg = {
+            "name": "org/repo", "clone_path": "~/repo",
+            "worktree_base": "/tmp/wt", "bot_account": "bot",
+            "escalation_reviewers": "", "default_branch": "main",
+            "project_type": "node",
+            "cursor_rules": "/path/to/rules.md",
+            "fix_blocklist": "/path/to/blocklist.txt",
+            "build": {"lint_cmd": "custom-lint"},
+        }
+        result = setup.format_repo_toml(cfg, header="[repo]")
+        parsed = tomllib.loads(result)
+        repo = parsed["repo"]
+        assert repo["name"] == "org/repo"
+        assert repo["project_type"] == "node"
+        assert repo["cursor_rules"] == "/path/to/rules.md"
+        assert repo["build"]["lint_cmd"] == "custom-lint"
+
+    def test_boolean_values(self):
+        cfg = {
+            "name": "org/repo", "clone_path": "~/repo",
+            "auto_fix": True,
+        }
+        result = setup.format_repo_toml(cfg, header="[repo]")
+        parsed = tomllib.loads(result)
+        assert parsed["repo"]["auto_fix"] is True
 
 
 class TestFormatFullConfig:

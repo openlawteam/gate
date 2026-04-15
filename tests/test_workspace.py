@@ -190,20 +190,21 @@ class TestSetupArtifactExclusions:
         assert "verdict.json" not in result.stdout
 
 
-class TestCreateWorktreeNpmSkip:
-    @patch("gate.workspace._npm_install_with_retry")
-    def test_skips_npm_without_package_json(self, mock_npm, tmp_path):
-        """The npm guard checks worktree_path / 'package.json'. No package.json => skip."""
+class TestCreateWorktreeDepInstall:
+    @patch("gate.workspace._install_deps_with_retry")
+    def test_skips_deps_without_dep_file(self, mock_install, tmp_path):
+        """No dep file => auto-detect returns 'none' => no dep install."""
         wt = tmp_path / "wt"
         wt.mkdir()
-        # No package.json created — guard should skip
         assert not (wt / "package.json").exists()
-        mock_npm.assert_not_called()
+        mock_install.assert_not_called()
 
-    @patch("gate.workspace._npm_install_with_retry")
-    def test_calls_npm_with_package_json(self, mock_npm, tmp_path):
-        """Sanity: if package.json exists, the guard would allow the call."""
+    @patch("gate.workspace._install_deps_with_retry")
+    def test_node_project_would_install(self, mock_install, tmp_path):
+        """Sanity: if package.json exists, profile detects 'node' with dep_install_cmd."""
         wt = tmp_path / "wt"
         wt.mkdir()
         (wt / "package.json").write_text("{}")
-        assert (wt / "package.json").exists()
+        from gate.profiles import resolve_profile
+        profile = resolve_profile({}, wt)
+        assert profile["dep_install_cmd"] == "npm ci"

@@ -16,10 +16,10 @@ $compiled_cursor_rules
 
 Check the fix diff for:
 
-1. **Layer violations** — Does the fix import from a layer it shouldn't? (e.g., importing `@/db` in a route handler, using `process.env` instead of `@/lib/config/env`)
+1. **Layer violations** — Does the fix import from a layer it shouldn't? (e.g., in $project_language, importing a data/persistence module from a route or UI layer when the project requires going through a service layer, or reading config via $env_access_pattern or equivalent instead of the project's validated config accessor)
 2. **Security regressions** — Does the fix introduce any security issues? (e.g., removing input validation, exposing secrets, SQL injection)
 3. **Scope creep** — Does the fix change anything beyond the specific finding it addresses? (e.g., refactoring surrounding code, adding features, changing unrelated logic)
-4. **Style violations** — Does the fix violate the coding standards? (e.g., console.log instead of console.warn/error, missing error narrowing in catch blocks)
+4. **Style violations** — Does the fix violate the coding standards? (e.g., ad-hoc debug logging instead of the project's standard logger, missing error narrowing in catch blocks)
 5. **Missing updates** — Does the fix update one call site but miss others? (e.g., changed a function signature but didn't update all callers)
 6. **Test breakage** — Does the fix delete or weaken existing test assertions?
 
@@ -44,7 +44,7 @@ Respond with ONLY valid JSON (no markdown fences):
   "pass": true,
   "issues": [
     {
-      "file": "path/to/file.ts",
+      "file": "path/to/source.file",
       "line": 42,
       "category": "layer_violation | security_regression | scope_creep | style_violation | missing_update | test_breakage",
       "message": "Description of the problem introduced by the fix"

@@ -47,11 +47,11 @@ Respond with ONLY valid JSON (no markdown fences):
   "plan": [
     {
       "step": 1,
-      "finding_file": "path/to/file.ts",
+      "finding_file": "path/to/source.file",
       "finding_line": 42,
       "action": "Corrected action description with accurate references",
-      "files_to_modify": ["actual/paths.ts"],
-      "files_to_create": ["new/file.ts"],
+      "files_to_modify": ["actual/paths"],
+      "files_to_create": ["new/file"],
       "dependent_updates": ["Updated dependency list"],
       "risk": "low",
       "status": "verified",

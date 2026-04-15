@@ -1,4 +1,7 @@
-# Example App Codebase Standards — Gate Review Reference
+# Example App Codebase Standards — Gate Review Reference (TypeScript/Node.js)
+#
+# This is an example cursor rules file for TypeScript/Node.js projects.
+# For Python projects, see cursor-rules.example.python.md.
 
 Compiled from `.cursor/rules/*.mdc`. Reframed for code review: flag violations, cite specifics.
 

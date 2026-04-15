@@ -14,7 +14,7 @@ $findings_json
 
 3. **Identify callers** — who calls the functions that will need to change? Search for function names, component names, and service methods that appear in findings.
 
-4. **Note patterns** — barrel re-exports (`index.ts`), naming conventions, service layer structure, test file locations. The fix agent needs to follow these conventions.
+4. **Note patterns** — barrel re-exports and package entry modules, naming conventions, service layer structure, test file locations. The fix agent needs to follow these conventions.
 
 5. **Map file splits** — if a finding involves splitting a large file, map where the extracted code is currently used (imports, re-exports, component references).
 
@@ -38,15 +38,15 @@ Respond with ONLY valid JSON (no markdown fences):
 {
   "context": [
     {
-      "file": "path/to/file.ts",
+      "file": "path/to/source.file",
       "line_count": 450,
-      "imports": ["dep1.ts", "dep2.ts"],
-      "callers": ["caller1.ts:42", "caller2.ts:88"],
-      "exports_used_by": ["consumer1.ts", "consumer2.ts"],
-      "patterns": "Uses barrel re-export from index.ts"
+      "imports": ["dep1", "dep2"],
+      "callers": ["caller1:42", "caller2:88"],
+      "exports_used_by": ["consumer1", "consumer2"],
+      "patterns": "Uses barrel re-export from package index / entry module"
     }
   ],
   "cross_file_dependencies": [
-    "Fixing A in file1.ts requires updating import in file2.ts"
+    "Fixing A in file1 requires updating import in file2"
   ]
 }

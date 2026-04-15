@@ -46,14 +46,14 @@ For code **added or modified by this PR**, check:
 
 ### Injection
 - SQL injection: Is user input passed to database queries without parameterization? (Drizzle's query builder is safe; raw SQL is not)
-- XSS: Is user content rendered without escaping? Is `dangerouslySetInnerHTML` used?
+- XSS: Is user content rendered without escaping? Is raw HTML or unescaped markup injected (framework-specific unsafe HTML APIs, string-built HTML, etc.)?
 - Command injection: Is user input passed to child_process, exec, eval, or new Function?
 - Template injection: Is user input interpolated into templates, prompts, or dynamic imports?
 
 ### Authentication
-- Are new API routes protected with `requireAuth()`?
+- Are new API routes protected with the project's required authentication middleware or guards?
 - Are there routes that accept user input without authentication?
-- Is `getCurrentUser()` used where `requireAuth()` should be? (getCurrentUser is for optional auth)
+- Are optional-auth or session helpers used where strict authentication is required?
 
 ### Authorization
 - When a route accesses a resource, does it verify the requesting user owns that resource?
@@ -63,7 +63,7 @@ For code **added or modified by this PR**, check:
 ### Data Exposure
 - Do API responses include fields that should be hidden (passwords, tokens, internal IDs)?
 - Are error messages revealing internal details (stack traces, SQL queries, file paths)?
-- Is `process.env` used directly instead of through `@/lib/config/env` (Zod-validated)?
+- Is $env_access_pattern or equivalent used directly instead of through the project's validated configuration accessor?
 
 ### Secrets
 - Are API keys, tokens, or credentials hardcoded?
@@ -71,7 +71,7 @@ For code **added or modified by this PR**, check:
 - Are .env files or credentials.json being committed?
 
 ### Dependencies
-- Are new npm packages being added? If so, are they widely used and maintained?
+- Are new dependencies being added? If so, are they widely used and maintained?
 - Could the new dependency introduce supply chain risks?
 
 ### Network
@@ -127,7 +127,7 @@ The JSON must have this exact structure:
     {
       "category": "injection | auth_bypass | authorization | data_leak | secret_exposure | dependency | csrf_ssrf",
       "severity": "critical | high | medium | low",
-      "file": "path/to/file.ts",
+      "file": "path/to/source.file",
       "line": 42,
       "message": "Description of the vulnerability",
       "introduced_by_pr": true,

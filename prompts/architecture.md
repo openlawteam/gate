@@ -58,7 +58,7 @@ Do NOT check:
 
 | Severity | Criteria |
 |----------|----------|
-| error | Violation that will cause runtime failure, data loss, or import errors (e.g., missing barrel export, layer violation, missing `requireAuth()`) |
+| error | Violation that will cause runtime failure, data loss, or import errors (e.g., missing barrel export, layer violation, missing auth guard on a protected route) |
 | warning | Violation of a convention that degrades maintainability but won't break at runtime (e.g., file over 350 lines, naming mismatch, missing `operation` string) |
 
 ## Clean Code Path
@@ -81,7 +81,7 @@ The JSON must have this exact structure:
     {
       "category": "layer_violation | api_envelope | api_skeleton | file_size | naming | data_access | state_management | component_org | env_access | error_pattern | refactoring_safety | tool_registration | debug_code",
       "severity": "error | warning",
-      "file": "path/to/file.ts",
+      "file": "path/to/source.file",
       "line": 42,
       "introduced_by_pr": true,
       "message": "Description of the violation",

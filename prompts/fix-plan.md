@@ -48,12 +48,12 @@ Respond with ONLY valid JSON (no markdown fences):
   "plan": [
     {
       "step": 1,
-      "finding_file": "path/to/file.ts",
+      "finding_file": "path/to/source.file",
       "finding_line": 42,
-      "action": "Extract SummaryScreen component to SharedDeckSummaryScreen.tsx",
-      "files_to_modify": ["SharedDeckStudyPreview.tsx"],
-      "files_to_create": ["SharedDeckSummaryScreen.tsx"],
-      "dependent_updates": ["Update import in page.tsx"],
+      "action": "Extract SummaryScreen component to SharedDeckSummaryScreen (new module)",
+      "files_to_modify": ["SharedDeckStudyPreview"],
+      "files_to_create": ["SharedDeckSummaryScreen"],
+      "dependent_updates": ["Update import in page module"],
       "risk": "low"
     }
   ],

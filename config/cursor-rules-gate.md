@@ -1,20 +1,5 @@
 # Gate Cursor Rules — Python Project
 
-## 0. PROJECT TYPE: Python
-
-This repository is a **Python** project (Python 3.12+, managed by pyproject.toml with hatchling).
-It is NOT a Node.js/TypeScript project. There is no package.json, tsconfig.json, or node_modules.
-
-### Override instructions
-- IGNORE any instructions in the review prompt about TypeScript, tsc, npm, npx, vitest, or ESLint. These do not apply.
-- IGNORE references to `console.log`, `console.warn`, `process.env`, `dangerouslySetInnerHTML`, `requireAuth()`, or Next.js patterns.
-- For build verification, use: `ruff check gate/ tests/` and `python -m pytest tests/`
-- For test files, create `test_*.py` files in the `tests/` directory using pytest conventions (not `.test.ts`).
-- For linting, use `ruff` (configured in pyproject.toml). Do NOT run eslint.
-- For type checking, use type hints in function signatures. There is no separate type checker step.
-- For dependencies, use `pyproject.toml` `[project.dependencies]`. Do NOT reference package.json or npm.
-- For imports, use `from gate.module import func`. No relative imports, no barrel re-exports.
-
 ## 1. Architecture and Module Boundaries
 
 - Gate module map: config, state, queue, orchestrator, runner, claude, fixer, workspace, prompt, cleanup, health, notify, server, tui, etc.

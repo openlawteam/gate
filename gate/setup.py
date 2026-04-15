@@ -7,6 +7,7 @@ import sys
 import tomllib
 from pathlib import Path
 
+from gate import profiles
 from gate.config import gate_dir
 
 _REQUIRED_TOOLS = [
@@ -66,9 +67,19 @@ _MULTI_REPO_DOCS = """\
 # default_branch = "main"
 # bot_account = "gate-bot"
 # escalation_reviewers = ""
+# project_type = "node"    # auto-detected: node, python, go, rust, none
 # cursor_rules = ""        # optional, defaults to config/cursor-rules.md
 # fix_blocklist = ""        # optional, defaults to config/fix-blocklist.txt
 # worktree_base = "/tmp/gate-worktrees"
+#
+# # Per-repo build command overrides:
+# # build.typecheck_cmd = "npx tsc --noEmit"
+# # build.lint_cmd = "npm run lint:check"
+# # build.test_cmd = "npm run test:run"
+#
+# # Per-repo limit/timeout/retry overrides:
+# # limits.max_fix_attempts_total = 0
+# # timeouts.agent_stage_s = 600
 #
 # [[repos]]
 # name = "org/repo-b"
@@ -192,6 +203,20 @@ def prompt_repo_config(defaults: dict | None = None) -> dict:
     default_wt = defaults.get("worktree_base", "/tmp/gate-worktrees")
     wt_base = input(f"Worktree base directory [{default_wt}]: ").strip() or default_wt
 
+    # Auto-detect project type
+    detected_type = profiles.detect_project_type(Path(clone))
+    if detected_type != "none":
+        print(f"  Detected project type: {detected_type}")
+        type_answer = input(f"  Use this project type? [Y/n/other]: ").strip().lower()
+        if type_answer in ("", "y", "yes"):
+            project_type = detected_type
+        elif type_answer in ("n", "no"):
+            project_type = input("  Enter project type (node/python/go/rust/none): ").strip() or "none"
+        else:
+            project_type = type_answer
+    else:
+        project_type = input("  Project type (node/python/go/rust/none) [none]: ").strip() or "none"
+
     return {
         "name": repo,
         "clone_path": clone,
@@ -199,16 +224,48 @@ def prompt_repo_config(defaults: dict | None = None) -> dict:
         "bot_account": bot,
         "worktree_base": wt_base,
         "escalation_reviewers": defaults.get("escalation_reviewers", ""),
+        "project_type": project_type,
     }
 
 
-def format_repo_toml(repo_config: dict, header: str = "[[repos]]") -> str:
-    """Format a repo config dict as a TOML section."""
-    lines = [header]
-    for key in ("name", "clone_path", "worktree_base", "bot_account",
-                "escalation_reviewers", "default_branch"):
-        val = repo_config.get(key, "")
+_REPO_KEY_ORDER = [
+    "name", "clone_path", "worktree_base", "bot_account",
+    "escalation_reviewers", "default_branch", "project_type",
+    "cursor_rules", "fix_blocklist",
+]
+
+
+def _emit_value(lines: list[str], key: str, val) -> None:
+    """Emit a single key-value pair in TOML format, handling nested dicts and lists."""
+    if isinstance(val, dict):
+        for subkey, subval in val.items():
+            _emit_value(lines, f"{key}.{subkey}", subval)
+    elif isinstance(val, list):
+        items = ", ".join(f'"{v}"' if isinstance(v, str) else str(v) for v in val)
+        lines.append(f"{key} = [{items}]")
+    elif isinstance(val, str):
         lines.append(f'{key} = "{val}"')
+    elif isinstance(val, bool):
+        lines.append(f'{key} = {"true" if val else "false"}')
+    else:
+        lines.append(f"{key} = {val}")
+
+
+def format_repo_toml(repo_config: dict, header: str = "[[repos]]") -> str:
+    """Format a repo config dict as a TOML section.
+
+    Known keys are emitted in canonical order, followed by any remaining
+    keys (build overrides, per-repo limits, etc.) in sorted order.
+    """
+    lines = [header]
+    seen: set[str] = set()
+    for key in _REPO_KEY_ORDER:
+        if key in repo_config:
+            _emit_value(lines, key, repo_config[key])
+            seen.add(key)
+    for key in sorted(repo_config.keys()):
+        if key not in seen:
+            _emit_value(lines, key, repo_config[key])
     return "\n".join(lines)
 
 

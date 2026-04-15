@@ -274,7 +274,7 @@ class ReviewOrchestrator:
             # === STAGE 2: BUILD (direct execution) ===
             self._update_check("Stage 2: Build verification...")
             write_live_log(self.pr_number, "Build starting", "stage", repo=self.repo)
-            build_result = builder.run_build(self.workspace)
+            build_result = builder.run_build(self.workspace, config=self.config)
             (self.workspace / "build.json").write_text(json.dumps(build_result, indent=2))
 
             # === Fast-track check ===

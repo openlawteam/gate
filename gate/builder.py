@@ -1,7 +1,7 @@
-"""Build verification (tsc, lint, vitest).
+"""Build verification (typecheck, lint, tests).
 
-Ported from compile-build.js parseTsc/parseLint/parseTest + GHA workflow
-build execution steps.
+Supports per-project-type build commands via profiles. Node.js projects
+use structured parsers; other project types use generic exit-code-based parsing.
 """
 
 import logging
@@ -9,133 +9,178 @@ import re
 import subprocess
 from pathlib import Path
 
+from gate import profiles
+
 logger = logging.getLogger(__name__)
 
 
-def run_build(worktree: Path) -> dict:
-    """Run tsc, lint, and vitest in the worktree. Return build results dict.
+def run_build(worktree: Path, config: dict | None = None) -> dict:
+    """Run typecheck, lint, and test in the worktree. Return build results dict.
 
-    Runs each tool independently so partial failures don't block later tools.
-    Skips entirely for non-Node.js projects (no package.json).
+    Uses the project profile to determine which commands to run.
+    Falls back to auto-detection if no project_type is configured.
     """
-    if not (worktree / "package.json").exists():
-        logger.info(f"No package.json in {worktree}, skipping Node.js build")
+    repo_cfg = (config or {}).get("repo", {})
+    profile = profiles.resolve_profile(repo_cfg, worktree)
+    project_type = profile.get("project_type", "none")
+
+    typecheck_cmd = profile.get("typecheck_cmd", "")
+    lint_cmd = profile.get("lint_cmd", "")
+    test_cmd = profile.get("test_cmd", "")
+
+    if not typecheck_cmd and not lint_cmd and not test_cmd:
+        logger.info(f"No build commands for {worktree} (project_type={project_type}), skipping")
         return {
-            "typescript": {"pass": True, "errors": [], "error_count": 0},
+            "typecheck": {"pass": True, "errors": [], "error_count": 0, "tool": ""},
             "lint": {
                 "pass": True, "warnings": [], "errors": [],
-                "warning_count": 0, "error_count": 0,
+                "warning_count": 0, "error_count": 0, "tool": "",
             },
             "tests": {
                 "pass": True, "total": 0, "passed": 0,
-                "failed": 0, "skipped": 0, "failures": [],
+                "failed": 0, "skipped": 0, "failures": [], "tool": "",
             },
             "overall_pass": True,
             "blocking_issues": [],
             "skipped": True,
-            "skip_reason": "no package.json (not a Node.js project)",
+            "skip_reason": f"no build commands (project_type={project_type})",
+            "project_type": project_type,
         }
 
     cwd = str(worktree)
-    logger.info(f"Running build in {cwd}")
+    logger.info(f"Running build in {cwd} (project_type={project_type})")
 
     build_timeout = 300
 
-    # TypeScript
-    try:
-        tsc_result = subprocess.run(
-            ["npx", "tsc", "--noEmit"],
-            capture_output=True, text=True, cwd=cwd, timeout=build_timeout,
-        )
-    except subprocess.TimeoutExpired:
-        tsc_result = subprocess.CompletedProcess(
-            ["npx", "tsc"], 1, stdout="", stderr="tsc timed out",
-        )
+    # Typecheck
+    if typecheck_cmd:
+        try:
+            tc_result = subprocess.run(
+                typecheck_cmd.split(),
+                capture_output=True, text=True, cwd=cwd, timeout=build_timeout,
+            )
+        except subprocess.TimeoutExpired:
+            tc_result = subprocess.CompletedProcess(
+                typecheck_cmd.split(), 1, stdout="", stderr="typecheck timed out",
+            )
+    else:
+        tc_result = subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
     # Lint
-    try:
-        lint_result = subprocess.run(
-            ["npm", "run", "lint:check"],
-            capture_output=True, text=True, cwd=cwd, timeout=build_timeout,
-        )
-    except subprocess.TimeoutExpired:
-        lint_result = subprocess.CompletedProcess(
-            ["npm", "run", "lint:check"], 1, stdout="", stderr="lint timed out",
-        )
+    if lint_cmd:
+        try:
+            lint_result = subprocess.run(
+                lint_cmd.split(),
+                capture_output=True, text=True, cwd=cwd, timeout=build_timeout,
+            )
+        except subprocess.TimeoutExpired:
+            lint_result = subprocess.CompletedProcess(
+                lint_cmd.split(), 1, stdout="", stderr="lint timed out",
+            )
+    else:
+        lint_result = subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
-    # Tests (with gate test exclusions via env)
-    test_env = None
-    try:
-        test_result = subprocess.run(
-            ["npm", "run", "test:run"],
-            capture_output=True, text=True, cwd=cwd, env=test_env, timeout=build_timeout,
-        )
-    except subprocess.TimeoutExpired:
-        test_result = subprocess.CompletedProcess(
-            ["npm", "run", "test:run"], 1, stdout="", stderr="tests timed out",
-        )
+    # Tests
+    if test_cmd:
+        try:
+            test_result = subprocess.run(
+                test_cmd.split(),
+                capture_output=True, text=True, cwd=cwd, timeout=build_timeout,
+            )
+        except subprocess.TimeoutExpired:
+            test_result = subprocess.CompletedProcess(
+                test_cmd.split(), 1, stdout="", stderr="tests timed out",
+            )
+    else:
+        test_result = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+
+    tc_tool = typecheck_cmd.split()[0] if typecheck_cmd else ""
+    lint_tool = lint_cmd.split()[0] if lint_cmd else ""
+    test_tool = test_cmd.split()[0] if test_cmd else ""
 
     return compile_build(
-        tsc_log=tsc_result.stdout + tsc_result.stderr,
-        tsc_exit=tsc_result.returncode,
+        typecheck_log=tc_result.stdout + tc_result.stderr,
+        typecheck_exit=tc_result.returncode,
         lint_log=lint_result.stdout + lint_result.stderr,
         lint_exit=lint_result.returncode,
         test_log=test_result.stdout + test_result.stderr,
         test_exit=test_result.returncode,
+        project_type=project_type,
+        typecheck_tool=tc_tool,
+        lint_tool=lint_tool,
+        test_tool=test_tool,
     )
 
 
 def compile_build(
-    tsc_log: str,
-    tsc_exit: int,
+    typecheck_log: str,
+    typecheck_exit: int,
     lint_log: str,
     lint_exit: int,
     test_log: str,
     test_exit: int,
+    project_type: str = "node",
+    typecheck_tool: str = "",
+    lint_tool: str = "",
+    test_tool: str = "",
 ) -> dict:
     """Parse build outputs into structured results.
 
-    Ported from compile-build.js.
+    Node.js projects use structured parsers for detailed error extraction.
+    Other project types use generic exit-code-based parsing.
     """
-    tsc = _parse_tsc(tsc_log, tsc_exit)
-    lint = _parse_lint(lint_log, lint_exit)
-    test = _parse_test(test_log, test_exit)
+    if project_type == "node":
+        tc = _parse_tsc(typecheck_log, typecheck_exit)
+        lint = _parse_lint(lint_log, lint_exit)
+        test = _parse_test(test_log, test_exit)
+    else:
+        tc = _parse_generic(typecheck_log, typecheck_exit)
+        lint = _parse_generic(lint_log, lint_exit)
+        test = _parse_generic_test(test_log, test_exit)
 
-    overall_pass = tsc["pass"] and lint["pass"] and test["pass"]
+    overall_pass = tc["pass"] and lint["pass"] and test["pass"]
     blocking_issues = []
-    if not tsc["pass"]:
-        blocking_issues.append(f"{tsc['error_count']} TypeScript errors")
+    tc_tool_name = typecheck_tool or "typecheck"
+    if not tc["pass"]:
+        blocking_issues.append(f"{tc['error_count']} {tc_tool_name} errors")
     if not lint["pass"]:
         blocking_issues.append(
-            f"{lint['error_count']} lint errors, {lint['warning_count']} warnings"
+            f"{lint['error_count']} lint errors, {lint.get('warning_count', 0)} warnings"
         )
     if not test["pass"]:
-        blocking_issues.append(f"{test['failed']} test failures")
+        blocking_issues.append(f"{test.get('failed', 0)} test failures")
 
     return {
-        "typescript": {
-            "pass": tsc["pass"],
-            "errors": tsc["errors"],
-            "error_count": tsc["error_count"],
+        "typecheck": {
+            "pass": tc["pass"],
+            "errors": tc.get("errors", []),
+            "error_count": tc["error_count"],
+            "tool": typecheck_tool,
         },
         "lint": {
             "pass": lint["pass"],
-            "warnings": lint["warnings"][:20],
-            "errors": lint["errors"][:20],
-            "warning_count": lint["warning_count"],
+            "warnings": lint.get("warnings", [])[:20],
+            "errors": lint.get("errors", [])[:20],
+            "warning_count": lint.get("warning_count", 0),
             "error_count": lint["error_count"],
+            "tool": lint_tool,
         },
         "tests": {
             "pass": test["pass"],
-            "total": test["total"],
-            "passed": test["passed"],
-            "failed": test["failed"],
-            "skipped": test["skipped"],
-            "failures": test["failures"][:10],
+            "total": test.get("total", 0),
+            "passed": test.get("passed", 0),
+            "failed": test.get("failed", 0),
+            "skipped": test.get("skipped", 0),
+            "failures": test.get("failures", [])[:10],
+            "tool": test_tool,
         },
         "overall_pass": overall_pass,
         "blocking_issues": blocking_issues,
+        "project_type": project_type,
     }
+
+
+# ── Node.js parsers (structured error extraction) ────────────
 
 
 def _parse_tsc(log: str, exit_code: int) -> dict:
@@ -236,23 +281,59 @@ def _parse_test(log: str, exit_code: int) -> dict:
     }
 
 
+# ── Generic parsers (exit-code-based) ────────────────────────
+
+
+def _parse_generic(log: str, exit_code: int) -> dict:
+    """Generic parser: pass/fail based on exit code, raw output as errors."""
+    errors = []
+    if exit_code != 0 and log.strip():
+        errors = [{"message": line} for line in log.strip().split("\n")[:50]]
+    return {
+        "pass": exit_code == 0,
+        "exit_code": exit_code,
+        "errors": errors,
+        "error_count": len(errors) if exit_code != 0 else 0,
+        "warnings": [],
+        "warning_count": 0,
+        "output": log[-2000:],
+    }
+
+
+def _parse_generic_test(log: str, exit_code: int) -> dict:
+    """Generic test parser: exit code determines pass/fail."""
+    return {
+        "pass": exit_code == 0,
+        "exit_code": exit_code,
+        "total": 0,
+        "passed": 0,
+        "failed": 1 if exit_code != 0 else 0,
+        "skipped": 0,
+        "failures": [{"file": "see output"}] if exit_code != 0 else [],
+        "output": log[-2000:],
+    }
+
+
 def compare_builds(before: dict, after: dict) -> dict:
     """Compare pre and post build results for pre-existing failure detection.
 
-    If tsc/lint pass state is unchanged and test failure count didn't increase,
+    If typecheck/lint pass state is unchanged and test failure count didn't increase,
     accept the build as passing (pre-existing failures).
+    Handles both old ("typescript") and new ("typecheck") key names for backward compat.
     """
     if after.get("overall_pass"):
         return after
 
-    tsc_same = before.get("typescript", {}).get("pass") == after.get("typescript", {}).get("pass")
+    tc_before = before.get("typecheck", before.get("typescript", {}))
+    tc_after = after.get("typecheck", after.get("typescript", {}))
+    tc_same = tc_before.get("pass") == tc_after.get("pass")
     lint_same = before.get("lint", {}).get("pass") == after.get("lint", {}).get("pass")
     test_not_worse = (
         after.get("tests", {}).get("failed", 0)
         <= before.get("tests", {}).get("failed", 0)
     )
 
-    if tsc_same and lint_same and test_not_worse:
+    if tc_same and lint_same and test_not_worse:
         after["overall_pass"] = True
         after["pre_existing_failures_accepted"] = True
 

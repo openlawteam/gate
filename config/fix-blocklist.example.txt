@@ -2,11 +2,27 @@
 # One glob pattern per line. Lines starting with # are comments.
 # Enforced in two layers: prompt instruction + post-agent git diff check.
 
-src/db/schema/**
-drizzle/**
+# Common patterns (all project types)
 .env*
-package.json
-package-lock.json
-tsconfig.json
 .github/**
 .cursor/rules/**
+
+# Node.js / TypeScript
+# package.json
+# package-lock.json
+# tsconfig.json
+# src/db/schema/**
+# drizzle/**
+
+# Python
+# pyproject.toml
+# setup.py
+# alembic/**
+
+# Go
+# go.mod
+# go.sum
+
+# Rust
+# Cargo.toml
+# Cargo.lock

@@ -1,5 +1,6 @@
 """Setup helpers for gate init and gate add-repo."""
 
+import json
 import os
 import shutil
 import subprocess
@@ -343,13 +344,33 @@ def validate_env_vars() -> list[tuple[str, bool, str]]:
     else:
         checks.append(("CLAUDE_CODE_OAUTH_TOKEN", False, "not set"))
 
-    openai = os.environ.get("OPENAI_API_KEY", "")
-    if openai:
-        checks.append(("OPENAI_API_KEY", True, f"set ({len(openai)} chars)"))
-    else:
-        checks.append(("OPENAI_API_KEY", True, "not set (optional — needed for Codex fix pipeline)"))
+    checks.append(check_codex_auth())
 
     return checks
+
+
+def check_codex_auth() -> tuple[str, bool, str]:
+    """Check Codex CLI authentication status.
+
+    Checks ~/.codex/auth.json for ChatGPT account login.
+    """
+    auth_path = Path.home() / ".codex" / "auth.json"
+    if auth_path.exists():
+        try:
+            data = json.loads(auth_path.read_text())
+            mode = data.get("auth_mode", "")
+            if mode == "chatgpt" and data.get("tokens"):
+                return ("Codex auth", True, "ChatGPT account login")
+            if data.get("OPENAI_API_KEY"):
+                return ("Codex auth", True, "API key (via auth.json)")
+            return ("Codex auth", False, f"auth.json exists but auth_mode={mode!r}")
+        except (OSError, json.JSONDecodeError, AttributeError) as e:
+            return ("Codex auth", False, f"auth.json unreadable: {e}")
+    return (
+        "Codex auth",
+        True,
+        "not configured (optional — needed for Codex fix pipeline; run `codex login`)",
+    )
 
 
 def is_placeholder_config(config_path: Path) -> bool:

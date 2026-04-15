@@ -499,7 +499,7 @@ class FixPipeline:
             write_live_log(self.pr_number, "Bootstrapping Codex...", prefix="fix", repo=self.repo)
             codex_prompt = _build_codex_bootstrap_prompt()
             exit_code, codex_thread_id = bootstrap_codex(
-                codex_prompt, str(self.workspace)
+                codex_prompt, str(self.workspace), env=build_claude_env()
             )
 
             if codex_thread_id:

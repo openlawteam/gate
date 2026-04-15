@@ -130,7 +130,6 @@ def run_code_stage(
     from gate.config import build_claude_env
 
     env = build_claude_env()
-    env["OPENAI_API_KEY"] = os.environ.get("OPENAI_API_KEY", "")
 
     exit_code, cmd = run_codex(
         prompt_text,

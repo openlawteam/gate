@@ -1,5 +1,6 @@
 """Tests for gate.setup module."""
 
+import json
 import subprocess
 import tomllib
 from pathlib import Path
@@ -349,9 +350,12 @@ class TestIsPlaceholderConfig:
 
 
 class TestValidateEnvVars:
-    @patch.dict("os.environ", {"GATE_PAT": "tok123", "CLAUDE_CODE_OAUTH_TOKEN": "abc",
-                                "OPENAI_API_KEY": "sk-xyz"})
-    def test_all_set(self):
+    @patch(
+        "gate.setup.check_codex_auth",
+        return_value=("Codex auth", True, "ChatGPT account login"),
+    )
+    @patch.dict("os.environ", {"GATE_PAT": "tok123", "CLAUDE_CODE_OAUTH_TOKEN": "abc"})
+    def test_all_set(self, _codex):
         checks = setup.validate_env_vars()
         assert all(c[1] for c in checks)
 
@@ -360,13 +364,6 @@ class TestValidateEnvVars:
         checks = setup.validate_env_vars()
         pat_check = [c for c in checks if c[0] == "GATE_PAT"][0]
         assert pat_check[1] is False
-
-    @patch.dict("os.environ", {"GATE_PAT": "tok"}, clear=True)
-    def test_openai_key_optional(self):
-        checks = setup.validate_env_vars()
-        oai_check = [c for c in checks if c[0] == "OPENAI_API_KEY"][0]
-        assert oai_check[1] is True
-        assert "optional" in oai_check[2]
 
     @patch("sys.platform", "darwin")
     @patch("gate.quota.read_keychain_token", return_value="kc-token")
@@ -383,6 +380,63 @@ class TestValidateEnvVars:
         checks = setup.validate_env_vars()
         claude_check = [c for c in checks if c[0] == "CLAUDE_CODE_OAUTH_TOKEN"][0]
         assert claude_check[1] is False
+
+
+class TestCheckCodexAuth:
+    def test_chatgpt_account(self, tmp_path):
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        auth = {"auth_mode": "chatgpt", "tokens": {"access_token": "tok"}}
+        (codex_dir / "auth.json").write_text(json.dumps(auth))
+        with patch("gate.setup.Path.home", return_value=tmp_path):
+            label, ok, detail = setup.check_codex_auth()
+        assert label == "Codex auth"
+        assert ok is True
+        assert "ChatGPT account login" in detail
+
+    @patch.dict("os.environ", {"OPENAI_API_KEY": "sk-abc"}, clear=True)
+    def test_env_var_fallback_removed(self, tmp_path):
+        """OPENAI_API_KEY env var alone is not accepted — auth.json is required."""
+        with patch("gate.setup.Path.home", return_value=tmp_path):
+            label, ok, detail = setup.check_codex_auth()
+        # No auth.json, so we fall through to "not configured" regardless of env var.
+        assert ok is True
+        assert "not configured" in detail
+
+    @patch.dict("os.environ", {}, clear=True)
+    def test_nothing_configured(self, tmp_path):
+        with patch("gate.setup.Path.home", return_value=tmp_path):
+            label, ok, detail = setup.check_codex_auth()
+        assert ok is True
+        assert "not configured" in detail
+
+    def test_malformed_json(self, tmp_path):
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        (codex_dir / "auth.json").write_text("not valid json{{{")
+        with patch("gate.setup.Path.home", return_value=tmp_path):
+            label, ok, detail = setup.check_codex_auth()
+        assert ok is False
+        assert "unreadable" in detail
+
+    def test_malformed_non_dict(self, tmp_path):
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        (codex_dir / "auth.json").write_text("[]")
+        with patch("gate.setup.Path.home", return_value=tmp_path):
+            label, ok, detail = setup.check_codex_auth()
+        assert ok is False
+        assert "unreadable" in detail
+
+    def test_no_tokens(self, tmp_path):
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        auth = {"auth_mode": "chatgpt"}
+        (codex_dir / "auth.json").write_text(json.dumps(auth))
+        with patch("gate.setup.Path.home", return_value=tmp_path):
+            label, ok, detail = setup.check_codex_auth()
+        assert ok is False
+        assert "auth_mode=" in detail
 
 
 class TestCopyWorkflow:

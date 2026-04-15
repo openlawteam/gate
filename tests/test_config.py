@@ -216,3 +216,7 @@ class TestBuildClaudeEnv:
         with patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "test-token"}):
             env = build_claude_env()
             assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "test-token"
+
+    def test_does_not_include_openai_key(self):
+        env = build_claude_env()
+        assert "OPENAI_API_KEY" not in env

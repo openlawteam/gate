@@ -602,7 +602,6 @@ def cmd_doctor(args: list[str]) -> int:
 
     env_vars = [
         ("GATE_PAT", False),
-        ("OPENAI_API_KEY", False),
         ("GATE_NTFY_TOPIC", True),
     ]
     for var, show_value in env_vars:
@@ -621,6 +620,9 @@ def cmd_doctor(args: list[str]) -> int:
         checks.append(("Claude OAuth", True, f"token ({len(claude_oauth)} chars)"))
     else:
         checks.append(("Claude OAuth", False, "not in env or Keychain"))
+
+    from gate.setup import check_codex_auth
+    checks.append(check_codex_auth())
 
     gate_root = gate_dir()
     config_path = gate_root / "config" / "gate.toml"

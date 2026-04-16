@@ -933,6 +933,9 @@ class GateTUI(App):
         self._reviews_cols = reviews_table.add_columns(
             "", "Repo", "PR", "Stage", "Pipeline", "Status", "Elapsed",
         )
+        # Hidden until we have at least one review; _refresh_reviews_table
+        # toggles this back on when rows are added.
+        reviews_table.show_cursor = False
 
         queue_table = self.query_one("#queue-table", DataTable)
         queue_table.add_columns("#", "PR", "Repo")
@@ -1023,6 +1026,11 @@ class GateTUI(App):
                     elapsed,
                 )
                 self._active_row_keys[rid] = row_key
+
+        # Hide the row cursor when the table has no data rows — otherwise
+        # Textual paints a bright accent band on a phantom row 0, creating
+        # a strip of color just below the header.
+        table.show_cursor = table.row_count > 0
 
     # ── Queue Table ──────────────────────────────────────────
 

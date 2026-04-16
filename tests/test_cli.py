@@ -424,8 +424,10 @@ class TestReviewArgValidation:
     @patch("gate.client.send_message", return_value=None)
     def test_server_unreachable_exits_nonzero(self, mock_send, capsys):
         from gate.cli import cmd_review
+        # Must provide all required args so argparse doesn't short-circuit
+        # on Python 3.11/3.12 (see cpython#103641 note above).
         result = cmd_review([
-            "--pr", "1", "--repo", "a/b", "--head-sha", "sha"
+            "--pr", "1", "--repo", "a/b", "--head-sha", "sha", "--branch", "main",
         ])
         assert result == 1
 

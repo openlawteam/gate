@@ -152,3 +152,50 @@ class TestFixAttempts:
             b = get_fix_attempts(42, repo="org/repo-b")
             assert a["soft"] == 2
             assert b["soft"] == 1
+
+
+# ── persist_review_state robustness (review warning regression) ─────
+
+
+_patch = patch  # alias so later code keeps working after the import move
+
+
+class TestPersistReviewStateRobustness:
+    """Regression for review warning: persist_review_state must not leak
+    OSError from the merge-base subprocess call (e.g. git missing from
+    PATH, clone_path pruned). Previously only CalledProcessError/
+    TimeoutExpired were caught, so FileNotFoundError would escape AFTER
+    sha_path was already written — leaving counters inconsistent.
+    """
+
+    def _setup(self, tmp_path, tmp_workspace):
+        # Put a prior SHA in state so the force-push / merge-base branch runs
+        state_dir = tmp_path / "pr42"
+        state_dir.mkdir(parents=True)
+        (state_dir / "last_sha.txt").write_text("oldsha1234567")
+        verdict_json = {"decision": "approve", "findings": [], "stats": {}}
+        (tmp_workspace / "verdict.json").write_text(
+            __import__("json").dumps(verdict_json)
+        )
+        return state_dir
+
+    def test_git_missing_does_not_escape(self, tmp_path, tmp_workspace):
+        self._setup(tmp_path, tmp_workspace)
+        with _patch("gate.state.state_dir", lambda: tmp_path), \
+             _patch("gate.state.subprocess.run",
+                    side_effect=FileNotFoundError(2, "No git", "git")):
+            # Must not raise
+            persist_review_state(42, "newsha7654321", tmp_workspace)
+        # The force-push path should have fired (is_ancestor stays False)
+        assert (tmp_path / "pr42" / "review_count.txt").read_text() == "1"
+        assert (tmp_path / "pr42" / "fix_attempts.txt").read_text() == "0"
+
+    def test_clone_path_pruned_does_not_escape(self, tmp_path, tmp_workspace):
+        self._setup(tmp_path, tmp_workspace)
+        with _patch("gate.state.state_dir", lambda: tmp_path), \
+             _patch("gate.state.subprocess.run",
+                    side_effect=NotADirectoryError(20, "Not a directory", "x")):
+            persist_review_state(42, "newsha7654321", tmp_workspace,
+                                 clone_path="/pruned/path")
+        # Force-push branch fires because is_ancestor stays False
+        assert (tmp_path / "pr42" / "review_count.txt").read_text() == "1"

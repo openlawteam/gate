@@ -54,6 +54,7 @@ def run_code_stage(
     request: str,
     workspace: Path,
     thread_id: str,
+    config: dict | None = None,
 ) -> int:
     """Run a Codex code stage (prep, design, implement, audit).
 
@@ -65,6 +66,9 @@ def run_code_stage(
         request: The directions/request text from senior Claude.
         workspace: Workspace directory for artifacts.
         thread_id: Codex thread ID to resume.
+        config: Pre-loaded gate config. When None, loaded once here. Threading
+            it from the caller avoids hidden ``load_config()`` calls inside
+            ``resolve_repo_config``.
 
     Returns:
         Exit code (0 on success).
@@ -79,29 +83,28 @@ def run_code_stage(
         return 1
 
     # Merge profile variables so $typecheck_cmd etc. resolve in gate-implement.md
+    import json as _json
+
     from gate import profiles
 
     workspace_path = workspace
     repo_config = {}
-    try:
-        env_json = workspace_path / "fix-env.json"
-        if env_json.exists():
-            import json as _json
-            _env = _json.loads(env_json.read_text())
-        pr_meta = workspace_path / "pr-metadata.json"
-        if pr_meta.exists():
-            import json as _json
+
+    pr_meta = workspace_path / "pr-metadata.json"
+    if pr_meta.exists():
+        try:
             meta = _json.loads(pr_meta.read_text())
-            repo_name = meta.get("repo", "")
-            if repo_name:
-                from gate.config import resolve_repo_config
-                try:
-                    full_cfg = resolve_repo_config(repo_name)
-                    repo_config = full_cfg.get("repo", {})
-                except ValueError:
-                    pass
-    except Exception:
-        pass
+        except (OSError, _json.JSONDecodeError):
+            logger.exception("gate-code: failed to read pr-metadata.json")
+            meta = {}
+        repo_name = meta.get("repo", "")
+        if repo_name:
+            from gate.config import resolve_repo_config
+            try:
+                full_cfg = resolve_repo_config(repo_name, config)
+                repo_config = full_cfg.get("repo", {})
+            except ValueError:
+                logger.warning(f"gate-code: no repo config for {repo_name}")
 
     profile = profiles.resolve_profile(repo_config, workspace_path)
     vars_dict = {"request": request}
@@ -178,4 +181,6 @@ def main() -> int:
         print("No directions provided on stdin", file=sys.stderr)
         return 1
 
-    return run_code_stage(stage, request, Path(workspace_str), thread_id)
+    from gate.config import load_config
+    config = load_config()
+    return run_code_stage(stage, request, Path(workspace_str), thread_id, config=config)

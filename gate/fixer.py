@@ -307,16 +307,25 @@ def sort_findings_by_severity(findings: list[dict]) -> list[dict]:
 
 
 def _get_changed_files(workspace: Path) -> list[str]:
-    """Get list of changed, staged, and untracked files."""
-    result = subprocess.run(
-        ["sh", "-c",
-         "{ git diff --name-only 2>/dev/null; "
-         "git diff --cached --name-only 2>/dev/null; "
-         "git ls-files --others --exclude-standard 2>/dev/null; } | sort -u"],
-        capture_output=True,
-        text=True,
-        cwd=str(workspace),
-    )
+    """Get list of changed, staged, and untracked files.
+
+    Bounded by a 60s timeout so a hung git (e.g. a stuck index.lock) can't
+    wedge the fix pipeline. Returns an empty list on timeout or missing git.
+    """
+    try:
+        result = subprocess.run(
+            ["sh", "-c",
+             "{ git diff --name-only 2>/dev/null; "
+             "git diff --cached --name-only 2>/dev/null; "
+             "git ls-files --others --exclude-standard 2>/dev/null; } | sort -u"],
+            capture_output=True,
+            text=True,
+            cwd=str(workspace),
+            timeout=60,
+        )
+    except (subprocess.SubprocessError, OSError) as e:
+        logger.warning(f"_get_changed_files failed: {e}")
+        return []
     return [f for f in result.stdout.strip().split("\n") if f]
 
 
@@ -325,19 +334,32 @@ def _revert_file(workspace: Path, filepath: str) -> None:
 
     For tracked files: restores the HEAD version (does not delete).
     For untracked files: removes the file from disk.
+
+    Each git call is bounded by a 30s timeout; on timeout or missing git
+    we log and return so the fix pipeline is never blocked by a hung git.
     """
     cwd = str(workspace)
-    tracked = subprocess.run(
-        ["git", "cat-file", "-e", f"HEAD:{filepath}"],
-        capture_output=True,
-        cwd=cwd,
-    )
-    if tracked.returncode == 0:
-        subprocess.run(
-            ["git", "checkout", "HEAD", "--", filepath],
+    try:
+        tracked = subprocess.run(
+            ["git", "cat-file", "-e", f"HEAD:{filepath}"],
             capture_output=True,
             cwd=cwd,
+            timeout=30,
         )
+    except (subprocess.SubprocessError, OSError) as e:
+        logger.warning(f"_revert_file({filepath}) cat-file failed: {e}")
+        return
+
+    if tracked.returncode == 0:
+        try:
+            subprocess.run(
+                ["git", "checkout", "HEAD", "--", filepath],
+                capture_output=True,
+                cwd=cwd,
+                timeout=30,
+            )
+        except (subprocess.SubprocessError, OSError) as e:
+            logger.warning(f"_revert_file({filepath}) checkout failed: {e}")
     else:
         full_path = workspace / filepath
         if full_path.exists():
@@ -345,10 +367,17 @@ def _revert_file(workspace: Path, filepath: str) -> None:
 
 
 def _revert_all(workspace: Path) -> None:
-    """Revert all changes in the workspace."""
+    """Revert all changes in the workspace.
+
+    Each git call is bounded by a 30s timeout; on timeout or missing git
+    we log and move on so the fix pipeline is never blocked by a hung git.
+    """
     cwd = str(workspace)
-    subprocess.run(["git", "checkout", "--", "."], capture_output=True, cwd=cwd)
-    subprocess.run(["git", "clean", "-fd"], capture_output=True, cwd=cwd)
+    for cmd in (["git", "checkout", "--", "."], ["git", "clean", "-fd"]):
+        try:
+            subprocess.run(cmd, capture_output=True, cwd=cwd, timeout=30)
+        except (subprocess.SubprocessError, OSError) as e:
+            logger.warning(f"_revert_all {' '.join(cmd)} failed: {e}")
 
 
 def _run_silent(cmd: str, cwd: str | None = None) -> tuple[str, int]:

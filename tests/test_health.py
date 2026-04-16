@@ -338,3 +338,89 @@ class TestCheckStaleActivity:
             results = run_health_check()
         assert "stale_activity" in results
         m.assert_called_once()
+
+
+# ── Config threading (review warning regression) ────────────────
+
+
+class TestHealthConfigThreading:
+    """Regression: check_disk_usage / _cleanup_old_worktrees must accept
+    a caller-provided config so run_health_check doesn't cause per-cycle
+    TOML reloads through the cleanup path.
+    """
+
+    def test_check_disk_usage_accepts_config_kw(self):
+        from unittest.mock import patch
+
+        from gate.health import check_disk_usage
+        # Simulate disk full so the cleanup branch fires
+        with patch("gate.health.subprocess.run") as mr, \
+             patch("gate.health._cleanup_old_worktrees") as cleanup, \
+             patch("gate.health.load_config") as load:
+            mr.return_value.stdout = "Filesystem\n/dev/x  100 90 10 95% /\n"
+            mr.return_value.returncode = 0
+            cfg = {"repos": [{"worktree_base": "/tmp/x"}]}
+            result = check_disk_usage(config=cfg)
+            # Cleanup was called with the caller's config
+            cleanup.assert_called_once_with(cfg)
+            # No load_config reload happened
+            load.assert_not_called()
+            assert result["ok"] is False
+
+    def test_check_disk_usage_no_config_falls_back_to_load(self):
+        from unittest.mock import patch
+
+        from gate.health import check_disk_usage
+        with patch("gate.health.subprocess.run") as mr, \
+             patch("gate.health._cleanup_old_worktrees") as cleanup, \
+             patch("gate.health.load_config", return_value={"fallback": True}) as load:
+            mr.return_value.stdout = "Filesystem\n/dev/x  100 90 10 95% /\n"
+            mr.return_value.returncode = 0
+            check_disk_usage()
+            load.assert_called_once()
+            cleanup.assert_called_once_with({"fallback": True})
+
+    def test_cleanup_accepts_explicit_config(self):
+        from unittest.mock import patch
+
+        from gate.health import _cleanup_old_worktrees
+        cfg = {"repos": [{"worktree_base": "/tmp/custom"}]}
+        with patch("gate.health.subprocess.run") as mr, \
+             patch("gate.health.load_config") as load:
+            _cleanup_old_worktrees(cfg)
+            load.assert_not_called()
+            assert mr.called
+            # The find target should be the caller's worktree_base
+            cmd = mr.call_args.args[0]
+            assert "/tmp/custom" in cmd
+
+    def test_run_health_check_loads_config_once(self):
+        from unittest.mock import patch
+
+        from gate.health import run_health_check
+        call_count = {"n": 0}
+
+        def count_load():
+            call_count["n"] += 1
+            return {"repos": []}
+
+        stub = {"ok": True, "detail": "stub"}
+        with patch("gate.health.load_config", side_effect=count_load), \
+             patch("gate.health.check_sleep_disabled", return_value=stub), \
+             patch("gate.health.check_runner", return_value=stub), \
+             patch("gate.health.check_github_api", return_value=stub), \
+             patch("gate.health.check_tailscale", return_value=stub), \
+             patch("gate.health.check_disk_usage", return_value=stub) as disk, \
+             patch("gate.health.check_tmux_session", return_value=stub), \
+             patch("gate.health.check_gate_server", return_value=stub), \
+             patch("gate.health.check_stuck_reviews", return_value=stub), \
+             patch("gate.health.check_stale_activity", return_value=stub), \
+             patch("gate.health.check_orphaned_check_runs", return_value=stub), \
+             patch("gate.health.check_orphaned_tmux_windows", return_value=stub), \
+             patch("gate.health.check_circuit_breaker", return_value=stub), \
+             patch("gate.health.check_quota_freshness", return_value=stub), \
+             patch("gate.health.check_recent_errors", return_value=stub):
+            run_health_check()
+        # Exactly one load_config per cycle; disk check got it via kwarg
+        assert call_count["n"] == 1
+        assert "config" in disk.call_args.kwargs

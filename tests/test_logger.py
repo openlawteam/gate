@@ -154,3 +154,34 @@ class TestWriteSidecarMeta:
         assert path.exists()
         loaded = json.loads(path.read_text())
         assert loaded["stage"] == "triage"
+
+
+# ── write_sidecar_meta error handling (review warning regression) ──
+
+
+class TestWriteSidecarMetaErrorHandling:
+    """Regression: write_sidecar_meta must not propagate filesystem
+    errors to callers (it's a diagnostic-only helper).
+    """
+
+    def test_oserror_is_swallowed(self, tmp_path, monkeypatch, caplog):
+        import logging
+        bad_path = tmp_path / "nonexistent-dir" / "does" / "not" / "exist"
+        bad_path.mkdir(parents=True)  # but we'll make the file write fail by
+
+        # Monkeypatch write_text to raise OSError
+        from pathlib import Path as _Path
+
+        real_write = _Path.write_text
+
+        def fail(self, *args, **kwargs):
+            if self.name.endswith("_meta.json"):
+                raise OSError("disk full")
+            return real_write(self, *args, **kwargs)
+
+        monkeypatch.setattr(_Path, "write_text", fail)
+
+        with caplog.at_level(logging.WARNING, logger="gate.logger"):
+            # Must not raise
+            write_sidecar_meta(bad_path, "triage", {"k": "v"})
+        assert any("write_sidecar_meta failed" in rec.message for rec in caplog.records)

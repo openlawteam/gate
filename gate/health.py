@@ -31,13 +31,18 @@ STALE_ACTIVITY_THRESHOLD_S = 600
 
 
 def run_health_check() -> dict:
-    """Run all health checks. Returns structured results."""
+    """Run all health checks. Returns structured results.
+
+    Loads config once and threads it through to the checks that need it,
+    avoiding redundant TOML parses on every health cycle.
+    """
+    config = load_config()
     results = {
         "sleep_disabled": check_sleep_disabled(),
         "runner": check_runner(),
         "github_api": check_github_api(),
         "tailscale": check_tailscale(),
-        "disk": check_disk_usage(),
+        "disk": check_disk_usage(config=config),
         "tmux_session": check_tmux_session(),
         "gate_server": check_gate_server(),
         "stuck_reviews": check_stuck_reviews(),
@@ -133,8 +138,13 @@ def check_tailscale() -> dict:
         return {"ok": True, "detail": "check skipped"}
 
 
-def check_disk_usage() -> dict:
-    """Check disk space. Alert above 85%."""
+def check_disk_usage(config: dict | None = None) -> dict:
+    """Check disk space. Alert above 85%.
+
+    Accepts an optional pre-loaded config dict to avoid an extra TOML
+    parse per health cycle. When None, a fresh config is loaded once
+    and threaded through to ``_cleanup_old_worktrees``.
+    """
     try:
         result = subprocess.run(
             ["df", "-P", "/"], capture_output=True, text=True, timeout=5
@@ -145,7 +155,7 @@ def check_disk_usage() -> dict:
             pct = int(pct_str)
             ok = pct <= 85
             if not ok:
-                _cleanup_old_worktrees()
+                _cleanup_old_worktrees(config if config is not None else load_config())
             return {"ok": ok, "detail": f"{pct}% used"}
     except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         pass
@@ -491,9 +501,15 @@ def _is_pid_alive(pid: int) -> bool:
         return False
 
 
-def _cleanup_old_worktrees() -> None:
-    """Remove worktrees older than 2 hours."""
-    config = load_config()
+def _cleanup_old_worktrees(config: dict | None = None) -> None:
+    """Remove worktrees older than 2 hours.
+
+    Accepts a caller-provided config so health checks can avoid redundant
+    TOML reloads on every cycle. When ``None`` for backwards compat with
+    ad-hoc callers we fall back to ``load_config()``.
+    """
+    if config is None:
+        config = load_config()
     bases: set[str] = set()
     for repo_cfg in get_all_repos(config):
         bases.add(repo_cfg.get("worktree_base", "/tmp/gate-worktrees"))

@@ -139,10 +139,16 @@ def write_live_log(pr_number: int, message: str, prefix: str = "", repo: str = "
 def write_sidecar_meta(workspace: Path, stage: str, meta: dict) -> None:
     """Write {stage}_meta.json alongside stage output.
 
-    Ported from writeSidecar() in run-stage.js.
+    Ported from writeSidecar() in run-stage.js. Sidecar metadata is
+    diagnostic-only: if the write fails (permissions, full disk, missing
+    parent dir) we log and swallow rather than propagating, matching the
+    defensive posture of other non-critical writes in this module.
     """
     meta_path = workspace / f"{stage}_meta.json"
-    meta_path.write_text(json.dumps(meta, indent=2))
+    try:
+        meta_path.write_text(json.dumps(meta, indent=2))
+    except OSError as e:
+        _logger.warning(f"write_sidecar_meta failed for {meta_path}: {e}")
 
 
 def read_recent_decisions(count: int = 3) -> list[str]:

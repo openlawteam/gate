@@ -542,3 +542,76 @@ class TestResumeFixSession:
         pipe.session_id = "sess-abc"
         pipe._resume_fix_session("go fix it")
         assert (tmp_path / "fix-resume-prompt.md").read_text() == "go fix it"
+
+
+# ── Git subprocess timeouts (review warning regression) ──────
+
+
+class TestGitSubprocessTimeouts:
+    """Regression: every git subprocess.run in fixer.py needs a timeout=
+    so a hung git (e.g. index.lock) can't wedge the fix pipeline past
+    the outer orchestrator timeout.
+    """
+
+    @patch("gate.fixer.subprocess.run")
+    def test_get_changed_files_has_timeout(self, mock_run, tmp_path):
+        from gate.fixer import _get_changed_files
+        mock_run.return_value = MagicMock(stdout="")
+        _get_changed_files(tmp_path)
+        assert "timeout" in mock_run.call_args.kwargs
+        assert mock_run.call_args.kwargs["timeout"] > 0
+
+    @patch("gate.fixer.subprocess.run")
+    def test_get_changed_files_handles_timeout(self, mock_run, tmp_path):
+        from gate.fixer import _get_changed_files
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="sh", timeout=60)
+        result = _get_changed_files(tmp_path)
+        assert result == []
+
+    @patch("gate.fixer.subprocess.run")
+    def test_get_changed_files_handles_missing_git(self, mock_run, tmp_path):
+        from gate.fixer import _get_changed_files
+        mock_run.side_effect = FileNotFoundError(2, "No such file", "sh")
+        result = _get_changed_files(tmp_path)
+        assert result == []
+
+    @patch("gate.fixer.subprocess.run")
+    def test_revert_all_all_calls_have_timeout(self, mock_run, tmp_path):
+        from gate.fixer import _revert_all
+        mock_run.return_value = MagicMock(returncode=0)
+        _revert_all(tmp_path)
+        # Two calls: git checkout, git clean
+        assert mock_run.call_count == 2
+        for call in mock_run.call_args_list:
+            assert "timeout" in call.kwargs, f"missing timeout: {call}"
+
+    @patch("gate.fixer.subprocess.run")
+    def test_revert_all_tolerates_failures(self, mock_run, tmp_path):
+        from gate.fixer import _revert_all
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="git", timeout=30)
+        # Must not raise
+        _revert_all(tmp_path)
+
+    @patch("gate.fixer.subprocess.run")
+    def test_revert_file_cat_file_has_timeout(self, mock_run, tmp_path):
+        from gate.fixer import _revert_file
+        mock_run.return_value = MagicMock(returncode=1)  # untracked
+        _revert_file(tmp_path, "x.txt")
+        assert "timeout" in mock_run.call_args_list[0].kwargs
+
+    @patch("gate.fixer.subprocess.run")
+    def test_revert_file_checkout_has_timeout(self, mock_run, tmp_path):
+        from gate.fixer import _revert_file
+        # First call (cat-file) returns 0 (tracked), then checkout is invoked
+        mock_run.return_value = MagicMock(returncode=0)
+        _revert_file(tmp_path, "x.txt")
+        assert mock_run.call_count == 2
+        assert "timeout" in mock_run.call_args_list[1].kwargs
+        assert mock_run.call_args_list[1].args[0][:3] == ["git", "checkout", "HEAD"]
+
+    @patch("gate.fixer.subprocess.run")
+    def test_revert_file_tolerates_cat_file_failure(self, mock_run, tmp_path):
+        from gate.fixer import _revert_file
+        mock_run.side_effect = FileNotFoundError(2, "No git", "git")
+        # Must not raise
+        _revert_file(tmp_path, "x.txt")

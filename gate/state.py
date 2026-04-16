@@ -162,7 +162,12 @@ def persist_review_state(
                 cwd=merge_base_cwd,
             ).check_returncode()
             is_ancestor = True
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        except (subprocess.SubprocessError, OSError):
+            # SubprocessError: CalledProcessError + TimeoutExpired
+            # OSError: git missing from PATH (FileNotFoundError) or clone_path
+            # pruned (NotADirectoryError). Without this widening those escape
+            # persist_review_state after the sha_path write and counter logic
+            # already partially executed, leaving state inconsistent.
             pass
 
         if not is_ancestor:

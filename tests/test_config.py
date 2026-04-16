@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from gate.config import (
     build_claude_env,
     gate_dir,
@@ -24,6 +26,10 @@ class TestGateDir:
         assert (real_gate_dir / "gate" / "__init__.py").exists()
 
 
+_has_config = bool(load_config())
+
+
+@pytest.mark.skipif(not _has_config, reason="gate.toml not found")
 class TestLoadConfig:
     def test_loads_toml(self):
         config = load_config()

@@ -854,6 +854,7 @@ class GateTUI(App):
         self._recent_entries: list[dict] = []
         self._window_title = "gate"
         self._last_jsonl_mtime: float = 0.0
+        self._config: dict = load_config()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -1044,7 +1045,7 @@ class GateTUI(App):
 
         wt_count = 0
         seen_bases: set[Path] = set()
-        for repo_cfg in get_all_repos():
+        for repo_cfg in get_all_repos(self._config):
             wt_base = Path(repo_cfg.get("worktree_base", "/tmp/gate-worktrees"))
             if wt_base not in seen_bases and wt_base.exists():
                 seen_bases.add(wt_base)
@@ -1407,6 +1408,7 @@ class GateTUI(App):
                 ["gh", "pr", "view", str(pr_num), "--repo", repo, "--web"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                start_new_session=True,
             )
             self.notify(f"Opening PR #{pr_num} in browser")
         except Exception:
@@ -1438,7 +1440,7 @@ class GateTUI(App):
             row_idx = focused.cursor_row
             if 0 <= row_idx < len(reviews):
                 return reviews[row_idx].get("repo", "")
-        return load_config().get("repo", {}).get("name", "")
+        return self._config.get("repo", {}).get("name", "")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         self.action_detail()

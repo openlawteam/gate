@@ -90,6 +90,7 @@ def cleanup_artifacts(workspace: Path) -> list[str]:
             ["git", "reset", "HEAD", "--"] + removed,
             capture_output=True,
             cwd=str(workspace),
+            timeout=30,
         )
         logger.info(f"Cleaned up {len(removed)} artifact files: {removed}")
 

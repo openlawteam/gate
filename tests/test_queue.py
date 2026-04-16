@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gate.queue import ReviewQueue
+from gate.queue import DEFAULT_MAX_CONCURRENT, ReviewQueue
 
 
 @pytest.fixture
@@ -125,3 +125,194 @@ class TestStop:
         review_queue.stop()
         time.sleep(0.1)
         assert not review_queue._dispatcher.is_alive()
+
+
+class TestConfigurableConcurrency:
+    """Workstream 4b: max_concurrent_reviews is read from config.limits."""
+
+    def test_defaults_to_three(self, sample_config, tmp_path):
+        with patch("gate.queue.ReviewOrchestrator"):
+            q = ReviewQueue(
+                config=sample_config, socket_path=tmp_path / "s.sock"
+            )
+            assert q._pool._max_workers == DEFAULT_MAX_CONCURRENT
+
+    def test_respects_config_override(self, sample_config, tmp_path):
+        cfg = dict(sample_config)
+        cfg["limits"] = dict(cfg.get("limits", {}))
+        cfg["limits"]["max_concurrent_reviews"] = 5
+        with patch("gate.queue.ReviewOrchestrator"):
+            q = ReviewQueue(config=cfg, socket_path=tmp_path / "s.sock")
+            assert q._pool._max_workers == 5
+
+
+class TestDispatchCancelsSupersededReview:
+    """Workstream 1 regression guard: when `_dispatch_loop` picks up a queue
+    item for a ``(repo, pr)`` key that is already in ``_active`` (because a
+    newer enqueue landed first), the older orchestrator must be cancelled
+    before the newer one overwrites the slot."""
+
+    @patch("gate.queue.quota_mod")
+    @patch("gate.queue.ReviewOrchestrator")
+    def test_cancels_existing_active_before_overwrite(
+        self, MockOrch, mock_quota, sample_config, tmp_path
+    ):
+        import threading
+
+        mock_quota.check_quota.return_value = {"quota_ok": True}
+        new_orch = MagicMock()
+        # Block ``run`` so the new orchestrator remains in ``_active`` long
+        # enough for us to observe the supersede.
+        release = threading.Event()
+        new_orch.run.side_effect = lambda: release.wait(timeout=1.0)
+        MockOrch.return_value = new_orch
+
+        sock_path = tmp_path / "s.sock"
+        q = ReviewQueue(config=sample_config, socket_path=sock_path)
+
+        # Simulate the race: an older orchestrator is already registered in
+        # ``_active`` for the same key (e.g. still running a prior review),
+        # and a queue item for the same PR is sitting on ``_queue`` waiting
+        # for the dispatcher.
+        older_orch = MagicMock()
+        key = ("test-org/test-repo", 42)
+        with q._lock:
+            q._active[key] = older_orch
+
+        q._queue.put((
+            time.time(), 42,
+            {"repo": "test-org/test-repo", "head_sha": "sha",
+             "event": "sync", "branch": "main", "labels": []},
+        ))
+
+        q.start()
+        time.sleep(0.4)
+
+        older_orch.cancel.assert_called_once()
+        assert q._active[key] is new_orch
+        release.set()
+        q.stop()
+
+
+class TestRunReviewIdentityAwarePop:
+    """Workstream 1 regression guard: ``_run_review`` must only remove its
+    own orchestrator from ``_active`` -- never a newer replacement."""
+
+    def test_does_not_remove_replacement_entry(self, review_queue):
+        key = ("repo", 7)
+        older = MagicMock()
+        older.run.return_value = None
+        newer = MagicMock()
+
+        # Simulate the state after a supersede: newer has replaced older in
+        # ``_active``, but the older is still finishing its run.
+        with review_queue._lock:
+            review_queue._active[key] = newer
+
+        review_queue._run_review(key, older)
+
+        assert review_queue._active[key] is newer, (
+            "older _run_review finally block must not evict the newer entry"
+        )
+
+    def test_removes_own_entry(self, review_queue):
+        key = ("repo", 8)
+        orch = MagicMock()
+        orch.run.return_value = None
+        with review_queue._lock:
+            review_queue._active[key] = orch
+
+        review_queue._run_review(key, orch)
+
+        assert key not in review_queue._active
+
+    def test_handles_exception_and_removes_own_entry(self, review_queue):
+        key = ("repo", 9)
+        orch = MagicMock()
+        orch.run.side_effect = RuntimeError("boom")
+        with review_queue._lock:
+            review_queue._active[key] = orch
+
+        review_queue._run_review(key, orch)
+
+        assert key not in review_queue._active
+
+
+class TestRapidTriplePush:
+    """Workstream 1 end-to-end: three consecutive enqueues for the same PR
+    must leave exactly one orchestrator active; the prior two must have had
+    ``cancel`` called (either by ``enqueue`` or by ``_dispatch_loop``)."""
+
+    @patch("gate.queue.quota_mod")
+    @patch("gate.queue.ReviewOrchestrator")
+    def test_only_latest_survives(
+        self, MockOrch, mock_quota, sample_config, tmp_path
+    ):
+        import threading
+
+        mock_quota.check_quota.return_value = {"quota_ok": True}
+        made: list[MagicMock] = []
+        # Block every orchestrator's ``run`` so the active entry persists and
+        # we can observe supersede behavior across the sequence.
+        release = threading.Event()
+
+        def _factory(*args, **kwargs):
+            m = MagicMock()
+            m.run.side_effect = lambda: release.wait(timeout=1.0)
+            made.append(m)
+            return m
+
+        MockOrch.side_effect = _factory
+
+        q = ReviewQueue(config=sample_config, socket_path=tmp_path / "s.sock")
+        q.start()
+
+        for sha in ("sha1", "sha2", "sha3"):
+            q.enqueue(42, "test-org/test-repo", sha, "synchronize", "main", [])
+
+        # Give the dispatcher enough time to pull all three items.
+        time.sleep(0.8)
+
+        # One active review remains; its orchestrator must be the most
+        # recently constructed. All earlier orchestrators must have been
+        # cancelled.
+        assert len(q._active) == 1
+        assert q._active[("test-org/test-repo", 42)] is made[-1]
+        for earlier in made[:-1]:
+            earlier.cancel.assert_called()
+
+        release.set()
+        q.stop()
+
+
+class TestCancelDuringDispatch:
+    """Workstream 1: ``cancel_pr`` while a review is active must cancel the
+    live orchestrator and remove it from ``_active``."""
+
+    @patch("gate.queue.quota_mod")
+    @patch("gate.queue.ReviewOrchestrator")
+    def test_cancel_pr_reaches_live_orchestrator(
+        self, MockOrch, mock_quota, sample_config, tmp_path
+    ):
+        import threading
+
+        mock_quota.check_quota.return_value = {"quota_ok": True}
+        orch = MagicMock()
+        # Make ``run`` block long enough that we can observe the active entry.
+        ready = threading.Event()
+        orch.run.side_effect = lambda: ready.wait(timeout=1.0)
+        MockOrch.return_value = orch
+
+        q = ReviewQueue(config=sample_config, socket_path=tmp_path / "s.sock")
+        q.start()
+        q.enqueue(99, "test-org/test-repo", "sha", "synchronize", "main", [])
+
+        time.sleep(0.3)
+        assert ("test-org/test-repo", 99) in q._active
+
+        assert q.cancel_pr(99, "test-org/test-repo") is True
+        orch.cancel.assert_called_once()
+        assert ("test-org/test-repo", 99) not in q._active
+
+        ready.set()
+        q.stop()

@@ -417,11 +417,17 @@ class TestRunSilent:
         assert call.kwargs.get("shell", False) is False
 
     @patch("gate.fixer.subprocess.run")
-    def test_returns_combined_stdout_stderr(self, mock_run):
+    def test_returns_merged_output(self, mock_run):
+        """stderr=subprocess.STDOUT merges both streams in the kernel;
+        result.stdout contains the combined output."""
         from gate.fixer import _run_silent
-        mock_run.return_value = MagicMock(stdout="out", stderr="err", returncode=0)
+        mock_run.return_value = MagicMock(stdout="out\nerr\n", returncode=0)
         result = _run_silent("noop")
-        assert result == ("outerr", 0)
+        assert result == ("out\nerr\n", 0)
+        call = mock_run.call_args
+        assert call.kwargs["stderr"] == subprocess.STDOUT
+        assert call.kwargs["stdout"] == subprocess.PIPE
+        assert "capture_output" not in call.kwargs
 
     @patch("gate.fixer.subprocess.run")
     def test_timeout_returns_empty(self, mock_run):

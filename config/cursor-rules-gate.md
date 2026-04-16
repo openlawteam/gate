@@ -12,7 +12,7 @@
 
 - Always use list form for commands, never `shell=True`.
 - Always include `timeout=` parameter on `subprocess.run`.
-- Always use `capture_output=True, text=True` when parsing output.
+- Always use `capture_output=True, text=True` when parsing output. Exception: `_run_silent` uses `stdout=subprocess.PIPE, stderr=subprocess.STDOUT` for true `2>&1` stream interleaving.
 - Never interpolate external input into subprocess arguments without validation.
 - Convert `Path` to `str()` only at the `cwd=` or argument boundary.
 - FLAG any new `subprocess.Popen` without a timeout/monitoring strategy.

@@ -382,25 +382,26 @@ def _revert_all(workspace: Path) -> None:
 
 
 def _run_silent(cmd: str | list[str], cwd: str | None = None) -> tuple[str, int]:
-    """Run a command silently, returning (stdout+stderr, exit_code). Never raises.
+    """Run a command silently, returning (combined output, exit_code). Never raises.
 
     ``cmd`` may be either a string (parsed with ``shlex.split``) or a
     pre-tokenized argv list. This replaces the earlier ``shell=True`` path so
     build/lint/test commands from config can never be interpreted as a shell
-    script. ``stderr`` is captured separately and concatenated onto
-    ``stdout`` in the return value, which matches the prior ``2>&1``
-    redirection behavior for callers that parse combined output.
+    script. ``stderr`` is redirected into ``stdout`` via
+    ``stderr=subprocess.STDOUT`` so the kernel merges both streams in
+    chronological emission order — true ``2>&1`` semantics.
     """
     try:
         args = cmd if isinstance(cmd, list) else shlex.split(cmd)
         result = subprocess.run(
             args,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
             cwd=cwd,
             timeout=600,
         )
-        return result.stdout + result.stderr, result.returncode
+        return result.stdout, result.returncode
     except (subprocess.SubprocessError, OSError, ValueError):
         return "", 1
 

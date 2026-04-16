@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 
 ALERT_COOLDOWN_S = 3600
 HARD_TIMEOUT_S = 1200
+# If an active review has made no log activity in this many seconds, flag it.
+# Must be long enough to accommodate slow agent stages (Security/Logic on Opus
+# can take 3-5 minutes of wall time with no intermediate log lines).
+STALE_ACTIVITY_THRESHOLD_S = 600
 
 
 def run_health_check() -> dict:
@@ -37,6 +41,7 @@ def run_health_check() -> dict:
         "tmux_session": check_tmux_session(),
         "gate_server": check_gate_server(),
         "stuck_reviews": check_stuck_reviews(),
+        "stale_activity": check_stale_activity(),
         "orphaned_checks": check_orphaned_check_runs(),
         "orphaned_windows": check_orphaned_tmux_windows(),
         "circuit_breaker": check_circuit_breaker(),
@@ -207,6 +212,83 @@ def check_stuck_reviews() -> dict:
 
     ok = len(stuck) == 0
     detail = f"{len(stuck)} stuck: {', '.join(stuck)}" if stuck else "none"
+    return {"ok": ok, "detail": detail}
+
+
+def check_stale_activity() -> dict:
+    """Detect reviews that are marked active but have stopped making progress.
+
+    Complements ``check_stuck_reviews``, which only trips at the absolute
+    timeout (20 min). This catches reviews that are wedged mid-stage (e.g.
+    the fix pipeline's resume session deadlocked on a TTY) well before the
+    hard timeout, by noticing the per-PR live log hasn't been appended to.
+
+    Uses the mtime of ``logs/live/{slug?}/pr{N}.log`` as the freshness
+    signal because ``write_live_log`` is called at every stage boundary
+    and fix iteration. If the live log hasn't moved in
+    STALE_ACTIVITY_THRESHOLD_S seconds while the active marker is still
+    present, the review is stalled.
+    """
+    state_root = state_dir()
+    if not state_root.exists():
+        return {"ok": True, "detail": "no state"}
+
+    live_root = logs_dir() / "live"
+    now = time.time()
+    stale: list[str] = []
+
+    def _check_pr(pr_dir: Path, slug: str, label: str) -> None:
+        marker = pr_dir / "active_review.json"
+        if not marker.exists():
+            return
+        try:
+            data = json.loads(marker.read_text())
+        except (json.JSONDecodeError, OSError):
+            return
+        started_at = data.get("started_at", 0)
+        if not started_at:
+            return
+        # Give a brand-new review 2x the threshold before we flag it, so a
+        # slow first stage doesn't trip the alarm.
+        review_age = now - started_at
+        if review_age < STALE_ACTIVITY_THRESHOLD_S * 2:
+            return
+
+        pr_num = pr_dir.name.replace("pr", "")
+        candidates = []
+        if slug:
+            candidates.append(live_root / slug / f"pr{pr_num}.log")
+        candidates.append(live_root / f"pr{pr_num}.log")
+
+        log_mtime = 0.0
+        for candidate in candidates:
+            if candidate.exists():
+                try:
+                    log_mtime = candidate.stat().st_mtime
+                    break
+                except OSError:
+                    continue
+
+        if log_mtime == 0.0:
+            # No live log at all — can't tell, don't trip
+            return
+
+        if now - log_mtime > STALE_ACTIVITY_THRESHOLD_S:
+            idle_min = int((now - log_mtime) / 60)
+            stale.append(f"{label} (idle {idle_min}m)")
+
+    for entry in state_root.iterdir():
+        if not entry.is_dir():
+            continue
+        if entry.name.startswith("pr"):
+            _check_pr(entry, "", entry.name)
+        else:
+            for sub in entry.iterdir():
+                if sub.is_dir() and sub.name.startswith("pr"):
+                    _check_pr(sub, entry.name, f"{entry.name}/{sub.name}")
+
+    ok = len(stale) == 0
+    detail = f"{len(stale)} stale: {', '.join(stale)}" if stale else "none"
     return {"ok": ok, "detail": detail}
 
 

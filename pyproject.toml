@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio", "ruff"]
+dev = ["pytest", "pytest-asyncio", "ruff", "mypy"]
 
 [project.scripts]
 gate = "gate.cli:main"
@@ -37,3 +37,29 @@ select = ["E", "F", "I", "W"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = false
+warn_unused_configs = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+ignore_missing_imports = true
+# ``json.loads`` and the socket IPC layer both legitimately return ``Any``;
+# surfacing that on every function that wraps them is pure noise.
+disable_error_code = ["no-any-return"]
+
+# Modules with deeper structural type issues are ignored wholesale for now,
+# so the baseline passes and CI (once wired up in a follow-up) can enforce
+# "no regressions" on the remaining modules.
+[[tool.mypy.overrides]]
+module = [
+    "gate.client",
+    "gate.fixer",
+    "gate.orchestrator",
+    "gate.runner",
+    "gate.server",
+    "gate.state",
+    "gate.tui",
+]
+ignore_errors = true

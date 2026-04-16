@@ -1,10 +1,17 @@
 """Tests for gate.github module."""
 
+import subprocess
+from unittest.mock import patch
+
 from gate.github import (
     _build_comment,
     _format_build_section,
     _format_findings,
     _format_resolved,
+    approve_pr,
+    comment_pr,
+    complete_check_run,
+    create_check_run,
 )
 
 
@@ -204,3 +211,147 @@ class TestFormatBuildSectionSkipped:
         build = {"skipped": True, "overall_pass": True}
         result = _format_build_section(build)
         assert "no build commands configured" in result
+
+
+# ── Integration-ish tests for the API wrappers ─────────────────
+#
+# These cover the argv that Gate actually hands to ``gh``, not just the
+# markdown helpers. Every test patches ``gate.github._gh`` so no real
+# network call is made. The goal is to catch regressions in the command
+# shape (flags, ordering, `-f` key=value pairs) that our branch-protection
+# contract depends on -- the context name has to stay ``gate-review``,
+# statuses have to target ``repos/{repo}/statuses/{sha}``, etc.
+
+
+class TestCreateCheckRun:
+    """Ports to the Commit Statuses API (naming is historical)."""
+
+    @patch("gate.github._gh")
+    def test_posts_pending_status_with_default_context(self, mock_gh):
+        mock_gh.return_value = ""
+        result = create_check_run("owner/repo", "deadbeef")
+        assert result == "gate-review"
+        mock_gh.assert_called_once()
+        args = mock_gh.call_args.args[0]
+        assert args[0] == "api"
+        assert args[1] == "repos/owner/repo/statuses/deadbeef"
+        assert "-X" in args and "POST" in args
+        assert "state=pending" in args
+        assert "context=gate-review" in args
+
+    @patch("gate.github._gh")
+    def test_honors_custom_context_name(self, mock_gh):
+        mock_gh.return_value = ""
+        result = create_check_run("owner/repo", "abc", name="gate-fix")
+        assert result == "gate-fix"
+        args = mock_gh.call_args.args[0]
+        assert "context=gate-fix" in args
+
+    @patch("gate.github._gh")
+    def test_returns_none_on_gh_failure(self, mock_gh):
+        mock_gh.side_effect = subprocess.CalledProcessError(1, ["gh"])
+        result = create_check_run("owner/repo", "abc")
+        assert result is None
+
+
+class TestCompleteCheckRun:
+    @patch("gate.github._gh")
+    def test_maps_success_to_success_state(self, mock_gh):
+        mock_gh.return_value = ""
+        complete_check_run(
+            "owner/repo", "gate-review",
+            conclusion="success",
+            output_title="Approved",
+            sha="deadbeef",
+        )
+        args = mock_gh.call_args.args[0]
+        assert args[1] == "repos/owner/repo/statuses/deadbeef"
+        assert "state=success" in args
+        assert "context=gate-review" in args
+        assert "description=Approved" in args
+
+    @patch("gate.github._gh")
+    def test_maps_cancelled_to_failure_state(self, mock_gh):
+        mock_gh.return_value = ""
+        complete_check_run(
+            "owner/repo", "gate-review",
+            conclusion="cancelled",
+            output_title="Superseded",
+            sha="abc1234",
+        )
+        args = mock_gh.call_args.args[0]
+        assert "state=failure" in args
+
+    @patch("gate.github._gh")
+    def test_truncates_long_title_in_description(self, mock_gh):
+        mock_gh.return_value = ""
+        long_title = "x" * 200
+        complete_check_run(
+            "owner/repo", "gate-review",
+            conclusion="failure",
+            output_title=long_title,
+            sha="abc",
+        )
+        args = mock_gh.call_args.args[0]
+        # GitHub's status description hard cap is 140 chars; we enforce it
+        # on the caller side so a verbose output_title never poisons the API.
+        desc_arg = next(a for a in args if a.startswith("description="))
+        assert len(desc_arg) - len("description=") <= 140
+
+    @patch("gate.github._gh")
+    def test_no_op_when_no_sha(self, mock_gh):
+        complete_check_run("owner/repo", "gate-review", "success", sha="")
+        mock_gh.assert_not_called()
+
+    @patch("gate.github._gh")
+    def test_no_op_when_no_check_run_id(self, mock_gh):
+        complete_check_run("owner/repo", None, "success", sha="abc")
+        mock_gh.assert_not_called()
+
+
+class TestApprovePr:
+    @patch("gate.github._gh")
+    def test_calls_pr_review_approve(self, mock_gh):
+        mock_gh.return_value = ""
+        approve_pr("owner/repo", 42, "Looks good")
+        mock_gh.assert_called_once_with(
+            ["pr", "review", "42", "--repo", "owner/repo", "--approve", "--body", "Looks good"]
+        )
+
+    @patch("gate.github.comment_pr")
+    @patch("gate.github._gh")
+    def test_falls_back_to_comment_when_self_approval_blocked(
+        self, mock_gh, mock_comment
+    ):
+        err = subprocess.CalledProcessError(1, ["gh"])
+        err.stderr = "cannot approve your own pull request"
+        mock_gh.side_effect = err
+        approve_pr("owner/repo", 42, "Looks good")
+        mock_comment.assert_called_once_with("owner/repo", 42, "Looks good")
+
+    @patch("gate.github.comment_pr")
+    @patch("gate.github._gh")
+    def test_swallows_other_errors_without_commenting(
+        self, mock_gh, mock_comment
+    ):
+        err = subprocess.CalledProcessError(1, ["gh"])
+        err.stderr = "permission denied"
+        mock_gh.side_effect = err
+        approve_pr("owner/repo", 42, "Looks good")
+        mock_comment.assert_not_called()
+
+
+class TestCommentPr:
+    @patch("gate.github._gh")
+    def test_calls_pr_comment(self, mock_gh):
+        mock_gh.return_value = ""
+        comment_pr("owner/repo", 99, "hello")
+        mock_gh.assert_called_once_with(
+            ["pr", "comment", "99", "--repo", "owner/repo", "--body", "hello"]
+        )
+
+    @patch("gate.github._gh")
+    def test_swallows_gh_failure(self, mock_gh):
+        mock_gh.side_effect = subprocess.CalledProcessError(1, ["gh"])
+        # Should not raise.
+        comment_pr("owner/repo", 99, "hello")

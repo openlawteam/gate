@@ -93,25 +93,49 @@ class TestFormatBuildSection:
         assert "eslint: ❌" in result
         assert "vitest: ❌" in result
 
-    def test_default_tool_names(self):
+    def test_no_tool_means_section_omitted(self):
+        """Sections without a configured tool should not appear — avoids
+        misleading '0 errors' lines for steps that never ran."""
         build = {
-            "typecheck": {"pass": True, "error_count": 0},
-            "lint": {"pass": True, "warning_count": 0},
-            "tests": {"pass": True, "passed": 10, "total": 10},
+            "typecheck": {"pass": True, "error_count": 0, "tool": ""},
+            "lint": {"pass": True, "warning_count": 0, "tool": ""},
+            "tests": {"pass": True, "passed": 10, "total": 10, "tool": ""},
         }
         result = _format_build_section(build)
-        assert "Type check: ✅" in result
-        assert "Lint: ✅" in result
-        assert "Tests: ✅" in result
+        # When no section has a configured tool, the whole block is dropped
+        assert result == ""
 
-    def test_backward_compat_typescript_key(self):
+    def test_mixed_configured_and_unconfigured(self):
+        """Only configured tools appear; unconfigured ones are omitted."""
         build = {
-            "typescript": {"pass": True, "error_count": 0},
-            "lint": {"pass": True, "warning_count": 0},
-            "tests": {"pass": True, "passed": 42, "total": 42},
+            "typecheck": {"pass": True, "error_count": 0, "tool": ""},
+            "lint": {"pass": True, "warning_count": 0, "tool": "ruff"},
+            "tests": {"pass": True, "passed": 100, "total": 100, "tool": "pytest"},
         }
         result = _format_build_section(build)
-        assert "Type check: ✅" in result
+        assert "Type check" not in result  # typecheck omitted
+        assert "ruff: ✅" in result
+        assert "pytest: ✅" in result
+
+    def test_python_tool_display_maps_to_pytest(self):
+        """A `python -m pytest` test_cmd yields tool='python'; the comment
+        should display 'pytest' for clarity."""
+        build = {
+            "tests": {"pass": True, "passed": 100, "total": 100, "tool": "python"},
+        }
+        result = _format_build_section(build)
+        assert "pytest: ✅ (100/100 passed)" in result
+        assert "python:" not in result  # raw tool name should not leak
+
+    def test_backward_compat_typescript_key_with_tool(self):
+        """Legacy `typescript` key still works when a tool is set."""
+        build = {
+            "typescript": {"pass": True, "error_count": 0, "tool": "tsc"},
+            "lint": {"pass": True, "warning_count": 0, "tool": "eslint"},
+            "tests": {"pass": True, "passed": 42, "total": 42, "tool": "vitest"},
+        }
+        result = _format_build_section(build)
+        assert "tsc: ✅" in result
 
 
 class TestBuildComment:

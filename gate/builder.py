@@ -127,12 +127,17 @@ def compile_build(
     """Parse build outputs into structured results.
 
     Node.js projects use structured parsers for detailed error extraction.
+    Python projects parse pytest summary lines for accurate counts.
     Other project types use generic exit-code-based parsing.
     """
     if project_type == "node":
         tc = _parse_tsc(typecheck_log, typecheck_exit)
         lint = _parse_lint(lint_log, lint_exit)
         test = _parse_test(test_log, test_exit)
+    elif project_type == "python":
+        tc = _parse_generic(typecheck_log, typecheck_exit)
+        lint = _parse_generic(lint_log, lint_exit)
+        test = _parse_pytest(test_log, test_exit)
     else:
         tc = _parse_generic(typecheck_log, typecheck_exit)
         lint = _parse_generic(lint_log, lint_exit)
@@ -277,6 +282,59 @@ def _parse_test(log: str, exit_code: int) -> dict:
         "failed": failed,
         "skipped": skipped,
         "failures": failures,
+        "output": log[-2000:],
+    }
+
+
+# ── Python parsers ───────────────────────────────────────────
+
+
+def _parse_pytest(log: str, exit_code: int) -> dict:
+    """Parse pytest output into structured counts.
+
+    Handles the standard pytest summary formats:
+    - ``624 passed, 6 skipped in 95.89s (0:01:35)``
+    - ``472 passed in 29.22s``
+    - ``1 failed, 45 passed in 35.69s``
+    - ``3 errors`` (e.g. collection errors)
+
+    Each count is matched independently so the order pytest prints them in
+    doesn't matter.
+    """
+    passed = 0
+    failed = 0
+    skipped = 0
+    errors = 0
+
+    passed_match = re.search(r"(\d+)\s+passed\b", log)
+    if passed_match:
+        passed = int(passed_match.group(1))
+    failed_match = re.search(r"(\d+)\s+failed\b", log)
+    if failed_match:
+        failed = int(failed_match.group(1))
+    skipped_match = re.search(r"(\d+)\s+skipped\b", log)
+    if skipped_match:
+        skipped = int(skipped_match.group(1))
+    error_match = re.search(r"(\d+)\s+error(?:s)?\b", log)
+    if error_match:
+        errors = int(error_match.group(1))
+
+    # Collection errors count as failures for pass/fail semantics.
+    failed_total = failed + errors
+    total = passed + failed_total + skipped
+
+    failures: list[dict] = []
+    for m in re.finditer(r"^FAILED\s+(\S+)", log, re.MULTILINE):
+        failures.append({"file": m.group(1)})
+
+    return {
+        "pass": exit_code == 0,
+        "exit_code": exit_code,
+        "total": total,
+        "passed": passed,
+        "failed": failed_total,
+        "skipped": skipped,
+        "failures": failures[:10],
         "output": log[-2000:],
     }
 

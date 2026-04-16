@@ -5,7 +5,6 @@ import pytest
 
 import gate.config
 
-
 REAL_GATE_DIR = gate.config.GATE_DIR
 
 

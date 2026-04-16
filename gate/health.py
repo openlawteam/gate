@@ -272,7 +272,8 @@ def check_orphaned_check_runs() -> dict:
 
             marker.unlink(missing_ok=True)
             cleaned.append(label)
-            notify.review_failed(int(pr_num) if pr_num.isdigit() else 0, "orphaned check run", repo=repo)
+            pr = int(pr_num) if pr_num.isdigit() else 0
+            notify.review_failed(pr, "orphaned check run", repo=repo)
             logger.warning(f"Cleaned orphaned check run for {label}")
 
         elif age > timeout and pid_alive:

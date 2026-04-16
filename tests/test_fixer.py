@@ -1,7 +1,6 @@
 """Tests for gate.fixer module — fix helpers and pipeline logic."""
 
 import subprocess
-
 from unittest.mock import MagicMock, patch
 
 from gate.fixer import (

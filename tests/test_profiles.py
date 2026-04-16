@@ -1,6 +1,5 @@
 """Tests for gate.profiles module."""
 
-from pathlib import Path
 
 from gate.profiles import PROFILES, detect_project_type, resolve_profile
 

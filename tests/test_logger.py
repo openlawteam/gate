@@ -3,7 +3,13 @@
 import json
 from unittest.mock import patch
 
-from gate.logger import log_review, read_recent_decisions, write_live_log, write_sidecar_meta
+from gate.logger import (
+    log_fix_result,
+    log_review,
+    read_recent_decisions,
+    write_live_log,
+    write_sidecar_meta,
+)
 
 
 class TestLogReview:
@@ -44,7 +50,8 @@ class TestLogReview:
         jsonl = logs_dir / "reviews.jsonl"
 
         with patch("gate.logger.LOGS_DIR", logs_dir), patch("gate.logger.REVIEWS_JSONL", jsonl):
-            log_review(42, {"decision": "approve", "findings": [], "stats": {}}, None, 60, repo="org/repo")
+            verdict = {"decision": "approve", "findings": [], "stats": {}}
+            log_review(42, verdict, None, 60, repo="org/repo")
             entry = json.loads(jsonl.read_text().strip())
             assert entry["repo"] == "org/repo"
 
@@ -96,6 +103,37 @@ class TestWriteLiveLog:
             write_live_log(42, "Starting review", "stage")
             log_file = live_dir / "pr42.log"
             assert log_file.exists()
+
+
+class TestLogFixResult:
+    def test_fix_result_includes_elapsed(self, tmp_path):
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+        jsonl = logs_dir / "reviews.jsonl"
+
+        with patch("gate.logger.LOGS_DIR", logs_dir), \
+             patch("gate.logger.REVIEWS_JSONL", jsonl):
+            log_fix_result(
+                42, True, "Fixed 3 issues", "request_changes",
+                repo="org/repo", fix_elapsed_seconds=120,
+            )
+            entry = json.loads(jsonl.read_text().strip())
+            assert entry["review_time_seconds"] == 120
+            assert entry["decision"] == "fix_succeeded"
+            assert entry["is_fix_followup"] is True
+            assert entry["fix_summary"] == "Fixed 3 issues"
+
+    def test_fix_result_default_elapsed(self, tmp_path):
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+        jsonl = logs_dir / "reviews.jsonl"
+
+        with patch("gate.logger.LOGS_DIR", logs_dir), \
+             patch("gate.logger.REVIEWS_JSONL", jsonl):
+            log_fix_result(42, False, "Build failed", "request_changes")
+            entry = json.loads(jsonl.read_text().strip())
+            assert entry["review_time_seconds"] == 0
+            assert entry["decision"] == "fix_failed"
 
 
 class TestWriteSidecarMeta:

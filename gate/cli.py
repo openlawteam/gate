@@ -73,8 +73,8 @@ def cmd_init(args: list[str]) -> int:
     """Interactive setup for Gate — generates config, validates env, creates dirs."""
     import tomllib
 
-    from gate.config import gate_dir
     from gate import setup
+    from gate.config import gate_dir
 
     parser = make_parser("init", "Set up Gate for a repository.")
     parser.add_argument("--force", action="store_true", help="Overwrite existing config")
@@ -193,8 +193,8 @@ def cmd_add_repo(args: list[str]) -> int:
     import shutil as _shutil
     import tomllib
 
-    from gate.config import gate_dir, get_all_repos, load_config
     from gate import setup
+    from gate.config import gate_dir, get_all_repos, load_config
 
     parser = make_parser("add-repo", "Add a repository to Gate.")
     parser.add_argument("--non-interactive", action="store_true",

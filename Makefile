@@ -1,4 +1,4 @@
-.PHONY: install test lint format ci start restart doctor
+.PHONY: install test lint format typecheck ci start restart doctor
 
 install:
 	pip install -e ".[dev]"
@@ -12,7 +12,10 @@ lint:
 format:
 	ruff format gate/ tests/
 
-ci: format lint test
+typecheck:
+	mypy gate/
+
+ci: format lint typecheck test
 
 start:
 	gate up

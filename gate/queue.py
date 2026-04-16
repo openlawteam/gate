@@ -18,7 +18,7 @@ from gate.orchestrator import ReviewOrchestrator
 
 logger = logging.getLogger(__name__)
 
-MAX_CONCURRENT_REVIEWS = 3
+DEFAULT_MAX_CONCURRENT = 3
 
 
 class ReviewQueue:
@@ -35,8 +35,11 @@ class ReviewQueue:
         self._queue: queue.PriorityQueue = queue.PriorityQueue()
         self._active: dict[tuple[str, int], ReviewOrchestrator] = {}
         self._lock = threading.Lock()
+        max_concurrent = self.config.get("limits", {}).get(
+            "max_concurrent_reviews", DEFAULT_MAX_CONCURRENT
+        )
         self._pool = ThreadPoolExecutor(
-            max_workers=MAX_CONCURRENT_REVIEWS, thread_name_prefix="gate-review"
+            max_workers=max_concurrent, thread_name_prefix="gate-review"
         )
         self._dispatcher = threading.Thread(target=self._dispatch_loop, daemon=True)
         self._running = False
@@ -141,15 +144,28 @@ class ReviewQueue:
             )
             key = (repo, pr_number)
             with self._lock:
+                existing = self._active.get(key)
+                if existing is not None:
+                    logger.info(
+                        f"Cancelling superseded review for {repo} PR #{pr_number}"
+                    )
+                    existing.cancel()
                 self._active[key] = orchestrator
             self._pool.submit(self._run_review, key, orchestrator)
 
     def _run_review(self, key: tuple[str, int], orchestrator: ReviewOrchestrator) -> None:
-        """Run a review in a pool thread. Cleans up active tracking on completion."""
+        """Run a review in a pool thread. Cleans up active tracking on completion.
+
+        Uses identity (``is``) rather than membership to decide whether to remove
+        the entry: if a newer orchestrator has replaced this one in ``_active``
+        (e.g. via ``_dispatch_loop`` superseding a stale run), the newer entry
+        must not be evicted when this older run finishes.
+        """
         try:
             orchestrator.run()
         except Exception:
             logger.exception(f"Unhandled error in review for {key[0]} PR #{key[1]}")
         finally:
             with self._lock:
-                self._active.pop(key, None)
+                if self._active.get(key) is orchestrator:
+                    del self._active[key]

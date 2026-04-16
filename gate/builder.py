@@ -6,6 +6,7 @@ use structured parsers; other project types use generic exit-code-based parsing.
 
 import logging
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -54,49 +55,52 @@ def run_build(worktree: Path, config: dict | None = None) -> dict:
 
     # Typecheck
     if typecheck_cmd:
+        tc_args = shlex.split(typecheck_cmd)
         try:
             tc_result = subprocess.run(
-                typecheck_cmd.split(),
+                tc_args,
                 capture_output=True, text=True, cwd=cwd, timeout=build_timeout,
             )
         except subprocess.TimeoutExpired:
             tc_result = subprocess.CompletedProcess(
-                typecheck_cmd.split(), 1, stdout="", stderr="typecheck timed out",
+                tc_args, 1, stdout="", stderr="typecheck timed out",
             )
     else:
         tc_result = subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
     # Lint
     if lint_cmd:
+        lint_args = shlex.split(lint_cmd)
         try:
             lint_result = subprocess.run(
-                lint_cmd.split(),
+                lint_args,
                 capture_output=True, text=True, cwd=cwd, timeout=build_timeout,
             )
         except subprocess.TimeoutExpired:
             lint_result = subprocess.CompletedProcess(
-                lint_cmd.split(), 1, stdout="", stderr="lint timed out",
+                lint_args, 1, stdout="", stderr="lint timed out",
             )
     else:
         lint_result = subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
     # Tests
     if test_cmd:
+        test_args = shlex.split(test_cmd)
         try:
             test_result = subprocess.run(
-                test_cmd.split(),
+                test_args,
                 capture_output=True, text=True, cwd=cwd, timeout=build_timeout,
             )
         except subprocess.TimeoutExpired:
             test_result = subprocess.CompletedProcess(
-                test_cmd.split(), 1, stdout="", stderr="tests timed out",
+                test_args, 1, stdout="", stderr="tests timed out",
             )
     else:
         test_result = subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
-    tc_tool = typecheck_cmd.split()[0] if typecheck_cmd else ""
-    lint_tool = lint_cmd.split()[0] if lint_cmd else ""
-    test_tool = test_cmd.split()[0] if test_cmd else ""
+    tc_tool = shlex.split(typecheck_cmd)[0] if typecheck_cmd else ""
+    lint_tool = shlex.split(lint_cmd)[0] if lint_cmd else ""
+    test_tool = shlex.split(test_cmd)[0] if test_cmd else ""
 
     return compile_build(
         typecheck_log=tc_result.stdout + tc_result.stderr,

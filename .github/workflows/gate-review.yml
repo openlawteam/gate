@@ -3,8 +3,8 @@
 # All review logic runs in Python/tmux on the self-hosted runner.
 #
 # Branch protection requires check context "gate-review".
-# The Python orchestrator creates Checks API runs with name="gate-review"
-# — same name, so existing branch protection applies automatically.
+# The Python orchestrator creates commit statuses with context="gate-review"
+# — same context name, so existing branch protection applies automatically.
 
 name: Gate Review
 on:

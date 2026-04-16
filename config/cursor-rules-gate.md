@@ -10,9 +10,9 @@
 
 ## 2. Subprocess Safety
 
-- Always use list form for commands, never `shell=True` (the one exception is `fixer._run_silent` for fixed command strings).
+- Always use list form for commands, never `shell=True`.
 - Always include `timeout=` parameter on `subprocess.run`.
-- Always use `capture_output=True, text=True` when parsing output.
+- Always use `capture_output=True, text=True` when parsing output. Exception: `_run_silent` uses `stdout=subprocess.PIPE, stderr=subprocess.STDOUT` for true `2>&1` stream interleaving.
 - Never interpolate external input into subprocess arguments without validation.
 - Convert `Path` to `str()` only at the `cwd=` or argument boundary.
 - FLAG any new `subprocess.Popen` without a timeout/monitoring strategy.
@@ -81,7 +81,7 @@
 
 ## 10. Queue and Concurrency
 
-- `ReviewQueue` uses `ThreadPoolExecutor(max_workers=3)` — never increase without load analysis.
+- `ReviewQueue` uses `ThreadPoolExecutor(max_workers=N)` where `N` comes from `limits.max_concurrent_reviews` in `gate.toml` (default 3). Never raise the default without load analysis.
 - `_active` map uses composite `(repo, pr_number)` keys — never use bare `pr_number`.
 - All shared mutable state must be protected by `threading.Lock`.
 - Background threads must be daemon threads (don't prevent server shutdown).

@@ -46,8 +46,8 @@ class TestCleanupLogs:
         jsonl.write_text("")
 
         with (
-            patch("gate.cleanup.LOGS_DIR", logs),
-            patch("gate.cleanup.REVIEWS_JSONL", jsonl),
+            patch("gate.cleanup.logs_dir", lambda: logs),
+            patch("gate.cleanup.reviews_jsonl", lambda: jsonl),
         ):
             cleanup_logs()
 
@@ -65,7 +65,7 @@ class TestCleanupState:
         recent = state_dir / "pr2"
         recent.mkdir(parents=True)
 
-        with patch("gate.cleanup.gate_dir", return_value=tmp_path):
+        with patch("gate.cleanup.state_dir", lambda: state_dir):
             cleanup_state(max_age_days=30)
 
         assert not old.exists()
@@ -81,7 +81,7 @@ class TestCleanupState:
         old_time = time.time() - 90 * 86400
         os.utime(active, (old_time, old_time))
 
-        with patch("gate.cleanup.gate_dir", return_value=tmp_path):
+        with patch("gate.cleanup.state_dir", lambda: state_dir):
             cleanup_state(max_age_days=30)
 
         assert active.exists()
@@ -98,7 +98,7 @@ class TestCleanupState:
         recent = state_dir / "org-repo" / "pr2"
         recent.mkdir(parents=True)
 
-        with patch("gate.cleanup.gate_dir", return_value=tmp_path):
+        with patch("gate.cleanup.state_dir", lambda: state_dir):
             cleanup_state(max_age_days=30)
 
         assert not old.exists()

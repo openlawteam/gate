@@ -16,7 +16,11 @@ from gate.config import gate_dir
 
 logger = logging.getLogger(__name__)
 
-PROMPTS_DIR = gate_dir() / "prompts"
+
+def prompts_dir() -> Path:
+    """Return the prompts directory (shipped with the package)."""
+    return gate_dir() / "prompts"
+
 
 MAX_DIFF_BYTES = 500_000
 MAX_PR_BODY_BYTES = 50_000
@@ -55,10 +59,11 @@ def load(name: str) -> str:
     Raises:
         FileNotFoundError: If the prompt file doesn't exist.
     """
+    base = prompts_dir()
     if name.endswith(".md"):
-        path = PROMPTS_DIR / name
+        path = base / name
     else:
-        path = PROMPTS_DIR / f"{name}.md"
+        path = base / f"{name}.md"
     if not path.exists():
         raise FileNotFoundError(f"Prompt not found: {path}")
     return path.read_text().strip()

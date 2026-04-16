@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from gate import quota as quota_mod
-from gate.config import gate_dir, load_config, resolve_repo_config
+from gate.config import load_config, resolve_repo_config, socket_path as _default_socket_path
 from gate.orchestrator import ReviewOrchestrator
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ class ReviewQueue:
 
     def __init__(self, config: dict | None = None, socket_path: Path | None = None):
         self.config = config or load_config()
-        self._socket_path = socket_path or Path(gate_dir()) / "server.sock"
+        self._socket_path = socket_path or _default_socket_path()
         self._queue: queue.PriorityQueue = queue.PriorityQueue()
         self._active: dict[tuple[str, int], ReviewOrchestrator] = {}
         self._lock = threading.Lock()

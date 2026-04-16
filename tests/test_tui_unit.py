@@ -85,7 +85,7 @@ class TestParseTimestamp:
 
 class TestReadRecentReviews:
     def test_no_file(self, tmp_path):
-        with patch("gate.tui.REVIEWS_JSONL", tmp_path / "nonexistent.jsonl"):
+        with patch("gate.tui.reviews_jsonl", lambda _p=tmp_path / "nonexistent.jsonl": _p):
             assert read_recent_reviews(8) == []
 
     def test_reads_entries(self, tmp_path):
@@ -96,7 +96,7 @@ class TestReadRecentReviews:
         ]
         jsonl_path.write_text("\n".join(json.dumps(e) for e in entries))
 
-        with patch("gate.tui.REVIEWS_JSONL", jsonl_path):
+        with patch("gate.tui.reviews_jsonl", lambda _p=jsonl_path: _p):
             result = read_recent_reviews(3)
         assert len(result) == 3
         assert result[0]["pr"] == 9
@@ -104,14 +104,14 @@ class TestReadRecentReviews:
     def test_handles_malformed_lines(self, tmp_path):
         jsonl_path = tmp_path / "reviews.jsonl"
         jsonl_path.write_text('{"pr": 1}\n{bad json}\n{"pr": 2}\n')
-        with patch("gate.tui.REVIEWS_JSONL", jsonl_path):
+        with patch("gate.tui.reviews_jsonl", lambda _p=jsonl_path: _p):
             result = read_recent_reviews(5)
         assert len(result) == 2
 
 
 class TestComputeMetrics:
     def test_no_file(self, tmp_path):
-        with patch("gate.tui.REVIEWS_JSONL", tmp_path / "nonexistent.jsonl"):
+        with patch("gate.tui.reviews_jsonl", lambda _p=tmp_path / "nonexistent.jsonl": _p):
             m = compute_metrics()
         assert m["total"] == 0
 
@@ -128,7 +128,7 @@ class TestComputeMetrics:
         ]
         jsonl_path.write_text("\n".join(json.dumps(e) for e in entries))
 
-        with patch("gate.tui.REVIEWS_JSONL", jsonl_path):
+        with patch("gate.tui.reviews_jsonl", lambda _p=jsonl_path: _p):
             m = compute_metrics()
         assert m["total"] == 3
         assert m["approved_pct"] > 0
@@ -141,7 +141,7 @@ class TestComputeMetrics:
         ]
         jsonl_path.write_text("\n".join(json.dumps(e) for e in entries))
 
-        with patch("gate.tui.REVIEWS_JSONL", jsonl_path):
+        with patch("gate.tui.reviews_jsonl", lambda _p=jsonl_path: _p):
             m = compute_metrics()
         assert m["total"] == 0
 

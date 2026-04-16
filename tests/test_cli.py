@@ -109,7 +109,9 @@ class TestCmdInit:
     @patch("gate.config.gate_dir")
     def test_non_interactive(self, mock_dir, mock_val, mock_prereq, mock_env, mock_wf, tmp_path):
         mock_dir.return_value = tmp_path
-        (tmp_path / "config").mkdir()
+        (tmp_path / "config").mkdir(exist_ok=True)
+
+        from gate.config import data_dir
 
         result = cmd_init([
             "--non-interactive", "--repo", "org/repo", "--clone-path", "/tmp/repo",
@@ -119,9 +121,10 @@ class TestCmdInit:
         assert config_path.exists()
         parsed = tomllib.loads(config_path.read_text())
         assert parsed["repo"]["name"] == "org/repo"
-        assert (tmp_path / "state").exists()
-        assert (tmp_path / "logs").exists()
-        assert (tmp_path / "logs" / "live").exists()
+        runtime = data_dir()
+        assert (runtime / "state").exists()
+        assert (runtime / "logs").exists()
+        assert (runtime / "logs" / "live").exists()
 
     @patch("gate.setup.check_prerequisites", return_value=([], True))
     @patch("gate.config.gate_dir")

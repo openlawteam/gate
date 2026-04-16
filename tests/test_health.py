@@ -73,14 +73,15 @@ class TestCheckDiskUsage:
 
 class TestCheckStuckReviews:
     def test_no_state(self, tmp_path):
-        with patch("gate.health.gate_dir", return_value=tmp_path):
+        with patch("gate.health.state_dir", lambda: tmp_path / "nonexistent"):
             result = check_stuck_reviews()
             assert result["ok"] is True
 
     def test_stuck_review(self, tmp_path):
-        state_dir = tmp_path / "state" / "pr42"
-        state_dir.mkdir(parents=True)
-        marker = state_dir / "active_review.json"
+        state_root = tmp_path / "state"
+        pr_dir = state_root / "pr42"
+        pr_dir.mkdir(parents=True)
+        marker = pr_dir / "active_review.json"
         marker.write_text(json.dumps({
             "check_run_id": 123,
             "started_at": time.time() - 9999,
@@ -88,7 +89,7 @@ class TestCheckStuckReviews:
         }))
 
         with (
-            patch("gate.health.gate_dir", return_value=tmp_path),
+            patch("gate.health.state_dir", lambda: state_root),
             patch("gate.health.load_config", return_value={"timeouts": {"hard_timeout_s": 1200}}),
         ):
             result = check_stuck_reviews()
@@ -97,14 +98,15 @@ class TestCheckStuckReviews:
 
 class TestCheckOrphanedCheckRuns:
     def test_no_state(self, tmp_path):
-        with patch("gate.health.gate_dir", return_value=tmp_path):
+        with patch("gate.health.state_dir", lambda: tmp_path / "nonexistent"):
             result = check_orphaned_check_runs()
             assert result["ok"] is True
 
     def test_orphaned_with_dead_pid(self, tmp_path):
-        state_dir = tmp_path / "state" / "pr42"
-        state_dir.mkdir(parents=True)
-        marker = state_dir / "active_review.json"
+        state_root = tmp_path / "state"
+        pr_dir = state_root / "pr42"
+        pr_dir.mkdir(parents=True)
+        marker = pr_dir / "active_review.json"
         marker.write_text(json.dumps({
             "check_run_id": 123,
             "started_at": time.time() - 300,
@@ -113,7 +115,7 @@ class TestCheckOrphanedCheckRuns:
         }))
 
         with (
-            patch("gate.health.gate_dir", return_value=tmp_path),
+            patch("gate.health.state_dir", lambda: state_root),
             patch("gate.health.load_config", return_value={
                 "timeouts": {"hard_timeout_s": 1200},
                 "repo": {"name": "test/repo"},
@@ -129,29 +131,27 @@ class TestCheckOrphanedCheckRuns:
 
 class TestCheckQuotaFreshness:
     def test_no_cache(self, tmp_path):
-        with patch("gate.health.gate_dir", return_value=tmp_path):
+        with patch("gate.health.quota_cache_path", lambda: tmp_path / "nonexistent.json"):
             result = check_quota_freshness()
             assert result["ok"] is True
 
     def test_fresh_cache(self, tmp_path):
-        cache = tmp_path / "state" / "quota-cache.json"
-        cache.parent.mkdir(parents=True)
+        cache = tmp_path / "quota-cache.json"
         cache.write_text("{}")
 
-        with patch("gate.health.gate_dir", return_value=tmp_path):
+        with patch("gate.health.quota_cache_path", lambda: cache):
             result = check_quota_freshness()
             assert result["ok"] is True
 
     def test_stale_cache(self, tmp_path):
         import os
 
-        cache = tmp_path / "state" / "quota-cache.json"
-        cache.parent.mkdir(parents=True)
+        cache = tmp_path / "quota-cache.json"
         cache.write_text("{}")
         old_time = time.time() - 7200
         os.utime(cache, (old_time, old_time))
 
-        with patch("gate.health.gate_dir", return_value=tmp_path):
+        with patch("gate.health.quota_cache_path", lambda: cache):
             result = check_quota_freshness()
             assert result["ok"] is False
 

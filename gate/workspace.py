@@ -13,7 +13,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from gate.config import gate_dir, load_config, repo_slug
+from gate.config import data_dir, load_config, repo_slug
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +100,7 @@ def _install_deps_with_retry(
 ) -> None:
     """Run a dependency install command with retry logic."""
     env = os.environ.copy()
-    env["npm_config_cache"] = str(gate_dir() / "npm-cache")
+    env["npm_config_cache"] = str(data_dir() / "npm-cache")
     for attempt in range(1, max_retries + 1):
         try:
             subprocess.run(

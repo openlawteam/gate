@@ -12,11 +12,11 @@ Stages: prep, design, implement, audit
 """
 
 import logging
-import os
 import sys
 from pathlib import Path
 
 from gate.codex import run_codex
+from gate.io import atomic_write
 from gate.prompt import safe_substitute
 
 logger = logging.getLogger(__name__)
@@ -46,14 +46,6 @@ def _next_version(workspace: Path, stage_name: str) -> int | None:
     while (workspace / f"{stage_name}_{n}.out.md").exists():
         n += 1
     return n
-
-
-def _atomic_write(path: Path, content: str) -> None:
-    """Write content to a file atomically via tmp + rename."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(content)
-    os.replace(tmp, path)
 
 
 def run_code_stage(
@@ -119,7 +111,7 @@ def run_code_stage(
     suffix = stage if version is None else f"{stage}_{version}"
 
     input_path = workspace / f"{suffix}.in.md"
-    _atomic_write(input_path, prompt_text)
+    atomic_write(input_path, prompt_text)
 
     output_path = workspace / f"{suffix}.out.md"
 

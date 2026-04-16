@@ -9,13 +9,19 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from gate.config import gate_dir, repo_slug
+from gate.config import logs_dir, repo_slug
 
 _logger = logging.getLogger(__name__)
 
-LOGS_DIR = gate_dir() / "logs"
-REVIEWS_JSONL = LOGS_DIR / "reviews.jsonl"
-LIVE_DIR = LOGS_DIR / "live"
+
+def reviews_jsonl() -> Path:
+    """Return the path to the reviews.jsonl file."""
+    return logs_dir() / "reviews.jsonl"
+
+
+def live_dir() -> Path:
+    """Return the directory for per-PR live logs."""
+    return logs_dir() / "live"
 
 
 def log_review(
@@ -71,8 +77,9 @@ def log_review(
         "stages_run": stats.get("stages_run", 0),
     }
 
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    with open(REVIEWS_JSONL, "a") as f:
+    logs = logs_dir()
+    logs.mkdir(parents=True, exist_ok=True)
+    with open(logs / "reviews.jsonl", "a") as f:
         f.write(json.dumps(entry) + "\n")
 
     _logger.info(
@@ -100,8 +107,9 @@ def log_fix_result(
         "is_fix_followup": True,
         "review_time_seconds": fix_elapsed_seconds,
     }
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    with open(REVIEWS_JSONL, "a") as f:
+    logs = logs_dir()
+    logs.mkdir(parents=True, exist_ok=True)
+    with open(logs / "reviews.jsonl", "a") as f:
         f.write(json.dumps(entry) + "\n")
 
     _logger.info(
@@ -111,11 +119,12 @@ def log_fix_result(
 
 
 def write_live_log(pr_number: int, message: str, prefix: str = "", repo: str = "") -> None:
-    """Write to ~/gate/logs/live/pr<N>.log for real-time monitoring."""
+    """Write to the live log file for a PR (real-time monitoring)."""
+    base = live_dir()
     if repo:
-        log_dir = LIVE_DIR / repo_slug(repo)
+        log_dir = base / repo_slug(repo)
     else:
-        log_dir = LIVE_DIR
+        log_dir = base
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / f"pr{pr_number}.log"
     ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
@@ -141,10 +150,11 @@ def read_recent_decisions(count: int = 3) -> list[str]:
 
     Returns list of decision strings, most recent first.
     """
-    if not REVIEWS_JSONL.exists():
+    path = reviews_jsonl()
+    if not path.exists():
         return []
 
-    lines = REVIEWS_JSONL.read_text().strip().split("\n")
+    lines = path.read_text().strip().split("\n")
     decisions = []
     for line in reversed(lines):
         if not line.strip():

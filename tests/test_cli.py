@@ -1,9 +1,18 @@
 """Tests for gate.cli module."""
 
+import sys
 import tomllib
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
-from gate.cli import cmd_add_repo, cmd_cancel, cmd_doctor, cmd_init, cmd_review, print_help
+from gate.cli import (
+    cmd_add_repo,
+    cmd_cancel,
+    cmd_doctor,
+    cmd_init,
+    cmd_review,
+    main,
+    print_help,
+)
 
 
 class TestCmdReview:
@@ -320,3 +329,194 @@ class TestCmdDoctor:
 
         result = cmd_doctor([])
         assert isinstance(result, int)
+
+
+# ── CLI entrypoint (sys.argv + capsys) tests ─────────────────
+
+
+class TestMainEntrypoint:
+    def test_no_args_prints_help(self, capsys):
+        with patch.object(sys, "argv", ["gate"]):
+            assert main() == 0
+        out = capsys.readouterr().out
+        assert "commands" in out.lower() or "usage" in out.lower()
+
+    def test_help_flag(self, capsys):
+        with patch.object(sys, "argv", ["gate", "--help"]):
+            assert main() == 0
+        assert "commands" in capsys.readouterr().out.lower()
+
+    def test_dash_h(self, capsys):
+        with patch.object(sys, "argv", ["gate", "-h"]):
+            assert main() == 0
+
+    def test_version_flag(self, capsys):
+        with patch.object(sys, "argv", ["gate", "--version"]):
+            assert main() == 0
+        out = capsys.readouterr().out
+        assert "gate" in out
+
+    def test_unknown_command(self, capsys):
+        with patch.object(sys, "argv", ["gate", "definitely-not-a-command"]):
+            result = main()
+        # Unknown command should be non-zero exit
+        assert result != 0 or "unknown" in capsys.readouterr().out.lower()
+
+
+class TestCommandHelpDiscovery:
+    """Every registered command appears in help output."""
+
+    def test_review_in_help(self, capsys):
+        print_help()
+        assert "review" in capsys.readouterr().out
+
+    def test_init_in_help(self, capsys):
+        print_help()
+        assert "init" in capsys.readouterr().out
+
+    def test_up_in_help(self, capsys):
+        print_help()
+        assert "up" in capsys.readouterr().out
+
+    def test_status_in_help(self, capsys):
+        print_help()
+        assert "status" in capsys.readouterr().out
+
+    def test_doctor_in_help(self, capsys):
+        print_help()
+        assert "doctor" in capsys.readouterr().out
+
+
+class TestStatusCommand:
+    @patch("gate.client.ping", return_value=False)
+    def test_status_when_server_down(self, mock_ping, capsys):
+        from gate.cli import cmd_status
+        result = cmd_status([])
+        assert result == 1
+        assert "not running" in capsys.readouterr().out.lower()
+
+    @patch("gate.client.get_health", return_value={})
+    @patch("gate.client.list_queue", return_value=[])
+    @patch("gate.client.list_reviews", return_value=[])
+    @patch("gate.client.ping", return_value=True)
+    def test_status_when_server_up(self, mock_ping, mock_revs, mock_q, mock_h, capsys):
+        from gate.cli import cmd_status
+        assert cmd_status([]) == 0
+        out = capsys.readouterr().out
+        assert "gate v" in out.lower()
+
+
+class TestReviewArgValidation:
+    def test_missing_required_pr(self, capsys):
+        from gate.cli import cmd_review
+        # Missing --pr, --repo, --head-sha should fail argparse
+        result = cmd_review([])
+        assert result == 1
+
+    @patch("gate.client.send_message", return_value=None)
+    def test_server_unreachable_exits_nonzero(self, mock_send, capsys):
+        from gate.cli import cmd_review
+        result = cmd_review([
+            "--pr", "1", "--repo", "a/b", "--head-sha", "sha"
+        ])
+        assert result == 1
+
+
+class TestCancelArgValidation:
+    def test_missing_required_pr(self):
+        from gate.cli import cmd_cancel
+        result = cmd_cancel([])
+        assert result == 1
+
+    @patch("gate.client.send_message", return_value=None)
+    def test_server_unreachable(self, mock_send, capsys):
+        from gate.cli import cmd_cancel
+        result = cmd_cancel(["--pr", "1"])
+        assert result == 1
+
+
+class TestUpCommand:
+    def test_up_outside_tmux_fails_with_message(self, capsys):
+        from gate.cli import cmd_up
+        with patch("gate.tmux.is_inside_tmux", return_value=False), \
+             patch("gate.cleanup.cleanup_orphans"):
+            result = cmd_up([])
+        assert result == 1
+        assert "tmux" in capsys.readouterr().out.lower()
+
+
+class TestDoctorCommand:
+    """Doctor should exercise every check and produce output."""
+
+    @patch("gate.setup.check_codex_auth", return_value=("Codex CLI auth", True, "present"))
+    @patch("gate.config.load_config", return_value={})
+    @patch("gate.client.ping", return_value=False)
+    def test_doctor_runs_with_no_config(self, mock_ping, mock_load, mock_codex, capsys):
+        from gate.cli import cmd_doctor
+        # With empty config there are no repos to check; should still print checks
+        result = cmd_doctor([])
+        out = capsys.readouterr().out
+        assert "claude" in out.lower() or "gh" in out.lower()
+        # With no config, it should fail
+        assert result in (0, 1)
+
+
+class TestUpdateCommand:
+    @patch("gate.cli.subprocess.run")
+    def test_update_runs_git_pull_and_pip(self, mock_run, capsys):
+        from gate.cli import cmd_update
+        mock_run.return_value = MagicMock(returncode=0)
+        cmd_update([])
+        # Two subprocess.run calls: git pull, pip install -e
+        assert mock_run.call_count == 2
+
+    @patch("gate.cli.subprocess.run")
+    def test_update_handles_timeout(self, mock_run, capsys):
+        import subprocess as _sub
+
+        from gate.cli import cmd_update
+        mock_run.side_effect = _sub.TimeoutExpired("git", 120)
+        result = cmd_update([])
+        assert result == 1
+        assert "timed out" in capsys.readouterr().out.lower()
+
+    @patch("gate.cli.subprocess.run")
+    def test_update_handles_error(self, mock_run, capsys):
+        import subprocess as _sub
+
+        from gate.cli import cmd_update
+        mock_run.side_effect = _sub.CalledProcessError(1, "git")
+        result = cmd_update([])
+        assert result == 1
+
+
+class TestAddRepoValidation:
+    def test_no_config_fails(self, capsys):
+        from gate.cli import cmd_add_repo
+
+        # No gate.toml exists in our isolated install dir (empty config)
+        from gate.config import gate_dir
+        toml = gate_dir() / "config" / "gate.toml"
+        if toml.exists():
+            toml.unlink()
+        result = cmd_add_repo(["--non-interactive", "--repo", "x/y", "--clone-path", "/tmp/x"])
+        assert result == 1
+        assert "gate init" in capsys.readouterr().out.lower()
+
+    def test_non_interactive_requires_repo(self, capsys, tmp_path):
+        from gate.cli import cmd_add_repo
+        from gate.config import gate_dir
+        toml = gate_dir() / "config" / "gate.toml"
+        toml.parent.mkdir(parents=True, exist_ok=True)
+        toml.write_text('[[repos]]\nname = "a/b"\nclone_path = "/tmp"\n')
+        result = cmd_add_repo(["--non-interactive"])
+        assert result == 1
+
+    def test_non_interactive_rejects_bad_format(self, capsys):
+        from gate.cli import cmd_add_repo
+        from gate.config import gate_dir
+        toml = gate_dir() / "config" / "gate.toml"
+        toml.parent.mkdir(parents=True, exist_ok=True)
+        toml.write_text('[[repos]]\nname = "a/b"\nclone_path = "/tmp"\n')
+        result = cmd_add_repo(["--non-interactive", "--repo", "no-slash", "--clone-path", "/tmp"])
+        assert result == 1

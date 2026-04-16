@@ -12,7 +12,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from gate import quota as quota_mod
-from gate.config import load_config, resolve_repo_config, socket_path as _default_socket_path
+from gate.config import load_config, resolve_repo_config
+from gate.config import socket_path as _default_socket_path
 from gate.orchestrator import ReviewOrchestrator
 
 logger = logging.getLogger(__name__)

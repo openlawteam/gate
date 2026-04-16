@@ -20,13 +20,11 @@ If a test needs the *real* package directory (e.g. to validate that a
 shipped prompt parses), request the ``real_gate_dir`` fixture.
 """
 
-import os
 import shutil
 
 import pytest
 
 import gate.config
-
 
 REAL_GATE_DIR = gate.config.GATE_DIR
 REAL_DATA_DIR = gate.config.GATE_DATA_DIR

@@ -1101,11 +1101,13 @@ class GateTUI(App):
     # ── Health Panel ─────────────────────────────────────────
 
     def _refresh_health(self) -> None:
+        from gate.config import socket_path as _socket_path
+
         health = self.server.health if self.server else {}
         t = Text()
         if not health:
-            socket_path = gate_dir() / "server.sock"
-            if socket_path.exists():
+            sock = _socket_path()
+            if sock.exists():
                 t.append("✓ ", style="bright_green")
                 t.append("Server socket\n")
             else:

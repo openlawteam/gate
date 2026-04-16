@@ -11,6 +11,7 @@ Full-featured monitoring dashboard with:
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -53,6 +54,25 @@ GATE_THEME = Theme(
 
 REVIEW_STAGES = ["triage", "build", "architecture", "security", "logic", "verdict"]
 FIX_STAGES = ["fix-bootstrap", "fix-session", "fix-build", "fix-rereview", "fix-commit"]
+
+# Strip ASCII control chars that would break Textual rendering when we write
+# raw tmux-capture output into a RichLog. Keeps \n and \t; preserves printable
+# ASCII and all non-ASCII (e.g. box-drawing glyphs).
+_CTRL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def _sanitize_pane_line(line: str, width: int = 72) -> str:
+    """Make a captured tmux pane line safe to write into a Textual widget.
+
+    Removes carriage returns, backspaces, form feeds, and other control
+    characters that would move the terminal cursor outside the widget's
+    layout box. Truncates to ``width`` so long Claude CLI lines never bleed
+    past the modal border.
+    """
+    cleaned = _CTRL_CHARS.sub("", line)
+    if len(cleaned) > width:
+        cleaned = cleaned[:width] + "..."
+    return cleaned
 
 STATUS_ICONS = {
     "running": "●",
@@ -424,6 +444,7 @@ class ReviewDetailScreen(ModalScreen):
 
     BINDINGS = [
         Binding("escape", "dismiss", "Close"),
+        Binding("s", "switch_pane", "Switch to pane"),
     ]
 
     CSS = """
@@ -478,6 +499,7 @@ class ReviewDetailScreen(ModalScreen):
             yield RichLog(id="detail-pane", max_lines=40, wrap=True)
             with Horizontal(id="detail-buttons"):
                 yield Button("Close", id="btn-close", variant="primary")
+                yield Button("Switch to Pane", id="btn-switch", variant="default")
                 yield Button("Cancel Review", id="btn-cancel", variant="error")
 
     def on_mount(self) -> None:
@@ -525,13 +547,15 @@ class ReviewDetailScreen(ModalScreen):
                 while lines and not lines[-1].strip():
                     lines.pop()
                 for line in lines[-35:]:
-                    log_widget.write(line)
+                    log_widget.write(_sanitize_pane_line(line))
                 return
         log_widget.write(Text("No tmux pane attached to this review.", style="dim"))
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-close":
             self.dismiss()
+        elif event.button.id == "btn-switch":
+            self.action_switch_pane()
         elif event.button.id == "btn-cancel":
             review_id = self._review.get("id", "")
             if review_id and self._server:
@@ -540,6 +564,22 @@ class ReviewDetailScreen(ModalScreen):
                 )
                 self.notify(f"Cancel requested for {review_id}")
             self.dismiss()
+
+    def action_switch_pane(self) -> None:
+        """Switch the tmux focus to the review's live stage pane."""
+        pane_id = self._review.get("tmux_pane", "")
+        if not pane_id:
+            self.notify("No tmux pane attached to this review.", severity="warning")
+            return
+        from gate.claude import switch_to_pane
+
+        if switch_to_pane(pane_id):
+            self.dismiss()
+        else:
+            self.notify(
+                f"Could not switch to pane {pane_id} (window may have closed).",
+                severity="warning",
+            )
 
     def on_key(self, event) -> None:
         focused = self.focused
@@ -860,11 +900,19 @@ class GateTUI(App):
         with Horizontal(id="main"):
             with Vertical(id="left-panel"):
                 yield Static("Active Reviews", classes="section-label-first")
-                yield DataTable(id="reviews-table", cursor_type="row")
+                yield DataTable(
+                    id="reviews-table",
+                    cursor_type="row",
+                    cursor_foreground_priority="renderable",
+                )
                 yield Static("Queue", classes="section-label")
                 yield DataTable(id="queue-table", cursor_type="none")
                 yield Static("Recent Reviews", classes="section-label")
-                yield DataTable(id="recent-table", cursor_type="row")
+                yield DataTable(
+                    id="recent-table",
+                    cursor_type="row",
+                    cursor_foreground_priority="renderable",
+                )
                 with Vertical(id="log-container"):
                     yield Static("Log", id="log-label")
                     yield Horizontal(id="log-panes")

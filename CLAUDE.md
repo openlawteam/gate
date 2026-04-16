@@ -59,11 +59,28 @@ Contributors need to know these before touching the hot paths:
 - **tmux stuck detection is threaded.** The `ReviewRunner` monitor thread can kill a stage pane while the main thread is still reading its output. If you add new pane bookkeeping, guard it with `_panes_lock`.
 - **Module-level path constants will silently leak.** A `FOO = data_dir() / ...` at module scope freezes the value at import time and bypasses test isolation. Use a function.
 
+## Where Codex Lives
+
+Codex is the junior engineer in the fix pipeline. It **never runs in its own tmux window** — looking for a `codex` window will always fail. Gate spawns it three different ways, each invisible in a different way:
+
+1. **Bootstrap (`gate.codex.bootstrap_codex`).** `subprocess.run(..., stdout=PIPE)` with `codex exec --json`. Runs on the orchestrator's pool worker thread. Output is captured in-process to extract the thread id — nothing appears on a terminal.
+2. **In-pane delegation (`gate-code` during `fix-senior`).** The senior Claude runs `gate-code <stage> <<<EOF ... EOF` via its Bash tool. `gate-code` (entry point in [gate/code.py](gate/code.py)) calls `codex.run_codex`, which invokes `codex exec resume <thread-id>`. The Codex subprocess is a child of `claude`, so its stdio inherits the `fix-senior` tmux pane — you see it there as Bash-tool output, *not* a separate window.
+3. **Off-tmux resume (`FixPipeline._resume_fix_session`).** After the first fix iteration, Gate calls `claude --resume` via `subprocess.run` with **no tmux window**. Any further `gate-code` calls run with their stdio attached to the pool worker thread — completely invisible to the TUI.
+
+Where to look for Codex activity:
+
+- **Per-stage output files.** `codex exec` always uses `-o <path>` to write its final message. `gate-code` writes to `{workspace}/{stage}.out.md` (and `.in.md` for the input prompt). These are the canonical "what Codex said" artifacts.
+- **Live PR log.** `logs/live/<slug>/pr<N>.log` has high-level markers like `[fix] Bootstrapping Codex...` via `write_live_log`. Not a transcript — just phase boundaries.
+- **fix-senior tmux pane.** Bash-tool invocations during the first fix iteration are visible as Claude Code interleaves them with its own output. This is the only place you see live Codex.
+- **Orchestrator logs.** `~/Library/Application Support/gate/logs/activity.log` captures any `logger.info/warning` from `codex.py` or `code.py` (e.g. command failures).
+
+Why resume-phase Codex is especially hidden: `_resume_fix_session` calls `claude` with inherited stdio on a background thread, so neither the fix-senior pane nor the TUI sees it. If you need visibility into a long resume session, tail the `.out.md` files in the workspace.
+
 ## Commands
 
 ```bash
 make install    # pip install -e ".[dev]"
-make test       # pytest (~30s for 472 tests)
+make test       # pytest (~1.5 min for ~600 tests)
 make ci         # ruff format + ruff check + pytest
 make lint       # ruff check
 make format     # ruff format

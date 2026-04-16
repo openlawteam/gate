@@ -270,7 +270,13 @@ def _format_resolved(resolved: list[dict]) -> str:
 
 
 def _format_build_section(build: dict | None) -> str:
-    """Format build results. Uses tool names from build result when available."""
+    """Format build results. Uses tool names from build result when available.
+
+    Sections whose tool was not configured (empty ``tool`` field) are omitted
+    so the comment doesn't report false "0 errors" lines for steps that never
+    ran. If no section has a configured tool, the whole Build Results block
+    is dropped.
+    """
     if not build:
         return ""
 
@@ -278,39 +284,45 @@ def _format_build_section(build: dict | None) -> str:
         reason = build.get("skip_reason", "no build commands configured")
         return f"\n### Build Results\n- Build verification skipped ({reason})\n"
 
-    md = "\n### Build Results\n"
+    lines: list[str] = []
 
     tc = build.get("typecheck", build.get("typescript", {}))
-    if tc:
-        tool_name = tc.get("tool") or "Type check"
+    tc_tool = tc.get("tool") if tc else ""
+    if tc and tc_tool:
         if tc.get("pass"):
-            md += f"- {tool_name}: ✅ ({tc.get('error_count', 0)} errors)\n"
+            lines.append(f"- {tc_tool}: ✅ ({tc.get('error_count', 0)} errors)")
         else:
-            md += f"- {tool_name}: ❌ ({tc.get('error_count', '?')} errors)\n"
+            lines.append(f"- {tc_tool}: ❌ ({tc.get('error_count', '?')} errors)")
 
     lint = build.get("lint", {})
-    if lint:
-        lint_name = lint.get("tool") or "Lint"
+    lint_tool = lint.get("tool") if lint else ""
+    if lint and lint_tool:
         if lint.get("pass"):
-            md += f"- {lint_name}: ✅ ({lint.get('warning_count', 0)} warnings)\n"
+            lines.append(f"- {lint_tool}: ✅ ({lint.get('warning_count', 0)} warnings)")
         else:
-            md += (
-                f"- {lint_name}: ❌ ({lint.get('error_count', '?')} errors, "
-                f"{lint.get('warning_count', 0)} warnings)\n"
+            lines.append(
+                f"- {lint_tool}: ❌ ({lint.get('error_count', '?')} errors, "
+                f"{lint.get('warning_count', 0)} warnings)"
             )
 
     tests = build.get("tests", {})
-    if tests:
-        test_name = tests.get("tool") or "Tests"
+    test_tool = tests.get("tool") if tests else ""
+    if tests and test_tool:
+        # Friendlier display for "python -m pytest" style commands
+        display = "pytest" if test_tool == "python" else test_tool
         if tests.get("pass"):
-            md += f"- {test_name}: ✅ ({tests.get('passed', 0)}/{tests.get('total', 0)} passed)\n"
+            lines.append(
+                f"- {display}: ✅ ({tests.get('passed', 0)}/{tests.get('total', 0)} passed)"
+            )
         else:
-            md += (
-                f"- {test_name}: ❌ ({tests.get('failed', 0)} failed, "
-                f"{tests.get('passed', 0)}/{tests.get('total', 0)} passed)\n"
+            lines.append(
+                f"- {display}: ❌ ({tests.get('failed', 0)} failed, "
+                f"{tests.get('passed', 0)}/{tests.get('total', 0)} passed)"
             )
 
-    return md
+    if not lines:
+        return ""
+    return "\n### Build Results\n" + "\n".join(lines) + "\n"
 
 
 def _build_comment(verdict: dict, build: dict | None) -> str:

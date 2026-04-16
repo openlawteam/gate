@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from gate.tui import (
     _parse_timestamp,
+    _sanitize_pane_line,
     compute_metrics,
     format_elapsed,
     format_fix_pipeline,
@@ -168,3 +169,49 @@ class TestFormatFixPipeline:
         plain = result.plain
         for abbrev in ("boo", "ses", "bui", "rer", "com"):
             assert abbrev in plain
+
+
+class TestSanitizePaneLine:
+    def test_strips_carriage_return(self):
+        assert _sanitize_pane_line("hello\rworld") == "helloworld"
+
+    def test_strips_backspace_and_escape(self):
+        # \x1b (ESC), \x08 (BS), \x07 (BEL) are all in the stripped range
+        assert _sanitize_pane_line("\x1b[K\x07clean\x08") == "[Kclean"
+
+    def test_preserves_tab(self):
+        assert _sanitize_pane_line("tab\there") == "tab\there"
+
+    def test_preserves_newline(self):
+        assert _sanitize_pane_line("line\n") == "line\n"
+
+    def test_preserves_printable_ascii(self):
+        s = "Hello, World! 123 @#$%"
+        assert _sanitize_pane_line(s) == s
+
+    def test_preserves_unicode(self):
+        # Box-drawing glyph and accented char should pass through unchanged
+        s = "caf\u00e9 \u2500\u2500\u2500"
+        assert _sanitize_pane_line(s) == s
+
+    def test_truncates_long_line(self):
+        assert _sanitize_pane_line("a" * 100, width=10) == "aaaaaaaaaa..."
+
+    def test_no_truncation_when_under_width(self):
+        assert _sanitize_pane_line("short", width=100) == "short"
+
+    def test_empty_line(self):
+        assert _sanitize_pane_line("") == ""
+
+    def test_truncation_uses_default_width_72(self):
+        line = "x" * 80
+        result = _sanitize_pane_line(line)
+        assert result.endswith("...")
+        assert len(result) == 75  # 72 chars + "..."
+
+    def test_strips_form_feed_vertical_tab(self):
+        # \x0b (VT), \x0c (FF) are in the stripped range
+        assert _sanitize_pane_line("a\x0bb\x0cc") == "abc"
+
+    def test_strips_null_byte(self):
+        assert _sanitize_pane_line("foo\x00bar") == "foobar"

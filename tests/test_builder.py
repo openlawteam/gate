@@ -5,6 +5,7 @@ from gate.builder import (
     _parse_generic,
     _parse_generic_test,
     _parse_lint,
+    _parse_pytest,
     _parse_test,
     _parse_tsc,
     compare_builds,
@@ -203,3 +204,110 @@ class TestCompareBuilds:
         result = compare_builds(before, after)
         assert result["overall_pass"] is True
         assert result["pre_existing_failures_accepted"] is True
+
+
+class TestParsePytest:
+    def test_all_passed(self):
+        log = "tests passed\n624 passed in 95.89s (0:01:35)\n"
+        result = _parse_pytest(log, 0)
+        assert result["pass"] is True
+        assert result["passed"] == 624
+        assert result["failed"] == 0
+        assert result["skipped"] == 0
+        assert result["total"] == 624
+
+    def test_passed_and_skipped(self):
+        log = "624 passed, 6 skipped in 95.89s (0:01:35)\n"
+        result = _parse_pytest(log, 0)
+        assert result["passed"] == 624
+        assert result["skipped"] == 6
+        assert result["total"] == 630
+
+    def test_passed_and_failed(self):
+        log = "1 failed, 45 passed in 35.69s\n"
+        result = _parse_pytest(log, 1)
+        assert result["pass"] is False
+        assert result["passed"] == 45
+        assert result["failed"] == 1
+        assert result["total"] == 46
+
+    def test_failed_passed_skipped_all_present(self):
+        log = "2 failed, 597 passed, 6 skipped in 100s\n"
+        result = _parse_pytest(log, 1)
+        assert result["passed"] == 597
+        assert result["failed"] == 2
+        assert result["skipped"] == 6
+        assert result["total"] == 605
+
+    def test_errors_counted_as_failures(self):
+        log = "3 errors in 5.0s\n"
+        result = _parse_pytest(log, 1)
+        # Collection errors treated as failures for pass/fail semantics
+        assert result["failed"] == 3
+        assert result["total"] == 3
+
+    def test_failed_lines_captured(self):
+        log = (
+            "FAILED tests/test_foo.py::test_bar - AssertionError\n"
+            "FAILED tests/test_baz.py::test_qux - TypeError\n"
+            "2 failed, 10 passed in 1s\n"
+        )
+        result = _parse_pytest(log, 1)
+        assert len(result["failures"]) == 2
+        assert result["failures"][0]["file"] == "tests/test_foo.py::test_bar"
+
+    def test_empty_log(self):
+        result = _parse_pytest("", 0)
+        assert result["passed"] == 0
+        assert result["failed"] == 0
+        assert result["total"] == 0
+        assert result["pass"] is True
+
+    def test_pytest_not_installed_output(self):
+        # Regression: previously _parse_generic_test returned 0/0 even for
+        # successful pytest runs. _parse_pytest should find the counts.
+        log = "pytest ran\n\n100 passed in 5.00s\n"
+        result = _parse_pytest(log, 0)
+        assert result["passed"] == 100
+
+
+class TestCompileBuildPython:
+    def test_python_uses_pytest_parser(self):
+        """Regression: Python project should parse real pytest counts,
+        not return 0/0 like the old generic test parser did."""
+        result = compile_build(
+            typecheck_log="", typecheck_exit=0,
+            lint_log="", lint_exit=0,
+            test_log="624 passed, 6 skipped in 95.89s\n",
+            test_exit=0,
+            project_type="python",
+            test_tool="python",
+        )
+        assert result["tests"]["passed"] == 624
+        assert result["tests"]["total"] == 630
+        assert result["tests"]["skipped"] == 6
+
+    def test_python_failed_tests_captured(self):
+        result = compile_build(
+            typecheck_log="", typecheck_exit=0,
+            lint_log="", lint_exit=0,
+            test_log="1 failed, 20 passed in 3.5s\n",
+            test_exit=1,
+            project_type="python",
+            test_tool="python",
+        )
+        assert result["tests"]["pass"] is False
+        assert result["tests"]["failed"] == 1
+        assert result["tests"]["passed"] == 20
+
+    def test_python_no_tests_configured_still_zero(self):
+        """If test_log is empty (no pytest run), counts should be 0."""
+        result = compile_build(
+            typecheck_log="", typecheck_exit=0,
+            lint_log="", lint_exit=0,
+            test_log="", test_exit=0,
+            project_type="python",
+            test_tool="",
+        )
+        assert result["tests"]["passed"] == 0
+        assert result["tests"]["total"] == 0

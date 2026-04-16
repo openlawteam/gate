@@ -254,3 +254,86 @@ class TestServerEnqueue:
         async with app.run_test() as pilot:
             await pilot.pause()
             assert app.server is server
+
+
+# ── ReviewDetailScreen action_switch_pane ────────────────────
+
+
+class TestSwitchPaneAction:
+    async def test_notifies_when_no_pane_attached(self):
+        """Action should notify (not crash) when the review has no tmux_pane."""
+        from gate.tui import ReviewDetailScreen
+
+        server = MockServer()
+        review = {"id": "r1", "pr_number": 1, "stage": "triage", "status": "running"}
+
+        app = GateTUI(server=server)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = ReviewDetailScreen(review, server=server)
+            await app.push_screen(screen)
+            await pilot.pause()
+            # Action does not crash when tmux_pane is empty
+            screen.action_switch_pane()
+            await pilot.pause()
+
+    async def test_calls_switch_to_pane_when_pane_present(self):
+        """Action should call claude.switch_to_pane with the review's pane id."""
+        from unittest.mock import patch
+
+        from gate.tui import ReviewDetailScreen
+
+        server = MockServer()
+        review = {
+            "id": "r1",
+            "pr_number": 1,
+            "stage": "fix-senior",
+            "status": "fixing",
+            "tmux_pane": "%42",
+        }
+
+        app = GateTUI(server=server)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = ReviewDetailScreen(review, server=server)
+            await app.push_screen(screen)
+            await pilot.pause()
+            with patch("gate.claude.switch_to_pane", return_value=True) as mock_switch:
+                screen.action_switch_pane()
+                await pilot.pause()
+            mock_switch.assert_called_once_with("%42")
+
+    async def test_binding_s_is_registered(self):
+        """Pressing 's' on the modal should invoke action_switch_pane."""
+        from gate.tui import ReviewDetailScreen
+
+        server = MockServer()
+        review = {"id": "r1", "pr_number": 1, "stage": "triage", "status": "running"}
+
+        app = GateTUI(server=server)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = ReviewDetailScreen(review, server=server)
+            await app.push_screen(screen)
+            await pilot.pause()
+            # Verify the binding exists
+            keys = {b.key for b in screen.BINDINGS}
+            assert "s" in keys
+
+    async def test_switch_pane_button_in_modal(self):
+        """The 'Switch to Pane' button should be present in the modal."""
+        from textual.widgets import Button
+
+        from gate.tui import ReviewDetailScreen
+
+        server = MockServer()
+        review = {"id": "r1", "pr_number": 1, "stage": "triage", "status": "running"}
+
+        app = GateTUI(server=server)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = ReviewDetailScreen(review, server=server)
+            await app.push_screen(screen)
+            await pilot.pause()
+            btn = screen.query_one("#btn-switch", Button)
+            assert btn.label.plain == "Switch to Pane"

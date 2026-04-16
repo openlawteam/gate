@@ -393,25 +393,48 @@ class TestSortFindingsBySeverityEdgeCases:
         assert result[0]["severity"] == "error"
 
 
-class TestRunSilentShellTrue:
-    """Regression guard: _run_silent uses shell=True by design.
-
-    This is a known engineering trade-off (audit flagged it). The test pins
-    the current behavior so any change has to be deliberate and explicit.
-    """
+class TestRunSilent:
+    """Cover the hardened _run_silent: no shell, shlex.split for strings,
+    list form passed through, combined stdout+stderr, safe error paths."""
 
     @patch("gate.fixer.subprocess.run")
-    def test_passes_shell_true(self, mock_run):
+    def test_string_cmd_uses_shlex_split(self, mock_run):
         from gate.fixer import _run_silent
-        mock_run.return_value = MagicMock(stdout="", returncode=0)
-        _run_silent("echo hi", cwd="/tmp")
-        assert mock_run.call_args.kwargs["shell"] is True
+        mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+        _run_silent("echo hi arg2", cwd="/tmp")
+        call = mock_run.call_args
+        assert call.args[0] == ["echo", "hi", "arg2"]
+        # shell should not be requested anywhere (default False).
+        assert call.kwargs.get("shell", False) is False
+
+    @patch("gate.fixer.subprocess.run")
+    def test_list_cmd_passed_through(self, mock_run):
+        from gate.fixer import _run_silent
+        mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+        _run_silent(["git", "diff", "HEAD"], cwd="/tmp")
+        call = mock_run.call_args
+        assert call.args[0] == ["git", "diff", "HEAD"]
+        assert call.kwargs.get("shell", False) is False
+
+    @patch("gate.fixer.subprocess.run")
+    def test_returns_combined_stdout_stderr(self, mock_run):
+        from gate.fixer import _run_silent
+        mock_run.return_value = MagicMock(stdout="out", stderr="err", returncode=0)
+        result = _run_silent("noop")
+        assert result == ("outerr", 0)
 
     @patch("gate.fixer.subprocess.run")
     def test_timeout_returns_empty(self, mock_run):
         from gate.fixer import _run_silent
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="x", timeout=1)
         result = _run_silent("sleep 100")
+        assert result == ("", 1)
+
+    def test_invalid_shlex_returns_empty(self):
+        """An unbalanced quote makes shlex.split raise ValueError; the
+        helper must swallow it and return the safe ("", 1) sentinel."""
+        from gate.fixer import _run_silent
+        result = _run_silent("echo 'unterminated")
         assert result == ("", 1)
 
 

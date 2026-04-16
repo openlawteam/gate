@@ -8,6 +8,7 @@ import base64
 import json
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 import time
@@ -101,10 +102,11 @@ def _install_deps_with_retry(
     """Run a dependency install command with retry logic."""
     env = os.environ.copy()
     env["npm_config_cache"] = str(data_dir() / "npm-cache")
+    args = shlex.split(cmd)
     for attempt in range(1, max_retries + 1):
         try:
             subprocess.run(
-                cmd.split(),
+                args,
                 cwd=str(worktree_path),
                 check=True,
                 capture_output=True,

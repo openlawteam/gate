@@ -6,6 +6,7 @@ Single continuous Claude session with Codex delegation.
 import json
 import logging
 import re
+import shlex
 import shutil
 import subprocess
 import threading
@@ -232,24 +233,24 @@ def build_verify(
     build_dir = workspace / "fix-build"
     build_dir.mkdir(exist_ok=True)
 
-    typecheck_tool = typecheck_cmd.split()[0] if typecheck_cmd else ""
-    lint_tool = lint_cmd.split()[0] if lint_cmd else ""
-    test_tool = test_cmd.split()[0] if test_cmd else ""
+    typecheck_tool = shlex.split(typecheck_cmd)[0] if typecheck_cmd else ""
+    lint_tool = shlex.split(lint_cmd)[0] if lint_cmd else ""
+    test_tool = shlex.split(test_cmd)[0] if test_cmd else ""
 
     if typecheck_cmd:
-        tc_out, tc_exit = _run_silent(f"{typecheck_cmd} 2>&1", cwd=cwd)
+        tc_out, tc_exit = _run_silent(typecheck_cmd, cwd=cwd)
     else:
         tc_out, tc_exit = "", 0
     (build_dir / "typecheck.log").write_text(tc_out)
 
     if lint_cmd:
-        lint_out, lint_exit = _run_silent(f"{lint_cmd} 2>&1", cwd=cwd)
+        lint_out, lint_exit = _run_silent(lint_cmd, cwd=cwd)
     else:
         lint_out, lint_exit = "", 0
     (build_dir / "lint.log").write_text(lint_out)
 
     if test_cmd:
-        test_out, test_exit = _run_silent(f"{test_cmd} 2>&1", cwd=cwd)
+        test_out, test_exit = _run_silent(test_cmd, cwd=cwd)
     else:
         test_out, test_exit = "", 0
     (build_dir / "test.log").write_text(test_out)
@@ -294,7 +295,7 @@ def write_diff(workspace: Path) -> None:
 
     Ported from writeDiff() in run-fix-phases.js.
     """
-    diff, _ = _run_silent("git diff HEAD 2>/dev/null", cwd=str(workspace))
+    diff, _ = _run_silent(["git", "diff", "HEAD"], cwd=str(workspace))
     (workspace / "fix-diff.txt").write_text(diff or "(no changes)")
 
 
@@ -380,19 +381,27 @@ def _revert_all(workspace: Path) -> None:
             logger.warning(f"_revert_all {' '.join(cmd)} failed: {e}")
 
 
-def _run_silent(cmd: str, cwd: str | None = None) -> tuple[str, int]:
-    """Run a shell command silently, returning (stdout, exit_code). Never raises."""
+def _run_silent(cmd: str | list[str], cwd: str | None = None) -> tuple[str, int]:
+    """Run a command silently, returning (stdout+stderr, exit_code). Never raises.
+
+    ``cmd`` may be either a string (parsed with ``shlex.split``) or a
+    pre-tokenized argv list. This replaces the earlier ``shell=True`` path so
+    build/lint/test commands from config can never be interpreted as a shell
+    script. ``stderr`` is captured separately and concatenated onto
+    ``stdout`` in the return value, which matches the prior ``2>&1``
+    redirection behavior for callers that parse combined output.
+    """
     try:
+        args = cmd if isinstance(cmd, list) else shlex.split(cmd)
         result = subprocess.run(
-            cmd,
-            shell=True,
+            args,
             capture_output=True,
             text=True,
             cwd=cwd,
             timeout=600,
         )
-        return result.stdout, result.returncode
-    except (subprocess.SubprocessError, OSError):
+        return result.stdout + result.stderr, result.returncode
+    except (subprocess.SubprocessError, OSError, ValueError):
         return "", 1
 
 

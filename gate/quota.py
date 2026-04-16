@@ -32,7 +32,9 @@ QUOTA_EXHAUSTED_THRESHOLD = 95
 def read_keychain_token() -> str | None:
     """Read Claude OAuth token from macOS Keychain.
 
-    Ported from refresh-quota.sh.
+    Ported from refresh-quota.sh. No-op on non-macOS platforms (the
+    ``security`` CLI does not exist there, which raises FileNotFoundError
+    from subprocess.run — caught as OSError below).
     """
     try:
         result = subprocess.run(
@@ -48,7 +50,7 @@ def read_keychain_token() -> str | None:
             return None
         data = json.loads(raw)
         return data.get("claudeAiOauth", {}).get("accessToken")
-    except (subprocess.SubprocessError, json.JSONDecodeError, KeyError):
+    except (subprocess.SubprocessError, OSError, json.JSONDecodeError, KeyError):
         return None
 
 

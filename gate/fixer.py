@@ -707,6 +707,17 @@ class FixPipeline:
         """Resume the fix-senior session with new context.
 
         Writes a resume prompt and spawns a resumed session.
+
+        We run claude with ``--print`` (non-interactive mode) and fully
+        detached stdio so the subprocess never fights the parent process
+        for a TTY. This matters whenever the orchestrator runs inside
+        ``gate up`` (TUI mode): the Textual app owns the terminal, and a
+        child ``claude`` that inherits the same stdio would deadlock both
+        sides. Running headlessly (``gate up --headless``) also benefits:
+        claude no longer tries to render an Ink UI into the LaunchAgent
+        log stream. Output is captured to ``resume-stdout.log`` /
+        ``resume-stderr.log`` in the workspace for debugging.
+
         Returns {fix_json, has_changes}.
         """
         if not self.session_id:
@@ -723,6 +734,7 @@ class FixPipeline:
         cmd = [
             "claude",
             "--dangerously-skip-permissions",
+            "--print",
             "--resume",
             self.session_id,
             "--model",
@@ -732,13 +744,21 @@ class FixPipeline:
             resume_prompt,
         ]
 
+        stdout_path = self.workspace / "resume-stdout.log"
+        stderr_path = self.workspace / "resume-stderr.log"
         try:
-            subprocess.run(
-                cmd,
-                env=env,
-                cwd=str(self.workspace),
-                timeout=self.config.get("timeouts", {}).get("fix_session_s", 2400),
-            )
+            with open(stdout_path, "wb") as out, open(stderr_path, "wb") as err:
+                subprocess.run(
+                    cmd,
+                    env=env,
+                    cwd=str(self.workspace),
+                    timeout=self.config.get("timeouts", {}).get("fix_session_s", 2400),
+                    stdin=subprocess.DEVNULL,
+                    stdout=out,
+                    stderr=err,
+                )
+        except subprocess.TimeoutExpired as e:
+            logger.warning(f"Resume session timed out after {e.timeout}s; killed")
         except (subprocess.SubprocessError, OSError) as e:
             logger.warning(f"Resume session failed: {e}")
 

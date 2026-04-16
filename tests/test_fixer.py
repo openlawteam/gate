@@ -444,3 +444,101 @@ class TestEnforceBlocklistEdgeCases:
              patch("gate.fixer._revert_file"):
             violations = enforce_blocklist(tmp_path)
         assert violations == ["bar.ts"]
+
+
+# ── Resume session TTY-safety (regression test) ──────────────
+
+
+class TestResumeFixSession:
+    """``_resume_fix_session`` must never inherit the parent process's stdio.
+
+    Regression test for the TTY-deadlock bug where running the orchestrator
+    under ``gate up`` (TUI mode) caused the resumed claude subprocess to
+    fight the Textual app for ``/dev/tty``, hanging both indefinitely.
+
+    The fix is: detach stdio (``stdin=DEVNULL`` + file-backed stdout/stderr)
+    and pass ``--print`` so claude runs non-interactively.
+    """
+
+    def _pipeline(self, tmp_path, sample_config):
+        from gate.fixer import FixPipeline
+        verdict = {"decision": "request_changes", "findings": []}
+        return FixPipeline(
+            pr_number=1, repo="a/b", workspace=tmp_path,
+            verdict=verdict, build={}, config=sample_config,
+        )
+
+    def _find_claude_call(self, mock_run):
+        """Return the subprocess.run call that invoked ``claude``.
+
+        ``_resume_fix_session`` also calls subprocess.run indirectly via
+        ``_get_changed_files`` (which shells out to git) after the claude
+        session ends, so we must filter by command name.
+        """
+        for call in mock_run.call_args_list:
+            cmd = call.args[0] if call.args else call.kwargs.get("args", [])
+            if cmd and isinstance(cmd, list) and cmd[0] == "claude":
+                return call
+        raise AssertionError("subprocess.run was never called with claude")
+
+    @patch("gate.fixer.subprocess.run")
+    def test_resume_detaches_stdin(self, mock_run, sample_config, tmp_path):
+        pipe = self._pipeline(tmp_path, sample_config)
+        pipe.session_id = "sess-abc"
+        pipe._resume_fix_session("go fix it")
+        claude_call = self._find_claude_call(mock_run)
+        assert claude_call.kwargs["stdin"] is subprocess.DEVNULL, \
+            "stdin must be DEVNULL to avoid TTY deadlock with parent process"
+
+    @patch("gate.fixer.subprocess.run")
+    def test_resume_redirects_stdout_and_stderr(self, mock_run, sample_config, tmp_path):
+        pipe = self._pipeline(tmp_path, sample_config)
+        pipe.session_id = "sess-abc"
+        pipe._resume_fix_session("go fix it")
+        claude_call = self._find_claude_call(mock_run)
+        # Both should be file handles, not None (which would inherit parent stdio)
+        assert claude_call.kwargs["stdout"] is not None, "stdout must be redirected"
+        assert claude_call.kwargs["stderr"] is not None, "stderr must be redirected"
+        # Log files should be written to the workspace
+        assert (tmp_path / "resume-stdout.log").exists()
+        assert (tmp_path / "resume-stderr.log").exists()
+
+    @patch("gate.fixer.subprocess.run")
+    def test_resume_uses_print_mode(self, mock_run, sample_config, tmp_path):
+        pipe = self._pipeline(tmp_path, sample_config)
+        pipe.session_id = "sess-abc"
+        pipe._resume_fix_session("go fix it")
+        cmd = self._find_claude_call(mock_run).args[0]
+        assert "--print" in cmd, "claude must run with --print for non-interactive mode"
+        assert "--resume" in cmd
+        assert "sess-abc" in cmd
+
+    @patch("gate.fixer.subprocess.run")
+    def test_resume_no_session_id_skips(self, mock_run, sample_config, tmp_path):
+        pipe = self._pipeline(tmp_path, sample_config)
+        pipe.session_id = None
+        result = pipe._resume_fix_session("go fix it")
+        mock_run.assert_not_called()
+        assert result == {"fix_json": None, "has_changes": False}
+
+    @patch("gate.fixer.subprocess.run")
+    def test_resume_handles_timeout_gracefully(self, mock_run, sample_config, tmp_path):
+        def side_effect(cmd, *a, **kw):
+            if cmd and cmd[0] == "claude":
+                raise subprocess.TimeoutExpired(cmd="claude", timeout=2400)
+            # Let non-claude calls (the git probe) succeed with a no-op result
+            return MagicMock(stdout="", returncode=0)
+        mock_run.side_effect = side_effect
+        pipe = self._pipeline(tmp_path, sample_config)
+        pipe.session_id = "sess-abc"
+        # Should NOT raise
+        result = pipe._resume_fix_session("go fix it")
+        assert "fix_json" in result
+        assert "has_changes" in result
+
+    @patch("gate.fixer.subprocess.run")
+    def test_resume_writes_prompt_file(self, mock_run, sample_config, tmp_path):
+        pipe = self._pipeline(tmp_path, sample_config)
+        pipe.session_id = "sess-abc"
+        pipe._resume_fix_session("go fix it")
+        assert (tmp_path / "fix-resume-prompt.md").read_text() == "go fix it"

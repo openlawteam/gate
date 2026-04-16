@@ -10,12 +10,19 @@ import os
 import subprocess
 import urllib.request
 from datetime import datetime, timezone
+from pathlib import Path
 
-from gate.config import gate_dir
+from gate.config import state_dir
+from gate.io import atomic_write
 
 logger = logging.getLogger(__name__)
 
-QUOTA_CACHE_PATH = gate_dir() / "state" / "quota-cache.json"
+
+def quota_cache_path() -> Path:
+    """Return the path to the quota cache file."""
+    return state_dir() / "quota-cache.json"
+
+
 QUOTA_CACHE_MAX_AGE_S = 30 * 60  # 30 minutes
 QUOTA_SESSION_THRESHOLD = 80
 QUOTA_WEEKLY_THRESHOLD = 95
@@ -25,7 +32,9 @@ QUOTA_EXHAUSTED_THRESHOLD = 95
 def read_keychain_token() -> str | None:
     """Read Claude OAuth token from macOS Keychain.
 
-    Ported from refresh-quota.sh.
+    Ported from refresh-quota.sh. No-op on non-macOS platforms (the
+    ``security`` CLI does not exist there, which raises FileNotFoundError
+    from subprocess.run — caught as OSError below).
     """
     try:
         result = subprocess.run(
@@ -41,7 +50,7 @@ def read_keychain_token() -> str | None:
             return None
         data = json.loads(raw)
         return data.get("claudeAiOauth", {}).get("accessToken")
-    except (subprocess.SubprocessError, json.JSONDecodeError, KeyError):
+    except (subprocess.SubprocessError, OSError, json.JSONDecodeError, KeyError):
         return None
 
 
@@ -62,12 +71,16 @@ def _fetch_usage(token: str) -> dict:
 def _write_cache(usage: dict) -> None:
     """Write usage data to cache file."""
     try:
-        QUOTA_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        QUOTA_CACHE_PATH.write_text(json.dumps({
-            "cached_at": datetime.now(timezone.utc).isoformat(),
-            "five_hour": usage.get("five_hour"),
-            "seven_day": usage.get("seven_day"),
-        }))
+        atomic_write(
+            quota_cache_path(),
+            json.dumps(
+                {
+                    "cached_at": datetime.now(timezone.utc).isoformat(),
+                    "five_hour": usage.get("five_hour"),
+                    "seven_day": usage.get("seven_day"),
+                }
+            ),
+        )
     except OSError:
         logger.warning("Failed to write quota cache")
 
@@ -75,7 +88,7 @@ def _write_cache(usage: dict) -> None:
 def _read_cache() -> dict | None:
     """Read cached usage data if fresh enough."""
     try:
-        raw = QUOTA_CACHE_PATH.read_text()
+        raw = quota_cache_path().read_text()
         cached = json.loads(raw)
         cached_at = datetime.fromisoformat(cached["cached_at"])
         age_s = (datetime.now(timezone.utc) - cached_at).total_seconds()

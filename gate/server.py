@@ -57,7 +57,7 @@ class GateServer:
         """Start the server (blocking)."""
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
 
-        log_path = config.gate_dir() / "logs" / "activity.log"
+        log_path = config.logs_dir() / "activity.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         handler = logging.FileHandler(log_path)
         handler.setLevel(logging.INFO)

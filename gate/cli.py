@@ -74,7 +74,7 @@ def cmd_init(args: list[str]) -> int:
     import tomllib
 
     from gate import setup
-    from gate.config import gate_dir
+    from gate.config import data_dir, gate_dir
 
     parser = make_parser("init", "Set up Gate for a repository.")
     parser.add_argument("--force", action="store_true", help="Overwrite existing config")
@@ -159,10 +159,10 @@ def cmd_init(args: list[str]) -> int:
     env_checks = setup.validate_env_vars()
     setup.print_checks(env_checks)
 
-    gate_root = gate_dir()
+    data_root = data_dir()
     for d in ("state", "logs", "logs/live"):
-        (gate_root / d).mkdir(parents=True, exist_ok=True)
-    print("\nCreated state/ and logs/ directories")
+        (data_root / d).mkdir(parents=True, exist_ok=True)
+    print(f"\nCreated runtime directories under {data_root}")
 
     if parsed.non_interactive:
         print("\nTo copy the workflow, run 'gate init' interactively")
@@ -319,10 +319,10 @@ def cmd_review(args: list[str]) -> int:
     import time as _time
 
     from gate.client import send_message
-    from gate.config import gate_dir
+    from gate.config import socket_path as _socket_path
 
     labels = [label.strip() for label in parsed.labels.split(",") if label.strip()]
-    socket_path = gate_dir() / "server.sock"
+    socket_path = _socket_path()
 
     message = {
         "type": "review_request",
@@ -398,7 +398,7 @@ def cmd_process(args: list[str]) -> int:
 @command("up", "Start server and TUI")
 def cmd_up(args: list[str]) -> int:
     """Start the Gate server and TUI dashboard."""
-    from gate.config import gate_dir
+    from gate.config import socket_path as _socket_path
     from gate.tmux import get_current_tmux_location, is_inside_tmux
 
     parser = make_parser("up", "Start the Gate server and TUI.")
@@ -412,7 +412,7 @@ def cmd_up(args: list[str]) -> int:
         parser.print_usage()
         return 1
 
-    socket_path = gate_dir() / "server.sock"
+    socket_path = _socket_path()
 
     from gate.cleanup import cleanup_orphans
     cleanup_orphans()
@@ -439,9 +439,9 @@ def cmd_up(args: list[str]) -> int:
 def cmd_status(args: list[str]) -> int:
     """Print current gate state to stdout."""
     from gate.client import get_health, list_queue, list_reviews, ping
-    from gate.config import gate_dir
+    from gate.config import socket_path as _socket_path
 
-    socket_path = gate_dir() / "server.sock"
+    socket_path = _socket_path()
     if not ping(socket_path):
         print("Gate server not running. Start with: gate up")
         return 1
@@ -490,9 +490,9 @@ def cmd_cancel(args: list[str]) -> int:
         return 1
 
     from gate.client import send_message
-    from gate.config import gate_dir
+    from gate.config import socket_path as _socket_path
 
-    socket_path = gate_dir() / "server.sock"
+    socket_path = _socket_path()
     response = send_message(
         socket_path,
         {"type": "cancel_review", "pr_number": parsed.pr, "repo": parsed.repo},
@@ -677,9 +677,10 @@ def cmd_doctor(args: list[str]) -> int:
     else:
         checks.append(("runner", True, "not configured (optional)"))
 
-    socket_path = gate_root / "server.sock"
-    if socket_path.exists() and ping(socket_path, timeout=2.0):
-        checks.append(("server socket", True, str(socket_path)))
+    from gate.config import socket_path as _socket_path
+    sock = _socket_path()
+    if sock.exists() and ping(sock, timeout=2.0):
+        checks.append(("server socket", True, str(sock)))
     else:
         checks.append(("server socket", False, "not running"))
 

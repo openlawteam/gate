@@ -15,10 +15,16 @@
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <!--
+      Runtime data (logs, state, socket) lives under platformdirs'
+      user_data_dir: ~/Library/Application Support/gate on macOS.
+      Point stdout/stderr there too so LaunchAgent output joins them.
+      Replace USERNAME with your macOS username.
+    -->
     <key>StandardOutPath</key>
-    <string>/path/to/gate/logs/server-stdout.log</string>
+    <string>/Users/USERNAME/Library/Application Support/gate/logs/server-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/path/to/gate/logs/server-stderr.log</string>
+    <string>/Users/USERNAME/Library/Application Support/gate/logs/server-stderr.log</string>
     <key>WorkingDirectory</key>
     <string>/path/to/gate</string>
 </dict>

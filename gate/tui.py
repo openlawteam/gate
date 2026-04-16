@@ -25,11 +25,8 @@ from textual.theme import Theme
 from textual.widgets import Button, DataTable, Footer, Header, RichLog, Static
 
 from gate import __version__
-from gate.config import gate_dir, get_all_repos, load_config, repo_slug
-
-LOGS_DIR = gate_dir() / "logs"
-REVIEWS_JSONL = LOGS_DIR / "reviews.jsonl"
-LIVE_DIR = LOGS_DIR / "live"
+from gate.config import get_all_repos, load_config, repo_slug
+from gate.logger import live_dir, logs_dir, reviews_jsonl
 
 # ── Tokyo Night Theme ────────────────────────────────────────
 
@@ -248,10 +245,11 @@ def format_log_line(line: str) -> Text:
 
 
 def read_recent_reviews(count: int = 8) -> list[dict]:
-    if not REVIEWS_JSONL.exists():
+    path = reviews_jsonl()
+    if not path.exists():
         return []
     try:
-        lines = REVIEWS_JSONL.read_text().strip().split("\n")
+        lines = path.read_text().strip().split("\n")
         entries = []
         for line in reversed(lines[-count * 2 :]):
             if not line.strip():
@@ -288,11 +286,12 @@ def _parse_timestamp(ts) -> float:
 
 
 def compute_metrics() -> dict:
-    if not REVIEWS_JSONL.exists():
+    path = reviews_jsonl()
+    if not path.exists():
         return {"total": 0, "approved_pct": 0, "error_pct": 0, "avg_time": 0}
     try:
         cutoff = time.time() - 86400
-        lines = REVIEWS_JSONL.read_text().strip().split("\n")
+        lines = path.read_text().strip().split("\n")
         total = approved = errors = 0
         durations: list[int] = []
         total_findings = 0
@@ -916,7 +915,7 @@ class GateTUI(App):
 
     def _update_recent_and_metrics(self) -> None:
         try:
-            mtime = REVIEWS_JSONL.stat().st_mtime
+            mtime = reviews_jsonl().stat().st_mtime
         except OSError:
             return
         if mtime == self._last_jsonl_mtime:
@@ -1102,11 +1101,13 @@ class GateTUI(App):
     # ── Health Panel ─────────────────────────────────────────
 
     def _refresh_health(self) -> None:
+        from gate.config import socket_path as _socket_path
+
         health = self.server.health if self.server else {}
         t = Text()
         if not health:
-            socket_path = gate_dir() / "server.sock"
-            if socket_path.exists():
+            sock = _socket_path()
+            if sock.exists():
                 t.append("✓ ", style="bright_green")
                 t.append("Server socket\n")
             else:
@@ -1225,14 +1226,16 @@ class GateTUI(App):
                     pr_list = " ".join(f"#{p}" for _, p in active_reviews)
                 label_widget.update(f"Log [following {pr_list}]")
 
+        logs = logs_dir()
+        live = live_dir()
         for key, pane_info in self._log_panes.items():
             if key == "activity":
-                log_file = LOGS_DIR / "activity.log"
+                log_file = logs / "activity.log"
             elif ":" in key:
                 slug, pr_str = key.split(":", 1)
-                log_file = LIVE_DIR / slug / f"pr{pr_str}.log"
+                log_file = live / slug / f"pr{pr_str}.log"
             else:
-                log_file = LIVE_DIR / f"pr{key}.log"
+                log_file = live / f"pr{key}.log"
 
             try:
                 widget = self.query_one(f"#{pane_info['widget_id']}", RichLog)

@@ -1,36 +1,83 @@
-"""Shared test fixtures for Gate tests."""
+"""Shared test fixtures for Gate tests.
 
+Isolation model (adopted from Hopper's conftest):
+
+The autouse ``isolate_paths`` fixture redirects BOTH the install/package
+directory (``GATE_DIR``) and the runtime data directory (``GATE_DATA_DIR``)
+to per-test temp dirs. Every test gets its own fake filesystem, so:
+
+- No test ever writes to the real ``~/Library/Application Support/gate``
+  (macOS) or ``~/.local/share/gate`` (Linux) runtime directory.
+- No test ever writes to the real repo's ``config/`` or ``logs/`` tree.
+- Tests are function-scoped: each test gets a fresh temp dir with no
+  cross-contamination.
+
+The fixture copies the real ``config/gate.toml`` into the fake install dir
+(if present) so tests that load config still see reasonable defaults. A
+minimal ``prompts/`` is also mirrored so prompt-loading tests keep working.
+
+If a test needs the *real* package directory (e.g. to validate that a
+shipped prompt parses), request the ``real_gate_dir`` fixture.
+"""
+
+import shutil
 
 import pytest
 
 import gate.config
 
 REAL_GATE_DIR = gate.config.GATE_DIR
+REAL_DATA_DIR = gate.config.GATE_DATA_DIR
 
 
-@pytest.fixture(autouse=True, scope="session")
-def isolate_gate_dir(tmp_path_factory):
-    """Redirect gate_dir to a temp directory so tests never write to production logs."""
-    fake_dir = tmp_path_factory.mktemp("gate")
-    (fake_dir / "logs").mkdir()
-    (fake_dir / "state").mkdir()
-    config_src = REAL_GATE_DIR / "config"
-    config_dst = fake_dir / "config"
-    config_dst.mkdir()
-    toml_src = config_src / "gate.toml"
+@pytest.fixture(autouse=True)
+def isolate_paths(tmp_path, monkeypatch):
+    """Redirect GATE_DIR + GATE_DATA_DIR to per-test temp directories.
+
+    Function-scoped so each test gets a clean filesystem. Uses monkeypatch
+    so the teardown is automatic and can't leak between tests.
+    """
+    fake_install = tmp_path / "install"
+    fake_data = tmp_path / "data"
+    (fake_install / "config").mkdir(parents=True)
+    (fake_install / "prompts").mkdir(parents=True)
+    (fake_data / "state").mkdir(parents=True)
+    (fake_data / "logs").mkdir(parents=True)
+
+    toml_src = REAL_GATE_DIR / "config" / "gate.toml"
     if toml_src.exists():
-        (config_dst / "gate.toml").write_text(toml_src.read_text())
-    gate.config.GATE_DIR = fake_dir
-    yield fake_dir
-    gate.config.GATE_DIR = REAL_GATE_DIR
+        (fake_install / "config" / "gate.toml").write_text(toml_src.read_text())
+
+    real_prompts = REAL_GATE_DIR / "prompts"
+    if real_prompts.exists():
+        for entry in real_prompts.iterdir():
+            if entry.is_file() and entry.suffix == ".md":
+                shutil.copy2(entry, fake_install / "prompts" / entry.name)
+
+    monkeypatch.setattr(gate.config, "GATE_DIR", fake_install)
+    monkeypatch.setattr(gate.config, "GATE_DATA_DIR", fake_data)
+    yield tmp_path
 
 
 @pytest.fixture
-def real_gate_dir(isolate_gate_dir):
-    """Temporarily restore the real GATE_DIR for tests that validate the package layout."""
-    gate.config.GATE_DIR = REAL_GATE_DIR
-    yield REAL_GATE_DIR
-    gate.config.GATE_DIR = isolate_gate_dir
+def real_gate_dir(monkeypatch):
+    """Temporarily restore the real GATE_DIR for tests that validate shipped assets."""
+    monkeypatch.setattr(gate.config, "GATE_DIR", REAL_GATE_DIR)
+    return REAL_GATE_DIR
+
+
+@pytest.fixture(autouse=True)
+def clean_gate_env(monkeypatch):
+    """Remove gate-specific env vars so tests default to an unconfigured shell."""
+    for var in (
+        "GATE_PAT",
+        "GATE_NTFY_TOPIC",
+        "GATE_DISCORD_WEBHOOK",
+        "GATE_CODEX_THREAD_ID",
+        "GATE_FIX_WORKSPACE",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+    ):
+        monkeypatch.delenv(var, raising=False)
 
 
 @pytest.fixture

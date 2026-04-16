@@ -73,14 +73,15 @@ class TestCheckDiskUsage:
 
 class TestCheckStuckReviews:
     def test_no_state(self, tmp_path):
-        with patch("gate.health.gate_dir", return_value=tmp_path):
+        with patch("gate.health.state_dir", lambda: tmp_path / "nonexistent"):
             result = check_stuck_reviews()
             assert result["ok"] is True
 
     def test_stuck_review(self, tmp_path):
-        state_dir = tmp_path / "state" / "pr42"
-        state_dir.mkdir(parents=True)
-        marker = state_dir / "active_review.json"
+        state_root = tmp_path / "state"
+        pr_dir = state_root / "pr42"
+        pr_dir.mkdir(parents=True)
+        marker = pr_dir / "active_review.json"
         marker.write_text(json.dumps({
             "check_run_id": 123,
             "started_at": time.time() - 9999,
@@ -88,7 +89,7 @@ class TestCheckStuckReviews:
         }))
 
         with (
-            patch("gate.health.gate_dir", return_value=tmp_path),
+            patch("gate.health.state_dir", lambda: state_root),
             patch("gate.health.load_config", return_value={"timeouts": {"hard_timeout_s": 1200}}),
         ):
             result = check_stuck_reviews()
@@ -97,14 +98,15 @@ class TestCheckStuckReviews:
 
 class TestCheckOrphanedCheckRuns:
     def test_no_state(self, tmp_path):
-        with patch("gate.health.gate_dir", return_value=tmp_path):
+        with patch("gate.health.state_dir", lambda: tmp_path / "nonexistent"):
             result = check_orphaned_check_runs()
             assert result["ok"] is True
 
     def test_orphaned_with_dead_pid(self, tmp_path):
-        state_dir = tmp_path / "state" / "pr42"
-        state_dir.mkdir(parents=True)
-        marker = state_dir / "active_review.json"
+        state_root = tmp_path / "state"
+        pr_dir = state_root / "pr42"
+        pr_dir.mkdir(parents=True)
+        marker = pr_dir / "active_review.json"
         marker.write_text(json.dumps({
             "check_run_id": 123,
             "started_at": time.time() - 300,
@@ -113,7 +115,7 @@ class TestCheckOrphanedCheckRuns:
         }))
 
         with (
-            patch("gate.health.gate_dir", return_value=tmp_path),
+            patch("gate.health.state_dir", lambda: state_root),
             patch("gate.health.load_config", return_value={
                 "timeouts": {"hard_timeout_s": 1200},
                 "repo": {"name": "test/repo"},
@@ -129,29 +131,27 @@ class TestCheckOrphanedCheckRuns:
 
 class TestCheckQuotaFreshness:
     def test_no_cache(self, tmp_path):
-        with patch("gate.health.gate_dir", return_value=tmp_path):
+        with patch("gate.health.quota_cache_path", lambda: tmp_path / "nonexistent.json"):
             result = check_quota_freshness()
             assert result["ok"] is True
 
     def test_fresh_cache(self, tmp_path):
-        cache = tmp_path / "state" / "quota-cache.json"
-        cache.parent.mkdir(parents=True)
+        cache = tmp_path / "quota-cache.json"
         cache.write_text("{}")
 
-        with patch("gate.health.gate_dir", return_value=tmp_path):
+        with patch("gate.health.quota_cache_path", lambda: cache):
             result = check_quota_freshness()
             assert result["ok"] is True
 
     def test_stale_cache(self, tmp_path):
         import os
 
-        cache = tmp_path / "state" / "quota-cache.json"
-        cache.parent.mkdir(parents=True)
+        cache = tmp_path / "quota-cache.json"
         cache.write_text("{}")
         old_time = time.time() - 7200
         os.utime(cache, (old_time, old_time))
 
-        with patch("gate.health.gate_dir", return_value=tmp_path):
+        with patch("gate.health.quota_cache_path", lambda: cache):
             result = check_quota_freshness()
             assert result["ok"] is False
 
@@ -167,3 +167,174 @@ class TestIsPidAlive:
 
     def test_none_pid(self):
         assert _is_pid_alive(None) is False
+
+
+# ── Stale activity detection (new in fix-resume-tty-deadlock) ─
+
+
+class TestCheckStaleActivity:
+    from unittest.mock import patch
+
+    def _make_active_marker(self, pr_dir, started_at):
+        import json
+        pr_dir.mkdir(parents=True, exist_ok=True)
+        (pr_dir / "active_review.json").write_text(json.dumps({
+            "check_run_id": 123,
+            "review_id": pr_dir.name,
+            "started_at": started_at,
+            "head_sha": "abc",
+            "pid": 1,
+            "repo": "a/b",
+        }))
+
+    def test_no_state(self, tmp_path):
+        from unittest.mock import patch
+
+        from gate.health import check_stale_activity
+        with patch("gate.health.state_dir", lambda: tmp_path / "nonexistent" / "state"), \
+             patch("gate.health.logs_dir", lambda: tmp_path / "nonexistent" / "logs"):
+            assert check_stale_activity()["ok"] is True
+
+    def test_fresh_review_never_flags(self, tmp_path):
+        """A review that started recently is never stale, regardless of log state."""
+        import time
+        from unittest.mock import patch
+
+        from gate.health import check_stale_activity
+
+        (tmp_path / "logs" / "live").mkdir(parents=True)
+        pr_dir = tmp_path / "state" / "pr1"
+        self._make_active_marker(pr_dir, started_at=time.time() - 30)
+
+        with patch("gate.health.state_dir", lambda: tmp_path / "state"), \
+             patch("gate.health.logs_dir", lambda: tmp_path / "logs"):
+            result = check_stale_activity()
+        assert result["ok"] is True
+
+    def test_old_review_with_recent_log_is_healthy(self, tmp_path):
+        import os
+        import time
+        from unittest.mock import patch
+
+        from gate.health import check_stale_activity
+
+        pr_dir = tmp_path / "state" / "pr1"
+        # Started 30 min ago
+        self._make_active_marker(pr_dir, started_at=time.time() - 1800)
+
+        # Live log touched recently
+        live_dir = tmp_path / "logs" / "live"
+        live_dir.mkdir(parents=True)
+        log = live_dir / "pr1.log"
+        log.write_text("recent activity\n")
+        os.utime(log, (time.time() - 30, time.time() - 30))
+
+        with patch("gate.health.state_dir", lambda: tmp_path / "state"), \
+             patch("gate.health.logs_dir", lambda: tmp_path / "logs"):
+            result = check_stale_activity()
+        assert result["ok"] is True, result
+
+    def test_old_review_with_stale_log_is_flagged(self, tmp_path):
+        import os
+        import time
+        from unittest.mock import patch
+
+        from gate.health import check_stale_activity
+
+        pr_dir = tmp_path / "state" / "pr1"
+        # Started 30 min ago
+        self._make_active_marker(pr_dir, started_at=time.time() - 1800)
+
+        # Live log last touched 15 min ago (> 10 min threshold)
+        live_dir = tmp_path / "logs" / "live"
+        live_dir.mkdir(parents=True)
+        log = live_dir / "pr1.log"
+        log.write_text("stale\n")
+        stale_time = time.time() - 900
+        os.utime(log, (stale_time, stale_time))
+
+        with patch("gate.health.state_dir", lambda: tmp_path / "state"), \
+             patch("gate.health.logs_dir", lambda: tmp_path / "logs"):
+            result = check_stale_activity()
+        assert result["ok"] is False
+        assert "stale" in result["detail"]
+        assert "pr1" in result["detail"]
+
+    def test_multi_repo_namespaced_log(self, tmp_path):
+        import os
+        import time
+        from unittest.mock import patch
+
+        from gate.health import check_stale_activity
+
+        pr_dir = tmp_path / "state" / "org-repo" / "pr7"
+        self._make_active_marker(pr_dir, started_at=time.time() - 1800)
+
+        live_dir = tmp_path / "logs" / "live" / "org-repo"
+        live_dir.mkdir(parents=True)
+        log = live_dir / "pr7.log"
+        log.write_text("old\n")
+        stale_time = time.time() - 900
+        os.utime(log, (stale_time, stale_time))
+
+        with patch("gate.health.state_dir", lambda: tmp_path / "state"), \
+             patch("gate.health.logs_dir", lambda: tmp_path / "logs"):
+            result = check_stale_activity()
+        assert result["ok"] is False
+        assert "org-repo/pr7" in result["detail"]
+
+    def test_missing_live_log_skips(self, tmp_path):
+        """If there's no live log, we can't tell, so don't flag."""
+        import time
+        from unittest.mock import patch
+
+        from gate.health import check_stale_activity
+
+        pr_dir = tmp_path / "state" / "pr1"
+        self._make_active_marker(pr_dir, started_at=time.time() - 1800)
+        (tmp_path / "logs" / "live").mkdir(parents=True)
+
+        with patch("gate.health.state_dir", lambda: tmp_path / "state"), \
+             patch("gate.health.logs_dir", lambda: tmp_path / "logs"):
+            result = check_stale_activity()
+        assert result["ok"] is True
+
+    def test_corrupt_marker_skips(self, tmp_path):
+        from unittest.mock import patch
+
+        from gate.health import check_stale_activity
+
+        pr_dir = tmp_path / "state" / "pr1"
+        pr_dir.mkdir(parents=True)
+        (pr_dir / "active_review.json").write_text("{not json")
+        (tmp_path / "logs" / "live").mkdir(parents=True)
+
+        with patch("gate.health.state_dir", lambda: tmp_path / "state"), \
+             patch("gate.health.logs_dir", lambda: tmp_path / "logs"):
+            result = check_stale_activity()
+        assert result["ok"] is True
+
+    def test_included_in_run_health_check(self):
+        from unittest.mock import patch
+
+        from gate.health import run_health_check
+
+        with (
+            patch("gate.health.check_sleep_disabled", return_value={"ok": True}),
+            patch("gate.health.check_runner", return_value={"ok": True}),
+            patch("gate.health.check_github_api", return_value={"ok": True}),
+            patch("gate.health.check_tailscale", return_value={"ok": True}),
+            patch("gate.health.check_disk_usage", return_value={"ok": True}),
+            patch("gate.health.check_tmux_session", return_value={"ok": True}),
+            patch("gate.health.check_gate_server", return_value={"ok": True}),
+            patch("gate.health.check_stuck_reviews", return_value={"ok": True}),
+            patch("gate.health.check_stale_activity", return_value={"ok": True}) as m,
+            patch("gate.health.check_orphaned_check_runs", return_value={"ok": True}),
+            patch("gate.health.check_orphaned_tmux_windows", return_value={"ok": True}),
+            patch("gate.health.check_circuit_breaker", return_value={"ok": True}),
+            patch("gate.health.check_quota_freshness", return_value={"ok": True}),
+            patch("gate.health.check_recent_errors", return_value={"ok": True}),
+        ):
+            results = run_health_check()
+        assert "stale_activity" in results
+        m.assert_called_once()

@@ -15,13 +15,19 @@ import time
 from pathlib import Path
 
 from gate import github, notify
-from gate.config import gate_dir, get_all_repos, load_config
+from gate.config import get_all_repos, load_config, logs_dir, socket_path, state_dir
+from gate.io import atomic_write
 from gate.logger import read_recent_decisions
+from gate.quota import quota_cache_path
 
 logger = logging.getLogger(__name__)
 
 ALERT_COOLDOWN_S = 3600
 HARD_TIMEOUT_S = 1200
+# If an active review has made no log activity in this many seconds, flag it.
+# Must be long enough to accommodate slow agent stages (Security/Logic on Opus
+# can take 3-5 minutes of wall time with no intermediate log lines).
+STALE_ACTIVITY_THRESHOLD_S = 600
 
 
 def run_health_check() -> dict:
@@ -35,6 +41,7 @@ def run_health_check() -> dict:
         "tmux_session": check_tmux_session(),
         "gate_server": check_gate_server(),
         "stuck_reviews": check_stuck_reviews(),
+        "stale_activity": check_stale_activity(),
         "orphaned_checks": check_orphaned_check_runs(),
         "orphaned_windows": check_orphaned_tmux_windows(),
         "circuit_breaker": check_circuit_breaker(),
@@ -162,8 +169,7 @@ def check_gate_server() -> dict:
     """Check if the Gate server is running."""
     from gate.client import ping
 
-    socket_path = gate_dir() / "server.sock"
-    ok = ping(socket_path, timeout=2.0)
+    ok = ping(socket_path(), timeout=2.0)
     return {"ok": ok, "detail": "running" if ok else "not running"}
 
 
@@ -172,8 +178,8 @@ def check_stuck_reviews() -> dict:
 
     Handles both legacy (state/pr{N}/) and multi-repo (state/{slug}/pr{N}/) layouts.
     """
-    state_dir = gate_dir() / "state"
-    if not state_dir.exists():
+    state_root = state_dir()
+    if not state_root.exists():
         return {"ok": True, "detail": "no state"}
 
     config = load_config()
@@ -194,7 +200,7 @@ def check_stuck_reviews() -> dict:
         except (json.JSONDecodeError, OSError):
             pass
 
-    for entry in state_dir.iterdir():
+    for entry in state_root.iterdir():
         if not entry.is_dir():
             continue
         if entry.name.startswith("pr"):
@@ -209,6 +215,83 @@ def check_stuck_reviews() -> dict:
     return {"ok": ok, "detail": detail}
 
 
+def check_stale_activity() -> dict:
+    """Detect reviews that are marked active but have stopped making progress.
+
+    Complements ``check_stuck_reviews``, which only trips at the absolute
+    timeout (20 min). This catches reviews that are wedged mid-stage (e.g.
+    the fix pipeline's resume session deadlocked on a TTY) well before the
+    hard timeout, by noticing the per-PR live log hasn't been appended to.
+
+    Uses the mtime of ``logs/live/{slug?}/pr{N}.log`` as the freshness
+    signal because ``write_live_log`` is called at every stage boundary
+    and fix iteration. If the live log hasn't moved in
+    STALE_ACTIVITY_THRESHOLD_S seconds while the active marker is still
+    present, the review is stalled.
+    """
+    state_root = state_dir()
+    if not state_root.exists():
+        return {"ok": True, "detail": "no state"}
+
+    live_root = logs_dir() / "live"
+    now = time.time()
+    stale: list[str] = []
+
+    def _check_pr(pr_dir: Path, slug: str, label: str) -> None:
+        marker = pr_dir / "active_review.json"
+        if not marker.exists():
+            return
+        try:
+            data = json.loads(marker.read_text())
+        except (json.JSONDecodeError, OSError):
+            return
+        started_at = data.get("started_at", 0)
+        if not started_at:
+            return
+        # Give a brand-new review 2x the threshold before we flag it, so a
+        # slow first stage doesn't trip the alarm.
+        review_age = now - started_at
+        if review_age < STALE_ACTIVITY_THRESHOLD_S * 2:
+            return
+
+        pr_num = pr_dir.name.replace("pr", "")
+        candidates = []
+        if slug:
+            candidates.append(live_root / slug / f"pr{pr_num}.log")
+        candidates.append(live_root / f"pr{pr_num}.log")
+
+        log_mtime = 0.0
+        for candidate in candidates:
+            if candidate.exists():
+                try:
+                    log_mtime = candidate.stat().st_mtime
+                    break
+                except OSError:
+                    continue
+
+        if log_mtime == 0.0:
+            # No live log at all — can't tell, don't trip
+            return
+
+        if now - log_mtime > STALE_ACTIVITY_THRESHOLD_S:
+            idle_min = int((now - log_mtime) / 60)
+            stale.append(f"{label} (idle {idle_min}m)")
+
+    for entry in state_root.iterdir():
+        if not entry.is_dir():
+            continue
+        if entry.name.startswith("pr"):
+            _check_pr(entry, "", entry.name)
+        else:
+            for sub in entry.iterdir():
+                if sub.is_dir() and sub.name.startswith("pr"):
+                    _check_pr(sub, entry.name, f"{entry.name}/{sub.name}")
+
+    ok = len(stale) == 0
+    detail = f"{len(stale)} stale: {', '.join(stale)}" if stale else "none"
+    return {"ok": ok, "detail": detail}
+
+
 def check_orphaned_check_runs() -> dict:
     """Find and clean up check runs stuck in_progress with no active review.
 
@@ -216,8 +299,8 @@ def check_orphaned_check_runs() -> dict:
     check run but before completing it, the check blocks the PR forever.
     Handles both legacy (state/pr{N}/) and multi-repo (state/{slug}/pr{N}/) layouts.
     """
-    state_dir = gate_dir() / "state"
-    if not state_dir.exists():
+    state_root = state_dir()
+    if not state_root.exists():
         return {"ok": True, "detail": "no state"}
 
     config = load_config()
@@ -280,7 +363,7 @@ def check_orphaned_check_runs() -> dict:
             logger.warning(f"Review for {label} exceeds timeout but PID {pid} still alive")
 
     default_repo = config.get("repo", {}).get("name", "")
-    for entry in state_dir.iterdir():
+    for entry in state_root.iterdir():
         if not entry.is_dir():
             continue
         if entry.name.startswith("pr"):
@@ -311,10 +394,10 @@ def check_orphaned_tmux_windows() -> dict:
     except (subprocess.SubprocessError, OSError):
         return {"ok": True, "detail": "tmux not available"}
 
-    state_dir = gate_dir() / "state"
+    state_root = state_dir()
     active_review_ids: set[str] = set()
-    if state_dir.exists():
-        for entry in state_dir.iterdir():
+    if state_root.exists():
+        for entry in state_root.iterdir():
             if not entry.is_dir():
                 continue
             if entry.name.startswith("pr"):
@@ -377,7 +460,7 @@ def check_circuit_breaker() -> dict:
 
 def check_quota_freshness() -> dict:
     """Check if quota cache is reasonably fresh."""
-    cache_path = gate_dir() / "state" / "quota-cache.json"
+    cache_path = quota_cache_path()
     if not cache_path.exists():
         return {"ok": True, "detail": "no cache"}
     try:
@@ -429,7 +512,7 @@ def _cleanup_old_worktrees() -> None:
 
 def _send_alerts(results: dict, errors: list[str]) -> None:
     """Send notifications for health check failures with cooldown."""
-    alert_state_path = gate_dir() / "logs" / ".health-alert-state"
+    alert_state_path = logs_dir() / ".health-alert-state"
     alert_state: dict[str, float] = {}
 
     try:
@@ -460,8 +543,7 @@ def _send_alerts(results: dict, errors: list[str]) -> None:
 
     if sent:
         try:
-            alert_state_path.parent.mkdir(parents=True, exist_ok=True)
             lines = [f"{k}={v}" for k, v in alert_state.items()]
-            alert_state_path.write_text("\n".join(lines) + "\n")
+            atomic_write(alert_state_path, "\n".join(lines) + "\n")
         except OSError:
             pass

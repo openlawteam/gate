@@ -21,7 +21,7 @@ class TestFailOpen:
 class TestCache:
     def test_write_and_read(self, tmp_path):
         cache_path = tmp_path / "quota-cache.json"
-        with patch("gate.quota.QUOTA_CACHE_PATH", cache_path):
+        with patch("gate.quota.quota_cache_path", lambda: cache_path):
             _write_cache({"five_hour": {"utilization": 50}, "seven_day": {"utilization": 30}})
             cached = _read_cache()
             assert cached is not None
@@ -29,7 +29,7 @@ class TestCache:
 
     def test_read_missing(self, tmp_path):
         cache_path = tmp_path / "missing.json"
-        with patch("gate.quota.QUOTA_CACHE_PATH", cache_path):
+        with patch("gate.quota.quota_cache_path", lambda: cache_path):
             assert _read_cache() is None
 
 
@@ -43,7 +43,7 @@ class TestCheckQuota:
         cache_path = tmp_path / "quota-cache.json"
         with (
             patch.dict("os.environ", {"CLAUDE_CODE_OAUTH_TOKEN": "test-token"}),
-            patch("gate.quota.QUOTA_CACHE_PATH", cache_path),
+            patch("gate.quota.quota_cache_path", lambda: cache_path),
         ):
             result = check_quota()
             assert result["quota_ok"] is True
@@ -58,7 +58,7 @@ class TestCheckQuota:
         cache_path = tmp_path / "quota-cache.json"
         with (
             patch.dict("os.environ", {"CLAUDE_CODE_OAUTH_TOKEN": "test-token"}),
-            patch("gate.quota.QUOTA_CACHE_PATH", cache_path),
+            patch("gate.quota.quota_cache_path", lambda: cache_path),
         ):
             result = check_quota()
             assert result["quota_ok"] is False
@@ -78,7 +78,7 @@ class TestCheckQuota:
         cache_path = tmp_path / "missing-cache.json"
         with (
             patch.dict("os.environ", {"CLAUDE_CODE_OAUTH_TOKEN": "test-token"}),
-            patch("gate.quota.QUOTA_CACHE_PATH", cache_path),
+            patch("gate.quota.quota_cache_path", lambda: cache_path),
         ):
             result = check_quota()
             assert result["quota_ok"] is True

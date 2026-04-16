@@ -14,8 +14,9 @@ from datetime import datetime
 from pathlib import Path
 
 from gate import notify
-from gate.config import gate_dir, get_all_repos, get_repo_config, load_config, repo_slug
-from gate.logger import LOGS_DIR, REVIEWS_JSONL
+from gate.config import get_all_repos, get_repo_config, load_config, repo_slug, state_dir
+from gate.io import atomic_write
+from gate.logger import logs_dir, reviews_jsonl
 from gate.workspace import prune_worktrees
 
 logger = logging.getLogger(__name__)
@@ -28,32 +29,33 @@ def cleanup_logs(max_log_size_mb: int = 10, max_jsonl_lines: int = 5000) -> None
     - Trims reviews.jsonl to last max_jsonl_lines entries
     - Compresses old rotated logs
     """
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    logs = logs_dir()
+    logs.mkdir(parents=True, exist_ok=True)
 
     for log_name in ("activity.log", "gate.log"):
-        log_path = LOGS_DIR / log_name
+        log_path = logs / log_name
         if not log_path.exists():
             continue
         size_mb = log_path.stat().st_size / (1024 * 1024)
         if size_mb > max_log_size_mb:
             ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-            rotated = LOGS_DIR / f"{log_name}.{ts}"
+            rotated = logs / f"{log_name}.{ts}"
             log_path.rename(rotated)
             _compress_file(rotated)
             logger.info(f"Rotated {log_name} ({size_mb:.1f}MB)")
 
-    if REVIEWS_JSONL.exists():
-        _trim_jsonl(REVIEWS_JSONL, max_jsonl_lines)
+    reviews_path = reviews_jsonl()
+    if reviews_path.exists():
+        _trim_jsonl(reviews_path, max_jsonl_lines)
 
-    disputes = LOGS_DIR / "disputes.jsonl"
+    disputes = logs / "disputes.jsonl"
     if disputes.exists():
         _trim_jsonl(disputes, max_jsonl_lines)
 
-    # Clean up live logs older than 7 days (handles repo-slug subdirs)
-    live_dir = LOGS_DIR / "live"
-    if live_dir.exists():
+    live = logs / "live"
+    if live.exists():
         cutoff = time.time() - 7 * 86400
-        for f in live_dir.iterdir():
+        for f in live.iterdir():
             try:
                 if f.is_file() and f.stat().st_mtime < cutoff:
                     f.unlink()
@@ -67,7 +69,7 @@ def cleanup_logs(max_log_size_mb: int = 10, max_jsonl_lines: int = 5000) -> None
                 pass
 
     # Compress old .log files (not .gz)
-    for f in LOGS_DIR.iterdir():
+    for f in logs.iterdir():
         if f.suffix == ".log" and f.name not in ("activity.log", "gate.log"):
             try:
                 age = time.time() - f.stat().st_mtime
@@ -115,13 +117,13 @@ def cleanup_state(max_age_days: int = 30) -> None:
 
     Handles both legacy (state/pr{N}/) and multi-repo (state/{slug}/pr{N}/) layouts.
     """
-    state_dir = gate_dir() / "state"
-    if not state_dir.exists():
+    state_root = state_dir()
+    if not state_root.exists():
         return
 
     cutoff = time.time() - max_age_days * 86400
     removed = 0
-    for entry in state_dir.iterdir():
+    for entry in state_root.iterdir():
         if not entry.is_dir():
             continue
         if entry.name.startswith("pr"):
@@ -193,8 +195,8 @@ def cleanup_orphans() -> None:
     markers to distinguish live reviews from crash leftovers.
     Handles both legacy (state/pr{N}/) and multi-repo (state/{slug}/pr{N}/) layouts.
     """
-    state_dir = gate_dir() / "state"
-    if not state_dir.exists():
+    state_root = state_dir()
+    if not state_root.exists():
         return
 
     config = load_config()
@@ -228,7 +230,7 @@ def cleanup_orphans() -> None:
         except (OSError, json.JSONDecodeError, ValueError):
             pass
 
-    for entry in state_dir.iterdir():
+    for entry in state_root.iterdir():
         if not entry.is_dir():
             continue
         if entry.name.startswith("pr"):
@@ -277,13 +279,14 @@ def daily_digest() -> None:
 
     Reads the last 24 hours of reviews.jsonl and summarizes.
     """
-    if not REVIEWS_JSONL.exists():
+    reviews_path = reviews_jsonl()
+    if not reviews_path.exists():
         return
 
     cutoff = time.time() - 86400
     reviews = []
     try:
-        for line in REVIEWS_JSONL.read_text().strip().split("\n"):
+        for line in reviews_path.read_text().strip().split("\n"):
             if not line.strip():
                 continue
             try:
@@ -335,12 +338,12 @@ def daily_digest() -> None:
 
 
 def _trim_jsonl(path: Path, max_lines: int) -> None:
-    """Keep only the last max_lines of a JSONL file."""
+    """Keep only the last max_lines of a JSONL file (atomic rewrite)."""
     try:
         lines = path.read_text().strip().split("\n")
         if len(lines) > max_lines:
             trimmed = lines[-max_lines:]
-            path.write_text("\n".join(trimmed) + "\n")
+            atomic_write(path, "\n".join(trimmed) + "\n")
             logger.info(f"Trimmed {path.name}: {len(lines)} -> {max_lines} lines")
     except OSError:
         pass

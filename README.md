@@ -28,7 +28,7 @@ Agent stages run interactively in tmux windows via `gate process`. Structured st
 
 | Requirement | Details |
 |-------------|---------|
-| Python | 3.12+ |
+| Python | 3.11+ |
 | OS | macOS or Linux |
 | tmux | 3.3+ |
 | GitHub CLI | `gh` authenticated |
@@ -182,24 +182,36 @@ gate/
 │   ├── notifications.md
 │   └── remote-access.md
 ├── tests/                     # pytest test suite
-├── logs/                      # Runtime logs
-│   ├── reviews.jsonl          # Structured review log (append-only)
-│   ├── activity.log           # Server activity log
-│   └── live/                  # Per-PR live logs
-├── state/                     # Per-PR state
-│   └── prN/
-│       ├── verdict.json
-│       ├── triage.json
-│       ├── architecture.json
-│       ├── security.json
-│       ├── logic.json
-│       ├── build.json
-│       ├── last_sha.txt
-│       ├── review_count.txt
-│       └── fix_attempts.txt
 ├── pyproject.toml
 ├── Makefile
 └── README.md
+```
+
+Runtime data lives in the OS-native data directory (via `platformdirs`),
+not in the repo tree:
+
+```
+~/Library/Application Support/gate/       # macOS
+~/.local/share/gate/                      # Linux
+├── server.sock                           # Unix socket (IPC)
+├── npm-cache/                            # npm cache for dependency installs
+├── logs/
+│   ├── reviews.jsonl                     # Structured review log (append-only)
+│   ├── activity.log                      # Server activity log
+│   ├── .health-alert-state               # Per-check alert cooldown state
+│   └── live/                             # Per-PR live logs
+└── state/
+    ├── quota-cache.json                  # Anthropic quota cache
+    └── {repo-slug}/prN/                  # Per-PR state
+        ├── verdict.json
+        ├── triage.json
+        ├── architecture.json
+        ├── security.json
+        ├── logic.json
+        ├── build.json
+        ├── last_sha.txt
+        ├── review_count.txt
+        └── fix_attempts.txt
 ```
 
 ## TUI Dashboard

@@ -12,12 +12,25 @@ from gate.logger import (
 )
 
 
+def _patch_logs(logs_dir):
+    """Return a patch context that redirects logger paths to logs_dir."""
+    return patch("gate.logger.logs_dir", lambda: logs_dir)
+
+
+def _patch_live(live_dir_path):
+    return patch("gate.logger.live_dir", lambda: live_dir_path)
+
+
+def _patch_reviews(jsonl):
+    return patch("gate.logger.reviews_jsonl", lambda: jsonl)
+
+
 class TestLogReview:
     def test_appends_to_jsonl(self, tmp_path):
         logs_dir = tmp_path / "logs"
         jsonl = logs_dir / "reviews.jsonl"
 
-        with patch("gate.logger.LOGS_DIR", logs_dir), patch("gate.logger.REVIEWS_JSONL", jsonl):
+        with _patch_logs(logs_dir):
             verdict = {
                 "decision": "approve",
                 "confidence": "high",
@@ -37,7 +50,7 @@ class TestLogReview:
         logs_dir = tmp_path / "logs"
         jsonl = logs_dir / "reviews.jsonl"
 
-        with patch("gate.logger.LOGS_DIR", logs_dir), patch("gate.logger.REVIEWS_JSONL", jsonl):
+        with _patch_logs(logs_dir):
             for i in range(3):
                 log_review(
                     i, {"decision": "approve", "findings": [], "stats": {}}, None, 60
@@ -49,7 +62,7 @@ class TestLogReview:
         logs_dir = tmp_path / "logs"
         jsonl = logs_dir / "reviews.jsonl"
 
-        with patch("gate.logger.LOGS_DIR", logs_dir), patch("gate.logger.REVIEWS_JSONL", jsonl):
+        with _patch_logs(logs_dir):
             verdict = {"decision": "approve", "findings": [], "stats": {}}
             log_review(42, verdict, None, 60, repo="org/repo")
             entry = json.loads(jsonl.read_text().strip())
@@ -59,7 +72,7 @@ class TestLogReview:
 class TestReadRecentDecisions:
     def test_empty_file(self, tmp_path):
         jsonl = tmp_path / "reviews.jsonl"
-        with patch("gate.logger.REVIEWS_JSONL", jsonl):
+        with _patch_reviews(jsonl):
             assert read_recent_decisions() == []
 
     def test_reads_last_n(self, tmp_path):
@@ -72,36 +85,35 @@ class TestReadRecentDecisions:
         ]
         jsonl.write_text("\n".join(entries) + "\n")
 
-        with patch("gate.logger.REVIEWS_JSONL", jsonl):
+        with _patch_reviews(jsonl):
             recent = read_recent_decisions(3)
             assert recent == ["error", "error", "error"]
 
 
 class TestWriteLiveLog:
     def test_creates_log_file(self, tmp_path):
-        live_dir = tmp_path / "live"
-        with patch("gate.logger.LIVE_DIR", live_dir):
+        live = tmp_path / "live"
+        with _patch_live(live):
             write_live_log(42, "Triage starting", "stage")
-            log_file = live_dir / "pr42.log"
+            log_file = live / "pr42.log"
             assert log_file.exists()
             content = log_file.read_text()
             assert "Triage starting" in content
             assert "[stage]" in content
 
-
     def test_repo_namespaced_log(self, tmp_path):
-        live_dir = tmp_path / "live"
-        with patch("gate.logger.LIVE_DIR", live_dir):
+        live = tmp_path / "live"
+        with _patch_live(live):
             write_live_log(42, "Starting review", "stage", repo="org/repo")
-            log_file = live_dir / "org-repo" / "pr42.log"
+            log_file = live / "org-repo" / "pr42.log"
             assert log_file.exists()
             assert "Starting review" in log_file.read_text()
 
     def test_no_repo_uses_flat(self, tmp_path):
-        live_dir = tmp_path / "live"
-        with patch("gate.logger.LIVE_DIR", live_dir):
+        live = tmp_path / "live"
+        with _patch_live(live):
             write_live_log(42, "Starting review", "stage")
-            log_file = live_dir / "pr42.log"
+            log_file = live / "pr42.log"
             assert log_file.exists()
 
 
@@ -111,8 +123,7 @@ class TestLogFixResult:
         logs_dir.mkdir()
         jsonl = logs_dir / "reviews.jsonl"
 
-        with patch("gate.logger.LOGS_DIR", logs_dir), \
-             patch("gate.logger.REVIEWS_JSONL", jsonl):
+        with _patch_logs(logs_dir):
             log_fix_result(
                 42, True, "Fixed 3 issues", "request_changes",
                 repo="org/repo", fix_elapsed_seconds=120,
@@ -128,8 +139,7 @@ class TestLogFixResult:
         logs_dir.mkdir()
         jsonl = logs_dir / "reviews.jsonl"
 
-        with patch("gate.logger.LOGS_DIR", logs_dir), \
-             patch("gate.logger.REVIEWS_JSONL", jsonl):
+        with _patch_logs(logs_dir):
             log_fix_result(42, False, "Build failed", "request_changes")
             entry = json.loads(jsonl.read_text().strip())
             assert entry["review_time_seconds"] == 0

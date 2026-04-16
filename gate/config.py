@@ -1,10 +1,22 @@
-"""Configuration for Gate."""
+"""Configuration for Gate.
+
+``GATE_DIR`` is the package/install root (prompts, workflows, default config
+snippets). ``GATE_DATA_DIR`` is the OS-native runtime data root (state, logs,
+socket, caches) resolved via ``platformdirs``.
+
+Tests override ``GATE_DIR`` and ``GATE_DATA_DIR`` at runtime through the
+isolation fixture, which is why both are mutable module-level globals and why
+``gate_dir()`` / ``data_dir()`` are functions rather than constants.
+"""
 
 import os
 import tomllib
 from pathlib import Path
 
+from platformdirs import user_data_dir
+
 GATE_DIR = Path(__file__).resolve().parent.parent
+GATE_DATA_DIR = Path(user_data_dir("gate"))
 
 MODEL_ALIASES = {
     "sonnet": "sonnet",
@@ -33,8 +45,28 @@ CLAUDE_ENV_KEYS = {
 
 
 def gate_dir() -> Path:
-    """Return the gate root directory."""
+    """Return the gate install/package root (prompts, workflows, defaults)."""
     return GATE_DIR
+
+
+def data_dir() -> Path:
+    """Return the OS-native runtime data directory (state, logs, socket)."""
+    return GATE_DATA_DIR
+
+
+def state_dir() -> Path:
+    """Return the per-PR state directory root."""
+    return data_dir() / "state"
+
+
+def logs_dir() -> Path:
+    """Return the runtime logs directory."""
+    return data_dir() / "logs"
+
+
+def socket_path() -> Path:
+    """Return the default Unix socket path for the Gate server."""
+    return data_dir() / "server.sock"
 
 
 def load_config() -> dict:

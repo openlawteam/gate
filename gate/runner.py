@@ -250,9 +250,14 @@ class ReviewRunner:
 
             _, stderr_data = self._proc.communicate()
 
-            if self._proc.returncode != 0 and stderr_data:
-                error_msg = extract_error_message(stderr_data)
-                return self._proc.returncode, error_msg
+            if self._proc.returncode != 0:
+                if stderr_data:
+                    self._persist_stderr(stderr_data)
+                    error_msg = extract_error_message(stderr_data)
+                    return self._proc.returncode, error_msg
+                logger.warning(
+                    f"[{self.stage}] Claude exited {self._proc.returncode} with no stderr"
+                )
 
             return self._proc.returncode, None
         except FileNotFoundError:
@@ -260,6 +265,20 @@ class ReviewRunner:
             return 127, "claude command not found"
         except KeyboardInterrupt:
             return 130, None
+
+    def _persist_stderr(self, stderr_data: bytes) -> None:
+        """Write Claude's stderr to a sidecar file in the workspace.
+
+        The runner subprocess lives inside a backgrounded tmux window that
+        is torn down shortly after exit (see ``gate/claude.py``), so any
+        stderr we don't persist is unrecoverable. The sidecar gives the
+        operator something concrete to read after the fact.
+        """
+        try:
+            path = self.workspace / f"{self.stage}-runner-stderr.log"
+            path.write_bytes(stderr_data)
+        except OSError as exc:
+            logger.warning(f"Failed to persist runner stderr to {path}: {exc}")
 
     def _wait_and_dismiss_claude(self) -> None:
         """Wait for findings file, screen stability, then send Ctrl-C to exit Claude."""

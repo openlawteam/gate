@@ -57,19 +57,10 @@ class GateServer:
         """Start the server (blocking)."""
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
 
+        from gate.logger import attach_gate_file_handler
+
         log_path = config.logs_dir() / "activity.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        handler = logging.FileHandler(log_path)
-        handler.setLevel(logging.INFO)
-        formatter = logging.Formatter(
-            "%(asctime)s.%(msecs)03d %(name)s %(levelname)s %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
-        handler.setFormatter(formatter)
-        gate_logger = logging.getLogger("gate")
-        gate_logger.setLevel(logging.DEBUG)
-        gate_logger.addHandler(handler)
-        self._log_handler = handler
+        self._log_handler = attach_gate_file_handler(log_path, level=logging.INFO)
 
         if self.socket_path.exists():
             self.socket_path.unlink()

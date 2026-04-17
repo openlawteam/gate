@@ -24,6 +24,37 @@ def live_dir() -> Path:
     return logs_dir() / "live"
 
 
+def runners_dir() -> Path:
+    """Return the directory for per-runner-process log files."""
+    return logs_dir() / "runners"
+
+
+_LOG_FORMATTER = logging.Formatter(
+    "%(asctime)s.%(msecs)03d %(name)s %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+
+def attach_gate_file_handler(
+    log_path: Path, level: int = logging.INFO
+) -> logging.FileHandler:
+    """Attach a FileHandler to the top-level ``gate`` logger.
+
+    Used by both the long-running server (``activity.log``) and the
+    short-lived ``gate process`` runner subprocesses (per-stage runner log)
+    so that ``logger.info(...)`` calls inside ``ReviewRunner`` survive after
+    the tmux pane that hosted them exits.
+    """
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(log_path)
+    handler.setLevel(level)
+    handler.setFormatter(_LOG_FORMATTER)
+    gate_logger = logging.getLogger("gate")
+    gate_logger.setLevel(logging.DEBUG)
+    gate_logger.addHandler(handler)
+    return handler
+
+
 def log_review(
     pr_number: int,
     verdict: dict,

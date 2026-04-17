@@ -361,7 +361,10 @@ def cmd_review(args: list[str]) -> int:
 @command("process", "Run a review stage inside tmux", group="internal")
 def cmd_process(args: list[str]) -> int:
     """Run Claude for a review stage. Internal — runs inside a tmux window."""
+    import logging
+
     from gate.config import load_config
+    from gate.logger import attach_gate_file_handler, runners_dir
     from gate.runner import ReviewRunner
 
     parser = make_parser("process", "Run a review stage inside a tmux window (internal).")
@@ -378,6 +381,16 @@ def cmd_process(args: list[str]) -> int:
         print(f"error: {e}")
         parser.print_usage()
         return 1
+
+    # Attach a per-runner file handler so logger output (including
+    # ReviewRunner._emit_state error messages) survives after the tmux
+    # window exits. Without this, runner crashes lose all diagnostics
+    # because the tmux pane is torn down ~10s after the process dies.
+    try:
+        runner_log = runners_dir() / f"{parsed.review_id}-{parsed.stage}.log"
+        attach_gate_file_handler(runner_log, level=logging.DEBUG)
+    except OSError as e:
+        print(f"warning: could not attach runner log handler: {e}", file=sys.stderr)
 
     config = load_config()
     if parsed.repo:

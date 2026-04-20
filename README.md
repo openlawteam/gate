@@ -14,6 +14,7 @@ GitHub PR push
                       ├─▶ Gate 1–5 (labels, circuit breaker, fix-rerun, quota, cycles)
                       ├─▶ Stage 1: Triage (structured, Sonnet)
                       ├─▶ Stage 2: Build verification
+                      ├─▶ Stage 2.5: Postconditions (structured, Sonnet, high/critical risk only)
                       ├─▶ Stage 3: Architecture review (agent, tmux)
                       ├─▶ Stage 4: Security review (agent, tmux)
                       ├─▶ Stage 5: Logic review (agent, tmux)

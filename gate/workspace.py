@@ -474,6 +474,57 @@ def prepare_context_files(worktree_path: Path, config: dict | None = None) -> No
     )
 
 
+def create_auxiliary_worktree(
+    repo_path: str,
+    branch: str,
+    base_sha: str,
+    label: str = "aux",
+) -> Path:
+    """Create a lightweight worktree for non-review uses (e.g. spec-PR
+    promotion in Phase 5).
+
+    Unlike :func:`create_worktree` this does NOT install dependencies,
+    prepare context files, or trust-register the directory with
+    Claude — it is purely a writable checkout of ``base_sha`` on a new
+    branch ``branch`` from ``repo_path``. Author identity is still set
+    to the bot so commits attribute correctly.
+
+    Returns the worktree path. Callers MUST call
+    :func:`remove_worktree` when done.
+    """
+    config = load_config()
+    repo_cfg = config.get("repo", {})
+    worktree_base = repo_cfg.get("worktree_base", "/tmp/gate-worktrees")
+    unique = f"{int(time.time() * 1000)}-{secrets.token_hex(3)}"
+    worktree_path = Path(worktree_base) / f"{label}-{unique}"
+    resolved_repo = str(Path(repo_path).expanduser())
+
+    subprocess.run(
+        [
+            "git", "worktree", "add",
+            "-b", branch,
+            str(worktree_path), base_sha,
+        ],
+        cwd=resolved_repo,
+        check=True,
+        capture_output=True,
+        timeout=30,
+        env=_git_env(),
+    )
+
+    bot = repo_cfg.get("bot_account", "gate-bot")
+    for key, val in [
+        ("user.name", bot),
+        ("user.email", f"{bot}@users.noreply.github.com"),
+    ]:
+        subprocess.run(
+            ["git", "config", key, val],
+            cwd=str(worktree_path),
+            capture_output=True,
+        )
+    return worktree_path
+
+
 def remove_worktree(worktree_path: Path) -> None:
     """Remove a worktree and its directory."""
     logger.info(f"Removing worktree: {worktree_path}")

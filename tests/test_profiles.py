@@ -74,3 +74,93 @@ class TestResolveProfile:
         expected_keys = set(PROFILES["node"].keys())
         for name, profile in PROFILES.items():
             assert set(profile.keys()) == expected_keys, f"Profile '{name}' has mismatched keys"
+
+
+class TestVerifyCmdField:
+    """Phase 6: verify_cmd must exist on every profile as an empty
+    string default. Absent-means-disabled is the contract the logic
+    prompt's proof-verification section relies on."""
+
+    def test_every_profile_declares_verify_cmd(self):
+        for name, profile in PROFILES.items():
+            assert "verify_cmd" in profile, f"{name} missing verify_cmd"
+            assert profile["verify_cmd"] == "", f"{name} must default to empty"
+
+    def test_resolve_exposes_verify_cmd(self):
+        profile = resolve_profile({"project_type": "rust"})
+        assert profile["verify_cmd"] == ""
+
+    def test_build_override_populates_verify_cmd(self):
+        repo_cfg = {
+            "project_type": "rust",
+            "build": {"verify_cmd": "verus verify lib.rs"},
+        }
+        profile = resolve_profile(repo_cfg)
+        assert profile["verify_cmd"] == "verus verify lib.rs"
+
+
+class TestBuildVarsExposesVerifyCmd:
+    """prompt.build_vars must surface verify_cmd for prompt templates."""
+
+    def test_default_empty(self, tmp_path):
+        from gate import prompt as prompt_mod
+
+        (tmp_path / "diff.txt").write_text("")
+        (tmp_path / "changed_files.txt").write_text("")
+        (tmp_path / "pr-metadata.json").write_text(
+            '{"pr_title":"t","pr_body":"b","pr_author":"a"}'
+        )
+        vars_ = prompt_mod.build_vars(
+            tmp_path, "logic",
+            {"pr_title": "t", "pr_body": "b", "pr_author": "a"},
+            {"repo": {"project_type": "node"}},
+        )
+        assert vars_["verify_cmd"] == ""
+
+    def test_override_surfaces(self, tmp_path):
+        from gate import prompt as prompt_mod
+
+        (tmp_path / "diff.txt").write_text("")
+        (tmp_path / "changed_files.txt").write_text("")
+        (tmp_path / "pr-metadata.json").write_text(
+            '{"pr_title":"t","pr_body":"b","pr_author":"a"}'
+        )
+        vars_ = prompt_mod.build_vars(
+            tmp_path, "logic",
+            {"pr_title": "t", "pr_body": "b", "pr_author": "a"},
+            {
+                "repo": {
+                    "project_type": "rust",
+                    "build": {"verify_cmd": "verus verify {FILE}"},
+                },
+            },
+        )
+        assert vars_["verify_cmd"] == "verus verify {FILE}"
+
+
+class TestPromptAnchorsForProofConfirmed:
+    """Ensure the prompt templates advertise the proof_confirmed tier."""
+
+    def _read(self, name):
+        from gate.prompt import load
+        return load(name)
+
+    def test_logic_lists_proof_confirmed_enum(self):
+        text = self._read("logic")
+        assert "proof_confirmed" in text
+
+    def test_verdict_lists_proof_confirmed_enum(self):
+        text = self._read("verdict")
+        assert "proof_confirmed" in text
+
+    def test_logic_has_proof_section_gated_on_verify_cmd(self):
+        text = self._read("logic")
+        assert "$verify_cmd" in text
+        assert "Proof-Based Verification" in text
+
+    def test_verdict_exempts_proof_confirmed_from_mutation_downgrade(self):
+        text = self._read("verdict")
+        # Exemption clause must mention the tier name and the word "exempt"
+        # so the rule can't silently regress.
+        assert "proof_confirmed" in text.lower()
+        assert "exempt" in text.lower() or "never be downgraded" in text.lower()

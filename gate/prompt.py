@@ -472,6 +472,25 @@ def build_vars(
     architecture = _read_json_file(workspace / "architecture.json")
     security = _read_json_file(workspace / "security.json")
 
+    # Expose `change_intent` as its own template var so logic/verdict
+    # prompts can reference the author's claimed intent without having
+    # to parse the full triage JSON. Defaults to "{}" when triage is
+    # missing or predates the change_intent field — safe for cached
+    # state from older Gate versions.
+    change_intent = (triage or {}).get("change_intent") or {}
+    change_intent_json = json.dumps(change_intent, indent=2)
+
+    # Postconditions stage output. Empty array when the stage was
+    # skipped (low-risk PR, fast-track, or fallback on failure) —
+    # prompts should treat an empty list as "no postconditions to
+    # check" rather than an error.
+    postconditions_parsed = _read_json_file(workspace / "postconditions.json")
+    if isinstance(postconditions_parsed, dict):
+        postconditions_list = postconditions_parsed.get("postconditions") or []
+    else:
+        postconditions_list = []
+    postconditions_json = json.dumps(postconditions_list, indent=2)
+
     repo_cfg = (config or {}).get("repo", {})
     cursor_rules_path = repo_cfg.get("cursor_rules", "")
     if cursor_rules_path:
@@ -482,7 +501,10 @@ def build_vars(
     prior_review_json = _read_file(workspace / "prior-review.json")
     diff_stats = _read_file(workspace / "diff_stats.txt")
 
-    diff_or_summary = build_diff_or_summary(workspace, config=config) if stage == "triage" else diff
+    if stage in ("triage", "postconditions"):
+        diff_or_summary = build_diff_or_summary(workspace, config=config)
+    else:
+        diff_or_summary = diff
 
     verdict = _read_json_file(workspace / "verdict.json")
     fixable_findings = []
@@ -541,6 +563,11 @@ def build_vars(
         "compiled_cursor_rules": cursor_rules,
         "triage_json": triage_json,
         "triage_summary": _stage_summary(triage, "Triage: not yet run"),
+        "change_intent_json": change_intent_json,
+        "postconditions_json": postconditions_json,
+        "postconditions_max_functions": str(
+            limits.get("postconditions_max_functions", 10)
+        ),
         "risk_level": str((triage or {}).get("risk_level") or "medium"),
         "architecture_json": architecture_json,
         "architecture_summary": _stage_summary(
@@ -576,6 +603,18 @@ def build_vars(
             or "(first attempt)"
         ),
         "bot_account": (config or {}).get("repo", {}).get("bot_account", "gate-bot"),
+        # Phase 4: ambiguity halt knobs surfaced to fix-senior.md so the
+        # senior can branch on the repo policy. ``halt_on_ambiguity``
+        # defaults to true (safer for autonomy). ``force_safest_interpretation``
+        # is flipped by the orchestrator after too many fix-reruns with
+        # no author response — tells the senior to pick the safest
+        # interpretation rather than halt indefinitely.
+        "halt_on_ambiguity": json.dumps(
+            bool(repo_cfg.get("halt_on_ambiguity", True))
+        ),
+        "force_safest_interpretation": json.dumps(
+            bool(env_vars.get("force_safest_interpretation", False))
+        ),
         # Project profile variables
         "project_language": profile.get("language", "Unknown"),
         "project_type": profile.get("project_type", ""),
@@ -587,5 +626,10 @@ def build_vars(
         "config_files": profile.get("config_files", ""),
         "env_access_pattern": profile.get("env_access_pattern", ""),
         "import_style": profile.get("import_style", ""),
+        # Phase 6: pass-through verifier command for the `proof_confirmed`
+        # evidence tier. Empty string means "this repo has no verifier";
+        # prompts must gate the proof-verification section on a non-empty
+        # value rather than inventing a command.
+        "verify_cmd": profile.get("verify_cmd", ""),
     }
     return result

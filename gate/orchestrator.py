@@ -7,6 +7,7 @@ Runs each review as a sequence of gates and stages.
 import json
 import logging
 import os
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -366,6 +367,40 @@ class ReviewOrchestrator:
             )
 
             if not fast_track:
+                # === STAGE 2.5: POSTCONDITIONS (structured — inline) ===
+                # Only runs on medium/high/critical risk and only when
+                # the repo has not opted out. Fast-tracked PRs skip
+                # entirely (we're inside `if not fast_track`). Fix
+                # reruns reuse the cached postconditions so Logic sees
+                # the same contract on every iteration.
+                if is_fix_rerun:
+                    cached_pc = self._load_cached_postconditions()
+                    if cached_pc is not None:
+                        # _load_cached_postconditions already writes
+                        # postconditions.json into the workspace.
+                        pass
+                else:
+                    repo_cfg = self.config.get("repo", {})
+                    risk = triage.data.get("risk_level")
+                    if (
+                        repo_cfg.get("enable_postconditions", True)
+                        and risk in ("high", "critical")
+                    ):
+                        if self._cancelled.is_set():
+                            self._emit("review_completed", review_id=review_id, decision="skip")
+                            return
+                        self._update_check("Stage 2.5: Postconditions (Sonnet)...")
+                        self._emit(
+                            "review_stage_update", review_id=review_id,
+                            stage="postconditions", status="running",
+                        )
+                        write_live_log(
+                            self.pr_number, "Postconditions starting",
+                            "stage", repo=self.repo,
+                        )
+                        pc_result = self._run_structured_stage("postconditions")
+                        self._save_stage_result("postconditions", pc_result)
+
                 # === STAGE 3: ARCHITECTURE (agent — tmux) ===
                 if not is_fix_rerun:
                     if self._cancelled.is_set():
@@ -505,9 +540,25 @@ class ReviewOrchestrator:
                 repo=self.repo,
             )
 
+            # === PHASE 5: SPEC-PR PROMOTION (approve path only) ===
+            # On the approve path, the fix pipeline never runs, so any
+            # surviving __gate_test_* files would linger until worktree
+            # teardown. We capture them into state *before* the second
+            # (narrower) cleanup scrubs the worktree.
+            if decision in ("approve", "approve_with_notes"):
+                self._promote_spec_tests(verdict)
+                self._cleanup_underscore_gate_tests()
+
             # === FIX PIPELINE (if warranted) ===
             fix_completed = False
             if self._should_fix(verdict.data):
+                # Phase 4: if the author has left a disambig question
+                # pending for too many fix-reruns, tell the senior to
+                # pick the safest interpretation instead of halting.
+                # Re-written to pr-metadata.json so the fix-senior
+                # runner picks it up via `build_vars`.
+                self._refresh_force_safest_flag()
+
                 self._emit(
                     "review_stage_update", review_id=review_id,
                     stage="fix-bootstrap", status="fixing",
@@ -648,6 +699,10 @@ class ReviewOrchestrator:
                 finally:
                     with self._panes_lock:
                         self._active_panes.pop("fix-senior", None)
+                    # Phase 5: scrub any lingering underscore gate-test
+                    # files so the block-path worktree isn't left dirty.
+                    # Idempotent with the fixer's per-iteration cleanup.
+                    self._cleanup_underscore_gate_tests()
 
             if not fix_completed:
                 self._emit(
@@ -856,6 +911,74 @@ class ReviewOrchestrator:
                 pass
         return StageResult.fallback("triage")
 
+    def _refresh_force_safest_flag(self) -> None:
+        """Phase 4: flip ``force_safest_interpretation`` once the author
+        has left a disambig question pending for too many fix-reruns.
+
+        Reads ``state/<slug>/pr<N>/disambig_stale_count.txt`` (written
+        by :func:`FixPipeline._bump_disambig_stale_count`) and mutates
+        ``pr-metadata.json`` in the worktree so the fix-senior runner
+        sees the flag via :func:`prompt.build_vars`. Fail-open — any
+        exception is swallowed so a broken counter never blocks the
+        fix pipeline.
+        """
+        if not self.workspace:
+            return
+        try:
+            count_path = (
+                state.get_pr_state_dir(self.pr_number, self.repo)
+                / "disambig_stale_count.txt"
+            )
+            if not count_path.exists():
+                return
+            try:
+                count = int(count_path.read_text().strip() or "0")
+            except ValueError:
+                return
+            threshold = int(
+                self.config.get("repo", {}).get(
+                    "max_disambig_stale_retries", 3
+                )
+            )
+            if count < threshold:
+                return
+            meta_path = self.workspace / "pr-metadata.json"
+            if not meta_path.exists():
+                return
+            meta = json.loads(meta_path.read_text())
+            meta["force_safest_interpretation"] = True
+            meta_path.write_text(json.dumps(meta))
+            logger.info(
+                f"PR #{self.pr_number}: forcing safest interpretation "
+                f"after {count} fix-reruns without author response"
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.info(
+                f"PR #{self.pr_number}: could not set "
+                f"force_safest_interpretation: {e}"
+            )
+
+    def _load_cached_postconditions(self) -> StageResult | None:
+        """Load postconditions.json from prior review state (for fix reruns).
+
+        Returns ``None`` if no cached postconditions exist — the caller
+        should treat that as "stage was skipped" rather than falling
+        back to an empty list (which would look like a successful run
+        with no postconditions).
+        """
+        pc_path = state.get_pr_state_dir(self.pr_number, self.repo) / "postconditions.json"
+        if not pc_path.exists():
+            return None
+        try:
+            data = json.loads(pc_path.read_text())
+            if self.workspace:
+                (self.workspace / "postconditions.json").write_text(
+                    json.dumps(data, indent=2)
+                )
+            return StageResult(stage="postconditions", success=True, data=data)
+        except json.JSONDecodeError:
+            return None
+
     def _cleanup_gate_tests(self) -> None:
         """Remove any gate-specific test files from the worktree."""
         if not self.workspace:
@@ -866,6 +989,121 @@ class ReviewOrchestrator:
                     f.unlink()
                 except OSError:
                     pass
+
+    def _cleanup_underscore_gate_tests(self) -> None:
+        """Phase 5: narrower cleanup for ``__gate_test_*`` /
+        ``__gate_fix_test_*`` files left behind by the logic stage.
+
+        Kept separate from :meth:`_cleanup_gate_tests` (which runs
+        pre-verdict) because these files must survive long enough for
+        :meth:`_promote_spec_tests` to capture them on the approve path.
+        Idempotent — running twice is a no-op.
+        """
+        if not self.workspace:
+            return
+        for pattern in ("**/__gate_test_*", "**/__gate_fix_test_*"):
+            for f in self.workspace.glob(pattern):
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+
+    def _promote_spec_tests(self, verdict: "StageResult") -> None:
+        """Phase 5: capture verified logic-stage tests into per-PR
+        state and (if ``persist_spec_tests`` is enabled) open a
+        follow-up spec PR.
+
+        Fail-open: any error below must be logged and swallowed so the
+        original review's success is never tainted. This is the L4
+        audit-fix invariant.
+        """
+        if not self.workspace:
+            return
+        try:
+            repo_cfg = self.config.get("repo", {})
+            if not repo_cfg.get("persist_spec_tests", False):
+                return
+            findings_path = self.workspace / "logic-findings.json"
+            if not findings_path.exists():
+                return
+            try:
+                data = json.loads(findings_path.read_text())
+            except (json.JSONDecodeError, OSError):
+                return
+            tests = data.get("tests_written") or []
+            qualifying: list[dict] = []
+            for t in tests:
+                if not isinstance(t, dict):
+                    continue
+                if t.get("intent_type") != "confirmed_correct":
+                    continue
+                mc = t.get("mutation_check") or {}
+                # A mutant that *fails* the test proves discrimination.
+                if mc.get("result") != "fail":
+                    continue
+                qualifying.append(t)
+            if not qualifying:
+                return
+
+            max_files = int(repo_cfg.get("spec_pr_max_files", 5))
+            qualifying = qualifying[: max(0, max_files)]
+
+            pr_state_dir = state.get_pr_state_dir(self.pr_number, self.repo)
+            sidecar = pr_state_dir / "spec_tests"
+            sidecar.mkdir(parents=True, exist_ok=True)
+
+            captured: list[Path] = []
+            for t in qualifying:
+                rel = t.get("file") or t.get("path") or ""
+                if not rel:
+                    continue
+                src = self.workspace / rel
+                if not src.exists():
+                    # Fallback: glob for the __gate_test_* filename.
+                    matches = list(self.workspace.glob(f"**/{Path(rel).name}"))
+                    if matches:
+                        src = matches[0]
+                    else:
+                        continue
+                dst = sidecar / src.name
+                try:
+                    shutil.copy2(src, dst)
+                    captured.append(dst)
+                except OSError as e:
+                    logger.info(
+                        f"PR #{self.pr_number}: spec sidecar copy failed "
+                        f"for {src}: {e}"
+                    )
+            if not captured:
+                return
+
+            try:
+                from gate import spec_pr
+                base_sha = (
+                    self.config.get("repo", {}).get("default_branch_sha")
+                    or self.head_sha
+                )
+                pr_num = spec_pr.create_spec_pr(
+                    repo=self.repo,
+                    pr_number=self.pr_number,
+                    spec_files=captured,
+                    base_sha=base_sha,
+                    clone_path=self._clone_path(),
+                    config=self.config,
+                )
+                if pr_num:
+                    logger.info(
+                        f"PR #{self.pr_number}: opened spec PR #{pr_num}"
+                    )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    f"PR #{self.pr_number}: spec PR creation failed "
+                    f"(original PR unaffected): {e}"
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                f"PR #{self.pr_number}: _promote_spec_tests crashed: {e}"
+            )
 
     def _write_active_marker(self) -> None:
         """Write marker for orphaned check run recovery."""

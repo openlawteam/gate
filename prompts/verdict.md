@@ -14,6 +14,12 @@ review stage.
 ### Triage
 $triage_json
 
+### Author's Claimed Intent (from triage)
+$change_intent_json
+
+### Postconditions (from postconditions stage, high-risk PRs only)
+$postconditions_json
+
 ### Build Verification
 $build_json
 
@@ -75,18 +81,47 @@ You are the sole authority on final severity. Stage outputs provide raw findings
   a) A finding backed by a failing gate test (`evidence_level: "test_confirmed"`)
   b) A concrete code trace showing definitively incorrect output (`evidence_level: "code_trace"`) — e.g., "input X at line Y produces Z, but the correct output is W"
   c) A provable crash/exception path — e.g., uncaught null dereference with a concrete trigger
+  d) A zero-exit / counter-example from the repository's verifier (`evidence_level: "proof_confirmed"`) — strongest tier, ranked ABOVE `test_confirmed`/`code_trace`. Counts as `test_confirmed`-equivalent for every decision rule in this prompt. NEVER downgradable by the mutation-check rule below.
 
-If a stage labeled something "error" but the finding lacks evidence (a), (b), or (c), downgrade it to **warning**.
+If a stage labeled something "error" but the finding lacks evidence (a), (b), (c), or (d), downgrade it to **warning**.
+
+### Mutation-check requirement for `test_confirmed`
+
+A finding cited as `evidence_level: "test_confirmed"` MUST reference an entry in `tests_written[]` from the Logic stage. For that entry:
+
+- If `tests_written[i].mutation_check` is missing, OR
+- If `tests_written[i].mutation_check.result == "pass"` (the mutation did not change the test outcome, meaning the test is not discriminating), OR
+- If `tests_written[i].intent_type == "inconclusive"`,
+
+then the finding MUST be downgraded to `evidence_level: "pattern_match"` (and its severity re-evaluated under the normal rules — usually `warning`). The only exception is an `evidence_level: "proof_confirmed"` finding (see below), which is exempt because proofs are exhaustive by definition.
+
+Passing tests without a mutation check are not evidence; they are assumptions.
 
 **warning** — A plausible concern supported by code evidence, but incorrect behavior has not been confirmed. (`evidence_level: "pattern_match"`)
 
 **info** — Style, convention, defense-in-depth suggestion, or theoretical risk. (`evidence_level: "speculative"`)
 
+## Postcondition-Based Findings Rule
+
+When `$postconditions_json` is non-empty and a finding references a specific postcondition by index or function path:
+
+- That finding is **stronger evidence** than a free-form correctness claim, because the postcondition was extracted before the code was reviewed — it is not a post-hoc rationalization.
+- Do NOT downgrade such findings to `info` under the "too speculative" rule. A postcondition violation backed by a `code_trace` or `test_confirmed` is error severity even when the reviewer's prose is terse.
+- `confidence: "low"` postconditions MAY be used for `info` findings but not for `error` findings.
+
+## Intent-Mismatch Rule
+
+Consult `$change_intent_json`:
+
+- If the author set `claimed_no_behavior_change: true` AND the Logic stage produced a finding demonstrating the diff alters behavior (category `completeness`, message mentions intent mismatch), the decision MUST be at minimum `approve_with_notes`. This is not a correctness error — just a description drift that the author should acknowledge before merging.
+- If `change_intent.confidence == "low"` or `change_intent` is empty, this rule does NOT apply — there is no claim strong enough to contradict.
+- Intent mismatches never by themselves escalate to `request_changes`. They are context, not blockers.
+
 ## Decision Rules
 
 **Approve** if:
 - Build passes (typecheck, lint, tests)
-- No error-severity findings with `introduced_by_pr: true` AND `evidence_level` of `test_confirmed` or `code_trace`
+- No error-severity findings with `introduced_by_pr: true` AND `evidence_level` of `proof_confirmed`, `test_confirmed`, or `code_trace`
 - No critical or high security findings introduced by this PR
 - No warning-level findings with `introduced_by_pr: true`
 - Info-level findings are allowed — they are context, not action items, and do NOT prevent a clean approve
@@ -100,7 +135,7 @@ If a stage labeled something "error" but the finding lacks evidence (a), (b), or
 - Build fails (typecheck/build errors, test failures)
 - Critical or high security finding **introduced by this PR** with a concrete exploit scenario
 - Architecture error that will cause runtime failure (not a convention warning)
-- Logic error with `evidence_level` of `test_confirmed` or `code_trace` and `introduced_by_pr: true`
+- Logic error with `evidence_level` of `proof_confirmed`, `test_confirmed`, or `code_trace` and `introduced_by_pr: true`
 
 ## Re-review Graduation
 
@@ -149,7 +184,7 @@ Respond with ONLY valid JSON (no markdown fences). Do NOT generate a PR comment 
     {
       "source_stage": "build | architecture | security | logic",
       "severity": "critical | error | warning | info",
-      "evidence_level": "test_confirmed | code_trace | pattern_match | speculative",
+      "evidence_level": "proof_confirmed | test_confirmed | code_trace | pattern_match | speculative",
       "file": "path/to/source.file",
       "line": 42,
       "introduced_by_pr": true,

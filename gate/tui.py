@@ -52,7 +52,15 @@ GATE_THEME = Theme(
 
 # ── Constants ────────────────────────────────────────────────
 
-REVIEW_STAGES = ["triage", "build", "architecture", "security", "logic", "verdict"]
+REVIEW_STAGES = [
+    "triage",
+    "build",
+    "postconditions",
+    "architecture",
+    "security",
+    "logic",
+    "verdict",
+]
 FIX_STAGES = ["fix-bootstrap", "fix-session", "fix-build", "fix-rereview", "fix-commit"]
 
 # Strip ASCII control chars that would break Textual rendering when we write
@@ -117,6 +125,7 @@ DECISION_COLORS = {
 STAGE_COLORS = {
     "triage": "bright_cyan",
     "build": "bright_blue",
+    "postconditions": "bright_cyan",
     "architecture": "bright_magenta",
     "security": "bright_red",
     "logic": "bright_yellow",

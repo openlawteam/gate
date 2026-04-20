@@ -28,6 +28,26 @@ class TestStageSchemas:
         assert "fast_track_eligible" in schema["properties"]
         assert "change_type" in schema["required"]
 
+    def test_triage_schema_includes_change_intent_optional(self):
+        """change_intent is an optional field — older cached triage.json
+        (without it) must still validate."""
+        schema = STAGE_SCHEMAS["triage"]
+        assert "change_intent" in schema["properties"]
+        change_intent = schema["properties"]["change_intent"]
+        assert change_intent["type"] == "object"
+        props = change_intent["properties"]
+        for key in (
+            "claimed_behavioral_delta",
+            "claimed_bug_fixed",
+            "claimed_tests_updated",
+            "claimed_no_behavior_change",
+            "confidence",
+        ):
+            assert key in props, f"change_intent missing {key}"
+        # Must NOT be in required — older cached triage.json predates
+        # this field and must still load cleanly.
+        assert "change_intent" not in schema["required"]
+
     def test_verdict_schema(self):
         schema = STAGE_SCHEMAS["verdict"]
         assert "decision" in schema["properties"]
@@ -39,6 +59,20 @@ class TestStageSchemas:
         schema = STAGE_SCHEMAS["fix-rereview"]
         assert "pass" in schema["properties"]
         assert "issues" in schema["properties"]
+
+    def test_postconditions_schema(self):
+        schema = STAGE_SCHEMAS["postconditions"]
+        assert schema["type"] == "object"
+        assert "postconditions" in schema["properties"]
+        items = schema["properties"]["postconditions"]["items"]
+        assert items["type"] == "object"
+        for key in ("function_path", "prose", "confidence"):
+            assert key in items["required"], f"postcondition item missing required {key}"
+
+    def test_postconditions_registered(self):
+        assert "postconditions" in ALLOWED_STAGES
+        assert "postconditions" in STRUCTURED_STAGES
+        assert "postconditions" not in AGENT_STAGES
 
 
 class TestStageEffort:
@@ -100,6 +134,11 @@ class TestBuildFallback:
     def test_fix_polish_fallback(self):
         fb = build_fallback("fix-polish")
         assert fb["clean"] is True
+
+    def test_postconditions_fallback_is_empty(self):
+        fb = build_fallback("postconditions")
+        assert fb["postconditions"] == []
+        assert fb["error"] == "stage_failed"
 
     def test_agent_stage_fallback(self):
         for stage in ["architecture", "security", "logic"]:

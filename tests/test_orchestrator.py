@@ -469,6 +469,44 @@ class TestFailOpen:
 # ── Fix rerun detection ──────────────────────────────────────
 
 
+class TestLoadCachedPostconditions:
+    """Phase 3: fix-reruns must reuse the postconditions from the initial
+    review so Logic sees the same contract on every iteration."""
+
+    def test_returns_none_when_no_cache(self, orchestrator, tmp_path):
+        state_dir = tmp_path / "state"
+        state_dir.mkdir()
+        with patch("gate.orchestrator.state") as mock_state:
+            mock_state.get_pr_state_dir.return_value = state_dir
+            result = orchestrator._load_cached_postconditions()
+        assert result is None
+
+    def test_loads_cached_json(self, orchestrator, tmp_path):
+        import json as _json
+
+        state_dir = tmp_path / "state"
+        state_dir.mkdir()
+        pc = {"postconditions": [{"function_path": "x:y", "prose": "p", "confidence": "high"}]}
+        (state_dir / "postconditions.json").write_text(_json.dumps(pc))
+        with patch("gate.orchestrator.state") as mock_state:
+            mock_state.get_pr_state_dir.return_value = state_dir
+            result = orchestrator._load_cached_postconditions()
+        assert result is not None
+        assert result.data == pc
+        # Should also copy to workspace for prompt vars
+        ws_copy = orchestrator.workspace / "postconditions.json"
+        assert ws_copy.exists()
+
+    def test_returns_none_on_corrupt_cache(self, orchestrator, tmp_path):
+        state_dir = tmp_path / "state"
+        state_dir.mkdir()
+        (state_dir / "postconditions.json").write_text("not json")
+        with patch("gate.orchestrator.state") as mock_state:
+            mock_state.get_pr_state_dir.return_value = state_dir
+            result = orchestrator._load_cached_postconditions()
+        assert result is None
+
+
 class TestDetectFixRerun:
     def test_no_prior(self, orchestrator):
         prior = {"has_prior": False, "fix_attempts": 0}

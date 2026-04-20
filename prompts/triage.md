@@ -35,6 +35,7 @@ $diff_or_summary
 3. Estimate the risk level
 4. Determine fast-track eligibility
 5. Flag any immediate concerns
+6. Extract the PR's **change intent** from the title/body (see below)
 
 ## Classification Guide
 
@@ -56,6 +57,19 @@ $diff_or_summary
 | medium | Standard feature/bugfix, < 200 lines, no auth/schema |
 | high | Auth changes, schema changes, new deps, > 200 lines |
 | critical | Security-sensitive code, payment logic, data deletion |
+
+## Change Intent Extraction
+
+Extract a structured `change_intent` block summarizing what the AUTHOR *claims* this PR does. This is used by later stages to verify the diff matches the claim.
+
+Rules:
+- Base this ONLY on the PR title and body. Do NOT infer intent from the diff here — later stages will cross-check.
+- **Any field may be `null`** when the PR description does not support confident inference. Nulling a field is ALWAYS preferred over guessing.
+- `claimed_behavioral_delta`: a one-sentence paraphrase of the observable behavior change the author describes. `null` if the description does not claim a behavioral change (e.g., pure refactor).
+- `claimed_bug_fixed`: one-sentence paraphrase of a bug the author claims to fix. `null` if no bug is claimed.
+- `claimed_tests_updated`: array of file paths (as author-written, not verified against the diff) that the description says were updated or added. Empty array if none mentioned.
+- `claimed_no_behavior_change`: `true` ONLY if the author explicitly claims "no behavior change", "pure refactor", "no functional change", or similar. Default `false`.
+- `confidence`: `"high"` when the PR body is descriptive and specific; `"medium"` when terse; `"low"` when the body is empty, boilerplate, or generic ("update code", "misc fixes").
 
 ## Fast-Track Eligibility
 
@@ -86,6 +100,13 @@ Respond with ONLY valid JSON (no markdown fences):
     "tests": [],
     "config": [],
     "docs": []
+  },
+  "change_intent": {
+    "claimed_behavioral_delta": "string | null",
+    "claimed_bug_fixed": "string | null",
+    "claimed_tests_updated": ["path/to/test", "..."],
+    "claimed_no_behavior_change": false,
+    "confidence": "high | medium | low"
   },
   "fast_track_eligible": false,
   "fast_track_reason": null,

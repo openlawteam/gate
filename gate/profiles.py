@@ -14,6 +14,7 @@ PROFILES: dict[str, dict[str, str]] = {
         "config_files": "tsconfig.json, .eslintrc, package.json",
         "env_access_pattern": "process.env",
         "import_style": "import { x } from './module'",
+        "verify_cmd": "",
     },
     "python": {
         "language": "Python",
@@ -26,6 +27,7 @@ PROFILES: dict[str, dict[str, str]] = {
         "config_files": "pyproject.toml, ruff.toml",
         "env_access_pattern": "os.environ",
         "import_style": "from module import func",
+        "verify_cmd": "",
     },
     "go": {
         "language": "Go",
@@ -38,6 +40,7 @@ PROFILES: dict[str, dict[str, str]] = {
         "config_files": "go.mod, go.sum",
         "env_access_pattern": "os.Getenv()",
         "import_style": 'import "package/module"',
+        "verify_cmd": "",
     },
     "rust": {
         "language": "Rust",
@@ -50,6 +53,7 @@ PROFILES: dict[str, dict[str, str]] = {
         "config_files": "Cargo.toml, .cargo/config.toml",
         "env_access_pattern": "std::env::var()",
         "import_style": "use crate::module;",
+        "verify_cmd": "",
     },
     "none": {
         "language": "Unknown",
@@ -62,6 +66,7 @@ PROFILES: dict[str, dict[str, str]] = {
         "config_files": "",
         "env_access_pattern": "",
         "import_style": "",
+        "verify_cmd": "",
     },
 }
 

@@ -976,7 +976,7 @@ class ReviewOrchestrator:
                     json.dumps(data, indent=2)
                 )
             return StageResult(stage="postconditions", success=True, data=data)
-        except json.JSONDecodeError:
+        except (OSError, json.JSONDecodeError):
             return None
 
     def _cleanup_gate_tests(self) -> None:
@@ -1053,18 +1053,35 @@ class ReviewOrchestrator:
             sidecar.mkdir(parents=True, exist_ok=True)
 
             captured: list[Path] = []
+            workspace_resolved = self.workspace.resolve()
             for t in qualifying:
                 rel = t.get("file") or t.get("path") or ""
                 if not rel:
                     continue
                 src = self.workspace / rel
                 if not src.exists():
-                    # Fallback: glob for the __gate_test_* filename.
-                    matches = list(self.workspace.glob(f"**/{Path(rel).name}"))
+                    # Fallback: glob for the __gate_test_* filename,
+                    # restricted to the expected prefix so prompt-injected
+                    # basenames cannot pull unrelated files out of the tree.
+                    name = Path(rel).name
+                    if not name.startswith("__gate_test_"):
+                        continue
+                    matches = list(self.workspace.glob(f"**/{name}"))
                     if matches:
                         src = matches[0]
                     else:
                         continue
+                # Containment check: refuse anything that resolves outside the workspace
+                # (e.g. `rel == '../../../etc/passwd'`).
+                try:
+                    if not src.resolve().is_relative_to(workspace_resolved):
+                        logger.warning(
+                            f"PR #{self.pr_number}: spec sidecar rejected "
+                            f"non-contained path: {rel!r}"
+                        )
+                        continue
+                except OSError:
+                    continue
                 dst = sidecar / src.name
                 try:
                     shutil.copy2(src, dst)

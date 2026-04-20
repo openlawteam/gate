@@ -141,6 +141,7 @@ def create_spec_pr(
         worktree_path = workspace.create_auxiliary_worktree(
             clone_path, branch=branch, base_sha=base_sha,
             label=f"spec-pr{pr_number}",
+            config=config,
         )
     except subprocess.CalledProcessError as e:
         stderr = ""

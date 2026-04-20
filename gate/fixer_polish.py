@@ -54,7 +54,6 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from gate import github as _github  # noqa: F401 (reserved for comment emission)
 from gate import prompt
 from gate.codex import bootstrap_codex
 from gate.config import (

@@ -318,6 +318,7 @@ def create_worktree(
             ["git", "config", key, val],
             cwd=str(worktree_path),
             capture_output=True,
+            timeout=10,
         )
 
     # Remove .claude/ from worktree so Claude inherits trust from parent
@@ -479,6 +480,7 @@ def create_auxiliary_worktree(
     branch: str,
     base_sha: str,
     label: str = "aux",
+    config: dict | None = None,
 ) -> Path:
     """Create a lightweight worktree for non-review uses (e.g. spec-PR
     promotion in Phase 5).
@@ -489,10 +491,16 @@ def create_auxiliary_worktree(
     branch ``branch`` from ``repo_path``. Author identity is still set
     to the bot so commits attribute correctly.
 
+    config
+        Resolved Gate config dict. If ``None``, falls back to
+        ``load_config()`` for backward compatibility, but callers
+        inside the review pipeline should always pass their own.
+
     Returns the worktree path. Callers MUST call
     :func:`remove_worktree` when done.
     """
-    config = load_config()
+    if config is None:
+        config = load_config()
     repo_cfg = config.get("repo", {})
     worktree_base = repo_cfg.get("worktree_base", "/tmp/gate-worktrees")
     unique = f"{int(time.time() * 1000)}-{secrets.token_hex(3)}"
@@ -521,6 +529,7 @@ def create_auxiliary_worktree(
             ["git", "config", key, val],
             cwd=str(worktree_path),
             capture_output=True,
+            timeout=10,
         )
     return worktree_path
 

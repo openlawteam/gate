@@ -529,12 +529,73 @@ def classify_fixability(finding: dict) -> str:
     return "unknown"
 
 
+# Natural-language cues that the reviewer was uncertain about the intended
+# behavior. Heuristic v1 — a later version could replace this with a
+# small structured LLM classifier call. Keep the list short and
+# high-precision to avoid over-flagging unambiguous findings.
+_AMBIGUITY_HIGH_KEYWORDS: tuple[str, ...] = (
+    "could mean",
+    "ambiguous",
+    "unclear whether",
+    "either ",
+    "intended behavior",
+    "it is unclear",
+    "may be",
+    "might mean",
+    "interpret",
+)
+
+
+def classify_ambiguity(finding: dict) -> str:
+    """Classify how much interpretation a finding requires.
+
+    Returns one of ``"none" | "low" | "high"``:
+
+    - ``"high"`` — the finding's text signals multiple plausible
+      interpretations (uses cues like "could mean", "ambiguous"),
+      meaning a mechanical fix is likely to silently pick the wrong
+      interpretation. Fix pipelines MUST halt on these and ask the
+      author unless ``halt_on_ambiguity`` is disabled.
+    - ``"low"`` — the reviewer did not propose a concrete suggestion.
+      A fix can still be attempted but the senior should pick the
+      safest interpretation consistent with existing tests.
+    - ``"none"`` — unambiguous finding, proceed with the normal flow.
+
+    Safe to override per-finding by setting ``finding["ambiguity"]``
+    directly (e.g. from a future LLM classifier stage).
+
+    Mirrors the structure of :func:`classify_fixability` so both tags
+    are driven by the same ``tag_findings`` pass.
+    """
+    if isinstance(finding.get("ambiguity"), str):
+        val = finding["ambiguity"].lower()
+        if val in ("none", "low", "high"):
+            return val
+    message = str(finding.get("message", "")).lower()
+    title = str(finding.get("title", "")).lower()
+    text = f"{title} {message}"
+    for kw in _AMBIGUITY_HIGH_KEYWORDS:
+        if kw in text:
+            return "high"
+    suggestion = finding.get("suggestion")
+    if not isinstance(suggestion, str) or not suggestion.strip():
+        return "low"
+    return "none"
+
+
 def tag_findings(findings: list[dict]) -> list[dict]:
-    """Annotate each finding with a stable ``finding_id`` and ``fixability``.
+    """Annotate each finding with a stable ``finding_id``, ``fixability``,
+    and ``ambiguity``.
 
     Returns a new list of dicts (does not mutate the input). Missing fields
     default to safe values so callers never have to defend against
     ``None``.
+
+    **Single-site tagging invariant (Phase 4):** this is the only place
+    that computes ``ambiguity``. Both the polish path
+    (``fixer_polish.run_polish_loop``) and the monolithic fix-senior
+    path read the tag off the finding dict rather than recomputing,
+    so heuristic changes ship in one commit.
     """
     tagged: list[dict] = []
     for f in findings:
@@ -542,6 +603,8 @@ def tag_findings(findings: list[dict]) -> list[dict]:
         enriched.setdefault("finding_id", compute_finding_id(f))
         if "fixability" not in enriched:
             enriched["fixability"] = classify_fixability(f)
+        if "ambiguity" not in enriched:
+            enriched["ambiguity"] = classify_ambiguity(f)
         tagged.append(enriched)
     return tagged
 
@@ -1506,6 +1569,12 @@ class FixPipeline:
         )
         not_fixed = normalized_nf["not_fixed"]
 
+        # Phase 4: post the author disambiguation comment (once per
+        # digest) for every ``requires_author_disambiguation`` entry.
+        # This runs regardless of commit outcome so the author sees
+        # the question even when the push ultimately fails.
+        self._post_disambig_comment_if_needed(not_fixed)
+
         commit_msg = f"fix(gate): auto-fix {fixed_count}/{finding_count} findings"
         if synth_count:
             commit_msg += f" (+{synth_count} file-level reconstructions)"
@@ -1695,3 +1764,177 @@ class FixPipeline:
             return json.loads(path.read_text())
         except json.JSONDecodeError:
             return None
+
+    # ── Phase 4: ambiguity disambiguation comment ──────────────
+
+    @staticmethod
+    def _disambig_digest(entry: dict) -> str:
+        """Stable 16-char digest for a disambiguation ``not_fixed`` entry.
+
+        Shape: ``sha256(finding_id::file::line::message[:200])[:16]``.
+        Same finding on the same PR across fix-reruns produces the
+        same digest — the dedup set in ``disambig_asked.txt``
+        guarantees we post at most one question per digest.
+        """
+        import hashlib
+
+        raw = (
+            f"{entry.get('finding_id', '')}::"
+            f"{entry.get('file', '')}::"
+            f"{entry.get('line', '')}::"
+            f"{str(entry.get('finding_message', ''))[:200]}"
+        )
+        return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+    def _post_disambig_comment_if_needed(self, not_fixed: list[dict]) -> None:
+        """Post a single combined disambiguation comment (if any, and if
+        not already posted for these digests).
+
+        Dedup state lives in ``state/<slug>/pr<N>/disambig_asked.txt``
+        (one 16-char digest per line). The cap
+        ``max_disambig_questions_per_pr`` (default 2) keeps the comment
+        short and prevents flooding.
+
+        Fails open: any exception logs and returns — a broken dedup
+        store must never block the fix pipeline's commit.
+        """
+        repo_cfg = self.config.get("repo", {})
+        if not repo_cfg.get("halt_on_ambiguity", True):
+            return
+        disambig = [
+            e for e in not_fixed
+            if e.get("reason") == "requires_author_disambiguation"
+        ]
+        if not disambig:
+            return
+        try:
+            asked_path = (
+                state.get_pr_state_dir(self.pr_number, self.repo)
+                / "disambig_asked.txt"
+            )
+            already: set[str] = set()
+            if asked_path.exists():
+                already = set(
+                    line.strip()
+                    for line in asked_path.read_text().splitlines()
+                    if line.strip()
+                )
+            fresh = [
+                e for e in disambig
+                if self._disambig_digest(e) not in already
+            ]
+            cap = int(repo_cfg.get("max_disambig_questions_per_pr", 2))
+            # Audit fix N4 — when ``cap`` is 0 the repo has explicitly
+            # opted out of asking questions. We must not bump the stale
+            # counter in that case (which would otherwise eventually
+            # trip ``force_safest_interpretation`` despite the repo's
+            # opt-out).
+            if cap <= 0:
+                return
+            fresh = fresh[:cap]
+            if not fresh:
+                # Increment a stale counter so the orchestrator can
+                # eventually force the safest interpretation.
+                self._bump_disambig_stale_count(disambig)
+                return
+            body = self._build_disambig_comment(fresh)
+            try:
+                github.comment_pr(self.repo, self.pr_number, body)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    f"PR #{self.pr_number}: disambig comment_pr failed: {e}"
+                )
+                return
+            updated = sorted(
+                already | {self._disambig_digest(e) for e in fresh}
+            )
+            asked_path.write_text("\n".join(updated) + "\n")
+            # Audit fix W8 — the stale counter is for unanswered
+            # questions only. Posting a fresh batch starts a brand-new
+            # waiting clock, so reset the counter to 0. Without this,
+            # a single trip past ``max_disambig_stale_retries``
+            # permanently locks ``force_safest_interpretation`` for the
+            # remainder of the PR's life — including subsequent pushes
+            # that introduce legitimately new ambiguous findings.
+            self._reset_disambig_stale_count()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                f"PR #{self.pr_number}: disambig comment pipeline failed: {e}"
+            )
+
+    def _bump_disambig_stale_count(self, disambig: list[dict]) -> None:
+        """Increment the stale-counter for pending disambig questions.
+
+        When every pending digest has been re-seen without an answer
+        for ``max_disambig_stale_retries`` reviews, the orchestrator
+        will pass ``force_safest_interpretation=true`` to fix-senior
+        so the pipeline stops blocking on the author.
+        """
+        try:
+            count_path = (
+                state.get_pr_state_dir(self.pr_number, self.repo)
+                / "disambig_stale_count.txt"
+            )
+            prior = 0
+            if count_path.exists():
+                try:
+                    prior = int(count_path.read_text().strip() or "0")
+                except ValueError:
+                    prior = 0
+            count_path.write_text(str(prior + 1))
+        except Exception as e:  # noqa: BLE001
+            logger.info(
+                f"PR #{self.pr_number}: disambig stale counter bump failed: {e}"
+            )
+
+    def _reset_disambig_stale_count(self) -> None:
+        """Zero the stale counter when a fresh question is posted.
+
+        See audit fix W8 — without this, a single trip past
+        ``max_disambig_stale_retries`` would permanently lock
+        ``force_safest_interpretation`` for the rest of the PR's life.
+        """
+        try:
+            count_path = (
+                state.get_pr_state_dir(self.pr_number, self.repo)
+                / "disambig_stale_count.txt"
+            )
+            if count_path.exists():
+                count_path.write_text("0")
+        except Exception as e:  # noqa: BLE001
+            logger.info(
+                f"PR #{self.pr_number}: disambig stale counter reset failed: {e}"
+            )
+
+    @staticmethod
+    def _build_disambig_comment(fresh: list[dict]) -> str:
+        """Render the PR comment body for a batch of fresh disambig entries."""
+        lines: list[str] = [
+            "## Gate — Ambiguity Halt",
+            "",
+            (
+                "Gate's fix pipeline detected that the following "
+                f"{len(fresh)} finding(s) admit multiple plausible fixes "
+                "with materially different observable behavior. Rather "
+                "than pick an interpretation silently, Gate is asking "
+                "for your input before attempting a mechanical change."
+            ),
+            "",
+        ]
+        for i, entry in enumerate(fresh, start=1):
+            lines.append(f"### {i}. `{entry.get('file', '?')}` "
+                         f"line {entry.get('line', '?')}")
+            lines.append("")
+            detail = str(entry.get("detail") or "").strip()
+            if detail:
+                lines.append(detail)
+            else:
+                msg = str(entry.get("finding_message") or "").strip()
+                lines.append(f"**Finding:** {msg or '(no finding_message)'}")
+            lines.append("")
+        lines.append(
+            "Reply on this PR with the intended behavior and Gate will "
+            "resume on the next push. This question will not be re-asked "
+            "for these findings until the text changes."
+        )
+        return "\n".join(lines)

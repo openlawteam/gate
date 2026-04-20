@@ -54,7 +54,6 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from gate import github as _github  # noqa: F401 (reserved for comment emission)
 from gate import prompt
 from gate.codex import bootstrap_codex
 from gate.config import (
@@ -70,6 +69,47 @@ if TYPE_CHECKING:
     from gate.fixer import FixPipeline
 
 logger = logging.getLogger(__name__)
+
+
+# ── Ambiguity disambiguation helpers (Phase 4) ──────────────
+
+
+def _build_disambig_detail(finding: dict) -> str:
+    """Render a PR-comment-ready disambiguation prompt for one finding.
+
+    The detail is what goes into the ``not_fixed[].detail`` field and is
+    later bundled into the PR comment by
+    :func:`gate.fixer.FixPipeline._commit_and_finish`. We emit
+    numbered interpretations if the finding supplies them, otherwise a
+    generic template citing the finding verbatim.
+
+    Kept intentionally terse — the PR comment wrapper adds framing.
+    """
+    message = str(finding.get("message", "")).strip()
+    file_ref = finding.get("file") or "?"
+    line_ref = finding.get("line") or "?"
+    interpretations = finding.get("interpretations")
+    lines: list[str] = [
+        f"**Location:** `{file_ref}` line {line_ref}",
+        "",
+        f"**Finding:** {message}" if message else "**Finding:** (no message)",
+        "",
+        "Gate detected that this finding admits multiple plausible fixes "
+        "with materially different observable behavior. Rather than pick one "
+        "silently, Gate is asking the PR author to disambiguate before the "
+        "fix pipeline attempts a change.",
+    ]
+    if isinstance(interpretations, list) and interpretations:
+        lines.append("")
+        lines.append("**Candidate interpretations:**")
+        for i, interp in enumerate(interpretations[:3], start=1):
+            lines.append(f"{i}. {str(interp).strip()}")
+    lines.append("")
+    lines.append(
+        "Reply on this PR with the intended behavior (or edit the finding "
+        "above to clarify) and Gate will resume on the next push."
+    )
+    return "\n".join(lines)
 
 
 # ── Ordering ────────────────────────────────────────────────
@@ -509,6 +549,25 @@ def run_polish_loop(
         cls = finding.get("fixability", "unknown")
         per_finding_timeout = int(timeouts.get(cls, timeouts.get("unknown", 180)))
         elapsed = time.monotonic() - started_at
+
+        # Phase 4: ambiguity halt. A finding flagged ``ambiguity: high``
+        # is skipped here — BEFORE consuming any polish budget — and a
+        # disambiguation question will be posted to the PR from
+        # _commit_and_finish. This runs ahead of the budget check so a
+        # full-budget loop does not starve unrelated findings.
+        if (
+            finding.get("ambiguity") == "high"
+            and pipeline.config.get("repo", {}).get("halt_on_ambiguity", True)
+        ):
+            not_fixed.append({
+                "finding_id": finding.get("finding_id"),
+                "file": finding.get("file"),
+                "line": finding.get("line"),
+                "finding_message": (finding.get("message") or "")[:200],
+                "reason": "requires_author_disambiguation",
+                "detail": _build_disambig_detail(finding),
+            })
+            continue
 
         if total_budget_s and elapsed >= total_budget_s:
             not_fixed.append({

@@ -558,6 +558,53 @@ def comment_pr(repo: str, pr_number: int, body: str) -> None:
         logger.warning(f"Failed to comment on PR #{pr_number}")
 
 
+def create_pr(
+    repo: str, title: str, body: str, head: str, base: str,
+) -> int | None:
+    """Open a new PR via ``gh pr create``. Fail-open — never raises.
+
+    Returns the PR number on success, or ``None`` on failure. Phase 5
+    (spec-PR promotion) uses this to open a follow-up PR whose failure
+    must never taint the original review's success.
+    """
+    try:
+        out = _gh([
+            "pr", "create",
+            "--repo", repo,
+            "--title", title,
+            "--body", body,
+            "--head", head,
+            "--base", base,
+        ])
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or "").strip() if isinstance(e.stderr, str) else ""
+        logger.warning(
+            f"gh pr create failed for {repo} head={head} base={base}: "
+            f"{stderr[:200]}"
+        )
+        return None
+    url = out.strip().splitlines()[-1] if out.strip() else ""
+    try:
+        return int(url.rsplit("/", 1)[-1]) if url else None
+    except ValueError:
+        logger.warning(f"gh pr create returned unparseable output: {url!r}")
+        return None
+
+
+def branch_exists(repo: str, branch: str) -> bool:
+    """Return True if the remote branch exists. Used for Phase 5 spec-PR
+    idempotency: a second promotion run for the same PR×SHA detects its
+    branch already exists and short-circuits without a duplicate PR."""
+    try:
+        _gh([
+            "api", f"repos/{repo}/branches/{branch}",
+            "--silent",
+        ])
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
 def commit_and_push(worktree: Path, message: str, branch: str = "") -> "CommitResult":
     """Stage all changes, commit, and push from a worktree.
 

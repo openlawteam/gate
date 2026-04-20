@@ -48,6 +48,22 @@ STAGE_SCHEMAS: dict[str, dict] = {
             "risk_level": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
             "summary": {"type": "string"},
             "files_by_category": {"type": "object"},
+            "change_intent": {
+                "type": "object",
+                "properties": {
+                    "claimed_behavioral_delta": {"type": ["string", "null"]},
+                    "claimed_bug_fixed": {"type": ["string", "null"]},
+                    "claimed_tests_updated": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "claimed_no_behavior_change": {"type": "boolean"},
+                    "confidence": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"],
+                    },
+                },
+            },
             "fast_track_eligible": {"type": "boolean"},
             "fast_track_reason": {"type": ["string", "null"]},
             "flags": {"type": "array", "items": {"type": "string"}},
@@ -75,6 +91,30 @@ STAGE_SCHEMAS: dict[str, dict] = {
             "review_time_seconds": {"type": "number"},
         },
         "required": ["decision", "confidence", "summary", "findings", "stats"],
+    },
+    "postconditions": {
+        "type": "object",
+        "properties": {
+            "postconditions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "function_path": {"type": "string"},
+                        "signature": {"type": "string"},
+                        "prose": {"type": "string"},
+                        "assertion_snippet": {"type": "string"},
+                        "confidence": {
+                            "type": "string",
+                            "enum": ["high", "medium", "low"],
+                        },
+                        "rationale": {"type": "string"},
+                    },
+                    "required": ["function_path", "prose", "confidence"],
+                },
+            },
+        },
+        "required": ["postconditions"],
     },
     "fix-plan": {
         "type": "object",
@@ -110,6 +150,7 @@ STAGE_EFFORT: dict[str, str] = {
 
 ALLOWED_STAGES = [
     "triage",
+    "postconditions",
     "architecture",
     "security",
     "logic",
@@ -125,7 +166,14 @@ ALLOWED_STAGES = [
 ]
 
 AGENT_STAGES = {"architecture", "security", "logic", "fix-senior"}
-STRUCTURED_STAGES = {"triage", "verdict", "fix-rereview", "fix-plan", "fix-polish"}
+STRUCTURED_STAGES = {
+    "triage",
+    "postconditions",
+    "verdict",
+    "fix-rereview",
+    "fix-plan",
+    "fix-polish",
+}
 
 
 def build_fallback(stage: str) -> dict:
@@ -199,6 +247,15 @@ def build_fallback(stage: str) -> dict:
             "pass": True,
             "issues": [],
             "summary": "Fallback: pass",
+            "error": "stage_failed",
+        }
+
+    if stage == "postconditions":
+        # Fail-open: an empty list means Logic treats this PR as if
+        # postconditions extraction was skipped. Safer than blocking
+        # the review on a structured-stage error.
+        return {
+            "postconditions": [],
             "error": "stage_failed",
         }
 

@@ -133,8 +133,8 @@ def persist_review_state(
     atomic_write(pr_state_dir / "verdict.json", json.dumps(verdict, indent=2))
 
     ancillary = (
-        "build.json", "triage.json", "architecture.json",
-        "security.json", "logic.json",
+        "build.json", "triage.json", "postconditions.json",
+        "architecture.json", "security.json", "logic.json",
     )
     for filename in ancillary:
         src = workspace / filename

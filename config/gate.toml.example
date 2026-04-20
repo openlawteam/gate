@@ -86,6 +86,7 @@ project_type = "node"   # node | python | go | rust | none
 
 [models]
 triage = "sonnet"
+postconditions = "sonnet"
 architecture = "sonnet"
 security = "opus"
 logic = "opus"
@@ -115,3 +116,67 @@ max_diff_bytes = 512000
 max_pr_body_bytes = 51200
 max_file_list_bytes = 51200
 triage_diff_budget_bytes = 153600
+# Cap on how many functions the postconditions stage emits per PR.
+# Higher = more coverage but longer prompt; 10 is a safe default.
+postconditions_max_functions = 10
+
+# --- Intent formalization (per-repo) ---
+# Whether to run the postconditions stage on high/critical-risk PRs.
+# Adds one extra structured Sonnet call (~30s). Default: true.
+# Flip per-repo to disable if it produces noise for a given codebase.
+# [[repos]]
+# enable_postconditions = true
+
+# --- Ambiguity halt (per-repo) ---
+# When true (default), findings flagged `ambiguity: high` cause the
+# fix pipeline to skip attempting a mechanical fix and post a
+# disambiguation question to the PR instead of silently picking
+# one of several plausible interpretations.
+# halt_on_ambiguity = true
+#
+# Cap on how many disambiguation questions Gate posts per PR per
+# review pass. Keeps the PR comment short and prevents flooding.
+# max_disambig_questions_per_pr = 2
+#
+# After this many fix-reruns where the same pending question is still
+# unanswered, Gate tells fix-senior to pick the safest interpretation
+# (the one most consistent with existing tests) instead of continuing
+# to halt. Default 3. Set to 0 to halt indefinitely (pipeline blocks
+# until an author responds).
+# max_disambig_stale_retries = 3
+
+# --- Spec-PR promotion (per-repo, Phase 5) ---
+# EXPERIMENTAL. When true (default false), after an approve verdict
+# Gate will open a follow-up PR containing the logic stage's verified
+# intent tests (those marked `intent_type: confirmed_correct` that
+# also passed a one-point mutation check). Merging the follow-up PR
+# locks the behaviour in as a living spec suite.
+# persist_spec_tests = false
+#
+# Folder in the target repo where spec tests land. Must not match any
+# path in `fix_blocklist`; otherwise promotion is skipped.
+# spec_tests_dir = "tests/gate-specs"
+#
+# Cap on spec files promoted per source PR. Keeps the follow-up PR
+# reviewable and avoids churn on PRs with large test suites.
+# spec_pr_max_files = 5
+#
+# Base branch for the follow-up PR. Defaults to `default_branch`.
+# spec_pr_base_branch = "main"
+
+# --- Proof-based verification (per-repo, Phase 6) ---
+# Command the Logic agent invokes to verify a function's formal
+# contract. When non-empty, the logic prompt enables the proof-based
+# verification section; a zero-exit invocation lets the agent label
+# findings with `evidence_level: "proof_confirmed"` — the strongest
+# tier, ranked above `test_confirmed`, and exempt from the
+# mutation-check downgrade (proofs are exhaustive by construction).
+#
+# The field is a pass-through for the prompt. Gate's orchestrator
+# does NOT run it — that is delegated to the Logic agent, scoped to
+# the changed function(s).
+#
+# Leave empty for repos without an integrated verifier.
+# [repos.build]
+# verify_cmd = "dafny verify {FILE}"         # Dafny example
+# verify_cmd = "verus --crate-type=lib {FILE}"   # Verus example

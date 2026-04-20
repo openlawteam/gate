@@ -175,6 +175,93 @@ class TestBuildVars:
         vars = build_vars(tmp_workspace, "verdict", env_vars)
         assert '"has_prior": false' in vars["prior_review_json"]
 
+    def test_change_intent_defaults_to_empty_object(self, tmp_workspace):
+        """When triage.json is missing (or predates the change_intent
+        field), change_intent_json must default to `{}` — prompts can
+        still substitute it without crashing."""
+        env_vars = {}
+        vars = build_vars(tmp_workspace, "logic", env_vars)
+        assert "change_intent_json" in vars
+        assert json.loads(vars["change_intent_json"]) == {}
+
+    def test_change_intent_from_triage_json(self, tmp_workspace):
+        triage = {
+            "change_type": "feature",
+            "risk_level": "medium",
+            "summary": "...",
+            "files_by_category": {},
+            "fast_track_eligible": False,
+            "change_intent": {
+                "claimed_behavioral_delta": "adds foo() API",
+                "claimed_bug_fixed": None,
+                "claimed_tests_updated": ["foo.test.ts"],
+                "claimed_no_behavior_change": False,
+                "confidence": "high",
+            },
+        }
+        (tmp_workspace / "triage.json").write_text(json.dumps(triage))
+        env_vars = {}
+        vars = build_vars(tmp_workspace, "logic", env_vars)
+        parsed = json.loads(vars["change_intent_json"])
+        assert parsed["confidence"] == "high"
+        assert parsed["claimed_behavioral_delta"] == "adds foo() API"
+
+    def test_change_intent_absent_from_old_triage(self, tmp_workspace):
+        """Cached triage.json from a pre-change_intent Gate version must
+        still produce a valid (empty) change_intent_json."""
+        old_triage = {
+            "change_type": "feature",
+            "risk_level": "low",
+            "summary": "...",
+            "files_by_category": {},
+            "fast_track_eligible": False,
+        }
+        (tmp_workspace / "triage.json").write_text(json.dumps(old_triage))
+        env_vars = {}
+        vars = build_vars(tmp_workspace, "logic", env_vars)
+        assert json.loads(vars["change_intent_json"]) == {}
+
+    def test_postconditions_defaults_to_empty_list(self, tmp_workspace):
+        env_vars = {}
+        vars = build_vars(tmp_workspace, "logic", env_vars)
+        assert "postconditions_json" in vars
+        assert json.loads(vars["postconditions_json"]) == []
+
+    def test_postconditions_populated_from_file(self, tmp_workspace):
+        pc = {
+            "postconditions": [
+                {
+                    "function_path": "src/x.py:foo",
+                    "signature": "foo(a: int) -> int",
+                    "prose": "returns non-negative",
+                    "assertion_snippet": "result >= 0",
+                    "confidence": "high",
+                    "rationale": "...",
+                }
+            ]
+        }
+        (tmp_workspace / "postconditions.json").write_text(json.dumps(pc))
+        env_vars = {}
+        vars = build_vars(tmp_workspace, "logic", env_vars)
+        parsed = json.loads(vars["postconditions_json"])
+        assert len(parsed) == 1
+        assert parsed[0]["function_path"] == "src/x.py:foo"
+
+    def test_postconditions_max_functions_surfaced(self, tmp_workspace):
+        env_vars = {}
+        vars = build_vars(
+            tmp_workspace, "postconditions", env_vars,
+            config={"limits": {"postconditions_max_functions": 7}},
+        )
+        assert vars["postconditions_max_functions"] == "7"
+
+    def test_postconditions_stage_uses_diff_or_summary(self, tmp_workspace):
+        """postconditions runs inline with --tools "" so it must receive
+        the summarized diff when the raw diff is too large."""
+        env_vars = {}
+        vars = build_vars(tmp_workspace, "postconditions", env_vars)
+        assert "diff_or_summary" in vars
+
     def test_fixable_findings_from_verdict(self, tmp_workspace):
         verdict = {
             "findings": [
@@ -200,3 +287,65 @@ class TestBuildDiffOrSummary:
         (tmp_workspace / "diff.txt").write_text(large_diff)
         result = build_diff_or_summary(tmp_workspace, budget_bytes=1000)
         assert "Per-File Preview" in result or "exceeds" in result
+
+
+class TestPromptAnchors:
+    """Regression tests: assert key phrases remain present in shipped prompts.
+
+    These protect against accidental deletion of prompt instructions that
+    encode contract behavior (mutation check, intent tagging, etc.).
+    """
+
+    def test_logic_prompt_has_mutation_check(self, real_gate_dir):
+        text = (real_gate_dir / "prompts" / "logic.md").read_text()
+        assert "Mutation Check" in text
+        assert "mutation_check" in text
+        assert "one-point mutation" in text or "one observable value" in text
+
+    def test_logic_prompt_tests_written_includes_intent_type(self, real_gate_dir):
+        text = (real_gate_dir / "prompts" / "logic.md").read_text()
+        assert "intent_type" in text
+        assert "confirmed_correct" in text
+        assert "confirmed_bug" in text
+        assert "inconclusive" in text
+
+    def test_verdict_prompt_enforces_mutation_check(self, real_gate_dir):
+        text = (real_gate_dir / "prompts" / "verdict.md").read_text()
+        assert "Mutation-check requirement" in text or "mutation_check" in text
+        assert "test_confirmed" in text
+        assert "pattern_match" in text
+
+    def test_triage_prompt_defines_change_intent(self, real_gate_dir):
+        text = (real_gate_dir / "prompts" / "triage.md").read_text()
+        assert "Change Intent Extraction" in text
+        assert "change_intent" in text
+        assert "claimed_behavioral_delta" in text
+        assert "claimed_no_behavior_change" in text
+        assert "confidence" in text
+
+    def test_logic_prompt_consumes_change_intent(self, real_gate_dir):
+        text = (real_gate_dir / "prompts" / "logic.md").read_text()
+        assert "change_intent_json" in text
+        assert "Intent Verification" in text
+
+    def test_verdict_prompt_consumes_change_intent(self, real_gate_dir):
+        text = (real_gate_dir / "prompts" / "verdict.md").read_text()
+        assert "change_intent_json" in text
+        assert "Intent-Mismatch Rule" in text or "intent mismatch" in text.lower()
+
+    def test_postconditions_prompt_exists_and_has_schema(self, real_gate_dir):
+        text = (real_gate_dir / "prompts" / "postconditions.md").read_text()
+        assert "Postcondition" in text
+        assert "function_path" in text
+        assert "assertion_snippet" in text
+        assert "postconditions_max_functions" in text
+        assert "diff_or_summary" in text
+
+    def test_logic_prompt_consumes_postconditions(self, real_gate_dir):
+        text = (real_gate_dir / "prompts" / "logic.md").read_text()
+        assert "postconditions_json" in text
+        assert "Postcondition Checking" in text
+
+    def test_verdict_prompt_consumes_postconditions(self, real_gate_dir):
+        text = (real_gate_dir / "prompts" / "verdict.md").read_text()
+        assert "postconditions_json" in text

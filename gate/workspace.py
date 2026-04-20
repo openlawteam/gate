@@ -318,6 +318,7 @@ def create_worktree(
             ["git", "config", key, val],
             cwd=str(worktree_path),
             capture_output=True,
+            timeout=10,
         )
 
     # Remove .claude/ from worktree so Claude inherits trust from parent
@@ -472,6 +473,64 @@ def prepare_context_files(worktree_path: Path, config: dict | None = None) -> No
         f"Context files prepared: {file_count} files changed, "
         f"diff={len((worktree_path / 'diff.txt').read_bytes())} bytes"
     )
+
+
+def create_auxiliary_worktree(
+    repo_path: str,
+    branch: str,
+    base_sha: str,
+    label: str = "aux",
+    config: dict | None = None,
+) -> Path:
+    """Create a lightweight worktree for non-review uses (e.g. spec-PR
+    promotion in Phase 5).
+
+    Unlike :func:`create_worktree` this does NOT install dependencies,
+    prepare context files, or trust-register the directory with
+    Claude — it is purely a writable checkout of ``base_sha`` on a new
+    branch ``branch`` from ``repo_path``. Author identity is still set
+    to the bot so commits attribute correctly.
+
+    ``config`` is the resolved repo config dict; if omitted we fall back
+    to ``load_config()`` (kept only as a convenience for ad-hoc callers).
+    Pass it explicitly from orchestrator-side callers so the function is
+    testable without monkeypatching at the module level.
+
+    Returns the worktree path. Callers MUST call
+    :func:`remove_worktree` when done.
+    """
+    cfg = config if config is not None else load_config()
+    repo_cfg = cfg.get("repo", {})
+    worktree_base = repo_cfg.get("worktree_base", "/tmp/gate-worktrees")
+    unique = f"{int(time.time() * 1000)}-{secrets.token_hex(3)}"
+    worktree_path = Path(worktree_base) / f"{label}-{unique}"
+    resolved_repo = str(Path(repo_path).expanduser())
+
+    subprocess.run(
+        [
+            "git", "worktree", "add",
+            "-b", branch,
+            str(worktree_path), base_sha,
+        ],
+        cwd=resolved_repo,
+        check=True,
+        capture_output=True,
+        timeout=30,
+        env=_git_env(),
+    )
+
+    bot = repo_cfg.get("bot_account", "gate-bot")
+    for key, val in [
+        ("user.name", bot),
+        ("user.email", f"{bot}@users.noreply.github.com"),
+    ]:
+        subprocess.run(
+            ["git", "config", key, val],
+            cwd=str(worktree_path),
+            capture_output=True,
+            timeout=10,
+        )
+    return worktree_path
 
 
 def remove_worktree(worktree_path: Path) -> None:

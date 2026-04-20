@@ -70,6 +70,26 @@ Do not accept mediocre work. If the output is vague, incomplete, or misses the p
 
 ---
 
+## Ambiguity Pre-Check (BEFORE dispatching stages)
+
+Before you dispatch any stage, scan each finding for **ambiguity** — situations where two or more plausible fixes would produce materially different observable behavior. Signals include:
+
+- The finding body uses hedging language like "could mean", "ambiguous", "unclear whether", "either ... or", "it is unclear", "interpret".
+- The finding's tagged `ambiguity` field is `"high"`.
+- You yourself can enumerate ≥ 2 fixes that would each plausibly satisfy the finding but produce different runtime behavior (e.g., "return 0 on empty" vs "raise ValueError on empty").
+
+If a finding is ambiguous, do the following:
+
+1. Generate 2–3 candidate interpretations — short phrases describing the plausible behavior each interpretation would produce.
+2. Generate 2–3 disambiguating test cases whose expected outputs disagree across interpretations. These are for the author's reference; do NOT commit them.
+3. Check `$halt_on_ambiguity`:
+   - `true` (default): emit a `not_fixed[]` entry with `reason: "requires_author_disambiguation"` and a `detail` containing a PR-comment-ready numbered list of interpretations plus the candidate tests. Skip dispatching stages for this finding.
+   - `false`: do NOT halt. Pick the interpretation most consistent with the repo's existing tests, record the choice in `fix_description` (e.g., "Chose interpretation 2 of 3: treat empty input as 0 to match `test_foo_empty`"), and fix normally.
+4. Check `$force_safest_interpretation`:
+   - `true`: the orchestrator has decided the author is unresponsive after several fix-reruns. Override `$halt_on_ambiguity` and pick the safest interpretation (the one most consistent with existing tests). Always include `"Safest interpretation chosen after repeated fix-reruns without author response"` in the corresponding `fix_description`.
+
+Ambiguity pre-check is mandatory — do it once per finding before you move on. A mechanical fix to an ambiguous finding is worse than no fix.
+
 ## Stages
 
 You have four stages available. Use your judgment on which stages to run based on the scope and complexity of the findings. Simple fixes may skip stages; complex fixes should use all of them.
@@ -154,7 +174,7 @@ When you have finished all necessary stages and verification passes, output ONLY
       "file": "path/to/source.file",
       "line": 42,
       "finding_message": "Original finding (abbreviated)",
-      "reason": "blocked_file | would_break_build | too_broad | deferred | requires_architecture_change",
+      "reason": "blocked_file | would_break_build | too_broad | deferred | requires_architecture_change | requires_author_disambiguation",
       "detail": "≥ 20 chars of concrete per-finding blocker: file references, exact reason the mechanical change is unsafe. Do NOT use placeholders."
     }
   ],

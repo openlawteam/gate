@@ -469,6 +469,44 @@ class TestFailOpen:
 # ── Fix rerun detection ──────────────────────────────────────
 
 
+class TestLoadCachedPostconditions:
+    """Phase 3: fix-reruns must reuse the postconditions from the initial
+    review so Logic sees the same contract on every iteration."""
+
+    def test_returns_none_when_no_cache(self, orchestrator, tmp_path):
+        state_dir = tmp_path / "state"
+        state_dir.mkdir()
+        with patch("gate.orchestrator.state") as mock_state:
+            mock_state.get_pr_state_dir.return_value = state_dir
+            result = orchestrator._load_cached_postconditions()
+        assert result is None
+
+    def test_loads_cached_json(self, orchestrator, tmp_path):
+        import json as _json
+
+        state_dir = tmp_path / "state"
+        state_dir.mkdir()
+        pc = {"postconditions": [{"function_path": "x:y", "prose": "p", "confidence": "high"}]}
+        (state_dir / "postconditions.json").write_text(_json.dumps(pc))
+        with patch("gate.orchestrator.state") as mock_state:
+            mock_state.get_pr_state_dir.return_value = state_dir
+            result = orchestrator._load_cached_postconditions()
+        assert result is not None
+        assert result.data == pc
+        # Should also copy to workspace for prompt vars
+        ws_copy = orchestrator.workspace / "postconditions.json"
+        assert ws_copy.exists()
+
+    def test_returns_none_on_corrupt_cache(self, orchestrator, tmp_path):
+        state_dir = tmp_path / "state"
+        state_dir.mkdir()
+        (state_dir / "postconditions.json").write_text("not json")
+        with patch("gate.orchestrator.state") as mock_state:
+            mock_state.get_pr_state_dir.return_value = state_dir
+            result = orchestrator._load_cached_postconditions()
+        assert result is None
+
+
 class TestDetectFixRerun:
     def test_no_prior(self, orchestrator):
         prior = {"has_prior": False, "fix_attempts": 0}
@@ -555,4 +593,41 @@ class TestEmit:
                 socket_path=tmp_path / "sock",
             )
             o._emit("review_started", review={"id": "x"})
-            conn.emit.assert_called_once_with("review_started", review={"id": "x"})
+            conn.emit.assert_called_once_with(
+                "review_started", review={"id": "x"}, head_sha="x"
+            )
+
+    def test_emit_stamps_head_sha_for_race_disambiguation(
+        self, sample_config, tmp_path
+    ):
+        """Every lifecycle event is stamped with this orchestrator's
+        ``head_sha`` so the server can drop late events from a superseded
+        orchestrator on the same PR (both share ``review_id``)."""
+        with patch("gate.client.GateConnection") as conn_cls:
+            conn = MagicMock()
+            conn_cls.return_value = conn
+            o = ReviewOrchestrator(
+                pr_number=1, repo="a/b", head_sha="deadbeef", event="s",
+                branch="m", labels=[], config=sample_config,
+                socket_path=tmp_path / "sock",
+            )
+            o._emit("review_cancelled", review_id="a-b-pr1")
+            conn.emit.assert_called_once_with(
+                "review_cancelled", review_id="a-b-pr1", head_sha="deadbeef"
+            )
+
+    def test_emit_preserves_explicit_head_sha_if_caller_provides(
+        self, sample_config, tmp_path
+    ):
+        with patch("gate.client.GateConnection") as conn_cls:
+            conn = MagicMock()
+            conn_cls.return_value = conn
+            o = ReviewOrchestrator(
+                pr_number=1, repo="a/b", head_sha="deadbeef", event="s",
+                branch="m", labels=[], config=sample_config,
+                socket_path=tmp_path / "sock",
+            )
+            o._emit("review_cancelled", review_id="a-b-pr1", head_sha="override")
+            conn.emit.assert_called_once_with(
+                "review_cancelled", review_id="a-b-pr1", head_sha="override"
+            )

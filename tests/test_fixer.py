@@ -695,6 +695,271 @@ class TestTagFindings:
         tag_findings([orig])
         assert "finding_id" not in orig
 
+    def test_tag_findings_sets_ambiguity(self):
+        """Phase 4: tag_findings must set `ambiguity` on every finding
+        so both fix paths (polish + monolithic) observe the same tag
+        without duplicated classification logic."""
+        from gate.fixer import tag_findings
+        tagged = tag_findings([
+            {"file": "x.ts", "message": "it is unclear whether X should..."},
+            {"file": "y.ts", "message": "boundary off by one",
+             "suggestion": "change > to >="},
+            {"file": "z.ts", "message": "raw SQL"},
+        ])
+        assert tagged[0]["ambiguity"] == "high"
+        assert tagged[1]["ambiguity"] == "none"
+        # No suggestion and no ambiguity cue -> "low"
+        assert tagged[2]["ambiguity"] == "low"
+
+
+class TestClassifyAmbiguity:
+    """Phase 4: ambiguity classifier heuristic."""
+
+    def test_respects_preset_ambiguity(self):
+        from gate.fixer import classify_ambiguity
+        assert classify_ambiguity({"ambiguity": "HIGH"}) == "high"
+        assert classify_ambiguity({"ambiguity": "low"}) == "low"
+
+    def test_high_keywords_set_high(self):
+        from gate.fixer import classify_ambiguity
+        assert classify_ambiguity(
+            {"message": "It is unclear whether empty input returns 0 or raises."}
+        ) == "high"
+        assert classify_ambiguity(
+            {"title": "Ambiguous behavior", "message": "..."}
+        ) == "high"
+
+    def test_concrete_suggestion_is_none(self):
+        from gate.fixer import classify_ambiguity
+        assert classify_ambiguity({
+            "message": "missing null check",
+            "suggestion": "add `if (x == null) return;`",
+        }) == "none"
+
+    def test_no_suggestion_is_low(self):
+        from gate.fixer import classify_ambiguity
+        assert classify_ambiguity({"message": "consider fixing this"}) == "low"
+
+
+class TestDisambigDigest:
+    """Phase 4: digest stability — same finding → same digest."""
+
+    def test_digest_stable_across_calls(self):
+        entry = {
+            "finding_id": "abc123",
+            "file": "src/foo.py",
+            "line": 42,
+            "finding_message": "it is unclear whether ...",
+        }
+        d1 = FixPipeline._disambig_digest(entry)
+        d2 = FixPipeline._disambig_digest(entry)
+        assert d1 == d2
+        assert len(d1) == 16
+
+    def test_digest_differs_on_message_change(self):
+        base = {"finding_id": "x", "file": "a.py", "line": 1, "finding_message": "m1"}
+        other = {**base, "finding_message": "m2"}
+        assert FixPipeline._disambig_digest(base) != FixPipeline._disambig_digest(other)
+
+
+class TestPostDisambigCommentIfNeeded:
+    """Phase 4: _commit_and_finish delegates to this helper for the
+    author-disambiguation comment. Covers dedup + cap + halt-disabled."""
+
+    def _make_pipeline(self, tmp_path, halt=True, cap=2):
+        pipe = FixPipeline.__new__(FixPipeline)
+        pipe.pr_number = 42
+        pipe.repo = "org/repo"
+        pipe.config = {
+            "repo": {
+                "halt_on_ambiguity": halt,
+                "max_disambig_questions_per_pr": cap,
+            },
+        }
+        pipe._state_dir = tmp_path
+        return pipe
+
+    def test_posts_once_and_writes_dedup(self, tmp_path):
+        pipe = self._make_pipeline(tmp_path)
+        not_fixed = [
+            {
+                "finding_id": "a",
+                "file": "x.py",
+                "line": 1,
+                "finding_message": "it is unclear whether...",
+                "reason": "requires_author_disambiguation",
+                "detail": "numbered interpretations here",
+            }
+        ]
+        with patch("gate.fixer.github.comment_pr") as cm, \
+             patch("gate.fixer.state") as mock_state:
+            mock_state.get_pr_state_dir.return_value = tmp_path
+            pipe._post_disambig_comment_if_needed(not_fixed)
+        assert cm.call_count == 1
+        asked = (tmp_path / "disambig_asked.txt").read_text().splitlines()
+        assert len(asked) == 1
+        assert len(asked[0]) == 16  # 16-char digest
+
+    def test_second_call_same_digest_does_not_post(self, tmp_path):
+        pipe = self._make_pipeline(tmp_path)
+        not_fixed = [
+            {
+                "finding_id": "a",
+                "file": "x.py",
+                "line": 1,
+                "finding_message": "it is unclear whether...",
+                "reason": "requires_author_disambiguation",
+                "detail": "d",
+            }
+        ]
+        # First call — seed the dedup file
+        with patch("gate.fixer.github.comment_pr"), \
+             patch("gate.fixer.state") as mock_state:
+            mock_state.get_pr_state_dir.return_value = tmp_path
+            pipe._post_disambig_comment_if_needed(not_fixed)
+        # Second call — should NOT post again
+        with patch("gate.fixer.github.comment_pr") as cm, \
+             patch("gate.fixer.state") as mock_state:
+            mock_state.get_pr_state_dir.return_value = tmp_path
+            pipe._post_disambig_comment_if_needed(not_fixed)
+        assert cm.call_count == 0
+        # And the stale counter must have been bumped
+        stale_file = tmp_path / "disambig_stale_count.txt"
+        assert stale_file.exists()
+        assert int(stale_file.read_text().strip()) == 1
+
+    def test_halt_disabled_does_not_post(self, tmp_path):
+        pipe = self._make_pipeline(tmp_path, halt=False)
+        not_fixed = [
+            {
+                "finding_id": "a",
+                "file": "x.py",
+                "line": 1,
+                "finding_message": "…",
+                "reason": "requires_author_disambiguation",
+                "detail": "d",
+            }
+        ]
+        with patch("gate.fixer.github.comment_pr") as cm, \
+             patch("gate.fixer.state") as mock_state:
+            mock_state.get_pr_state_dir.return_value = tmp_path
+            pipe._post_disambig_comment_if_needed(not_fixed)
+        assert cm.call_count == 0
+
+    def test_respects_cap(self, tmp_path):
+        pipe = self._make_pipeline(tmp_path, cap=2)
+        not_fixed = [
+            {
+                "finding_id": f"id-{i}",
+                "file": f"f{i}.py",
+                "line": i,
+                "finding_message": f"m{i}",
+                "reason": "requires_author_disambiguation",
+                "detail": "d",
+            }
+            for i in range(5)
+        ]
+        with patch("gate.fixer.github.comment_pr") as cm, \
+             patch("gate.fixer.state") as mock_state:
+            mock_state.get_pr_state_dir.return_value = tmp_path
+            pipe._post_disambig_comment_if_needed(not_fixed)
+        assert cm.call_count == 1
+        asked = (tmp_path / "disambig_asked.txt").read_text().splitlines()
+        assert len(asked) == 2
+
+
+class TestPolishLoopAmbiguityHalt:
+    """Phase 4: run_polish_loop must skip ambiguity=high findings BEFORE
+    calling _attempt_finding, appending to not_fixed with the correct
+    reason. This is the primary safety guarantee of Phase 4."""
+
+    def _make_pipeline(self, halt_on_ambiguity=True, budget=1800):
+        pipe = MagicMock()
+        pipe.config = {
+            "repo": {"halt_on_ambiguity": halt_on_ambiguity},
+            "limits": {},
+        }
+        pipe._cancelled = threading.Event()
+        pipe.pr_number = 1
+        pipe.repo = "a/b"
+        pipe._polish_context = []
+        pipe._emit_fix_stage = MagicMock()
+        return pipe
+
+    def test_halts_ambiguous_finding_before_attempt(self, monkeypatch):
+        from gate import fixer_polish
+
+        pipe = self._make_pipeline()
+        attempted = []
+
+        def _fake_attempt(p, f, t):
+            attempted.append(f.get("finding_id"))
+            return {"fixed": True, "entry": {"finding_id": f["finding_id"]}}
+
+        monkeypatch.setattr(fixer_polish, "_attempt_finding", _fake_attempt)
+        monkeypatch.setattr(fixer_polish, "_run_fix_polish_audit", lambda _: None)
+        monkeypatch.setattr(fixer_polish, "get_polish_timeouts", lambda _: {
+            "trivial": 180, "scoped": 600, "broad": 0, "unknown": 180,
+        })
+        monkeypatch.setattr(fixer_polish, "get_polish_total_budget_s", lambda _: 1800)
+        monkeypatch.setattr(fixer_polish, "write_live_log", lambda *a, **kw: None)
+
+        findings = [
+            {
+                "finding_id": "amb-1",
+                "file": "f.py",
+                "line": 3,
+                "message": "it is unclear whether ...",
+                "fixability": "trivial",
+                "ambiguity": "high",
+            },
+            {
+                "finding_id": "ok-1",
+                "file": "g.py",
+                "line": 5,
+                "message": "typo",
+                "fixability": "trivial",
+                "ambiguity": "none",
+            },
+        ]
+        out = fixer_polish.run_polish_loop(pipe, findings)
+
+        assert "amb-1" not in attempted
+        assert "ok-1" in attempted
+        nf_reasons = [e["reason"] for e in out.get("not_fixed", [])]
+        assert "requires_author_disambiguation" in nf_reasons
+
+    def test_halt_disabled_still_attempts(self, monkeypatch):
+        from gate import fixer_polish
+
+        pipe = self._make_pipeline(halt_on_ambiguity=False)
+        attempted = []
+
+        def _fake_attempt(p, f, t):
+            attempted.append(f.get("finding_id"))
+            return {"fixed": True, "entry": {"finding_id": f["finding_id"]}}
+
+        monkeypatch.setattr(fixer_polish, "_attempt_finding", _fake_attempt)
+        monkeypatch.setattr(fixer_polish, "_run_fix_polish_audit", lambda _: None)
+        monkeypatch.setattr(fixer_polish, "get_polish_timeouts", lambda _: {
+            "trivial": 180, "scoped": 600, "broad": 0, "unknown": 180,
+        })
+        monkeypatch.setattr(fixer_polish, "get_polish_total_budget_s", lambda _: 1800)
+        monkeypatch.setattr(fixer_polish, "write_live_log", lambda *a, **kw: None)
+
+        findings = [
+            {
+                "finding_id": "amb-1",
+                "file": "f.py",
+                "line": 3,
+                "message": "it is unclear whether ...",
+                "fixability": "trivial",
+                "ambiguity": "high",
+            },
+        ]
+        fixer_polish.run_polish_loop(pipe, findings)
+        assert "amb-1" in attempted
+
 
 class TestFixabilitySummary:
     def test_counts_each_bucket(self):

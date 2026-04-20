@@ -258,6 +258,143 @@ class TestReviewLifecycle:
         assert review["tmux_pane"] == "%42"
         assert review["pid"] == 9999
 
+    def test_stale_cancel_from_superseded_orchestrator_is_ignored(
+        self, running_server
+    ):
+        """Regression: when a new push supersedes an in-flight orchestrator
+        on the same PR, a late ``review_cancelled`` from the old
+        orchestrator must not purge the new orchestrator's entry.
+
+        Both orchestrators share the same ``review_id`` (deterministic
+        per-PR), so the server disambiguates by ``head_sha``.
+        """
+        server, _ = running_server
+        server.enqueue({
+            "type": "review_started",
+            "review": {
+                "id": "race-pr1", "pr_number": 1, "status": "running",
+                "head_sha": "new_sha",
+            },
+        })
+        time.sleep(0.1)
+        server.enqueue({
+            "type": "review_cancelled",
+            "review_id": "race-pr1",
+            "head_sha": "old_sha",
+        })
+        time.sleep(0.15)
+        assert len(server.reviews) == 1
+        assert server.reviews[0]["head_sha"] == "new_sha"
+
+    def test_stale_completed_from_superseded_orchestrator_is_ignored(
+        self, running_server
+    ):
+        server, _ = running_server
+        server.enqueue({
+            "type": "review_started",
+            "review": {
+                "id": "race-pr2", "pr_number": 2, "status": "running",
+                "head_sha": "new_sha",
+            },
+        })
+        time.sleep(0.1)
+        server.enqueue({
+            "type": "review_completed",
+            "review_id": "race-pr2",
+            "head_sha": "old_sha",
+            "decision": "cancelled",
+        })
+        time.sleep(0.15)
+        assert len(server.reviews) == 1
+        assert server.reviews[0]["head_sha"] == "new_sha"
+
+    def test_stale_stage_update_from_superseded_orchestrator_is_ignored(
+        self, running_server
+    ):
+        server, _ = running_server
+        server.enqueue({
+            "type": "review_started",
+            "review": {
+                "id": "race-pr3", "pr_number": 3, "stage": "logic",
+                "status": "running", "head_sha": "new_sha",
+            },
+        })
+        time.sleep(0.1)
+        server.enqueue({
+            "type": "review_stage_update",
+            "review_id": "race-pr3",
+            "head_sha": "old_sha",
+            "stage": "triage",
+            "status": "running",
+        })
+        time.sleep(0.1)
+        assert server.reviews[0]["stage"] == "logic"
+
+    def test_stale_stage_register_from_superseded_orchestrator_is_ignored(
+        self, running_server
+    ):
+        server, _ = running_server
+        server.enqueue({
+            "type": "review_started",
+            "review": {
+                "id": "race-pr4", "pr_number": 4, "stage": "logic",
+                "status": "running", "head_sha": "new_sha",
+                "tmux_pane": "%new", "pid": 1111,
+            },
+        })
+        time.sleep(0.1)
+        server.enqueue({
+            "type": "stage_register",
+            "review_id": "race-pr4",
+            "head_sha": "old_sha",
+            "stage": "triage",
+            "tmux_pane": "%old",
+            "pid": 9999,
+        })
+        time.sleep(0.1)
+        assert server.reviews[0]["tmux_pane"] == "%new"
+        assert server.reviews[0]["pid"] == 1111
+
+    def test_matching_head_sha_applies_lifecycle_events(self, running_server):
+        """A cancel that *does* match the current head_sha must still work."""
+        server, _ = running_server
+        server.enqueue({
+            "type": "review_started",
+            "review": {
+                "id": "match-pr1", "pr_number": 1, "status": "running",
+                "head_sha": "abc123",
+            },
+        })
+        time.sleep(0.1)
+        server.enqueue({
+            "type": "review_cancelled",
+            "review_id": "match-pr1",
+            "head_sha": "abc123",
+        })
+        time.sleep(0.15)
+        assert len(server.reviews) == 0
+
+    def test_cancel_without_head_sha_is_accepted_for_backcompat(
+        self, running_server
+    ):
+        """User-initiated cancels from the TUI omit ``head_sha`` and must
+        continue to work unconditionally."""
+        server, _ = running_server
+        server.enqueue({
+            "type": "review_started",
+            "review": {
+                "id": "tui-pr1", "pr_number": 1, "status": "running",
+                "head_sha": "abc123",
+            },
+        })
+        time.sleep(0.1)
+        server.enqueue({
+            "type": "review_cancelled",
+            "review_id": "tui-pr1",
+        })
+        time.sleep(0.15)
+        assert len(server.reviews) == 0
+
     def test_queue_update_broadcasts(self, running_server):
         server, _ = running_server
         server.enqueue({

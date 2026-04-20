@@ -33,12 +33,34 @@ def safe_substitute(template: str, vars: dict[str, str], caller: str = "") -> st
 
     Ported from safeSubstitute() in shared/utils.js.
     Uses a regex that matches $variable_name tokens (lowercase + underscore).
+
+    Defensive coercion: ``vars`` is typed as ``dict[str, str]``, but upstream
+    code occasionally leaks non-string values (notably when a stage JSON
+    file's ``summary`` field comes back as a dict — see PR #216 architecture
+    stage). Any non-string value is coerced with ``json.dumps`` (for
+    dict/list) or ``str`` (everything else) before substitution so that
+    ``re.sub``'s internal ``str.join`` can never raise
+    ``TypeError: sequence item N: expected str instance, dict found``.
     """
+
+    def _coerce(key: str, value: object) -> str:
+        if isinstance(value, str):
+            return value
+        logger.warning(
+            f"[{caller}] variable ${key} had non-string type "
+            f"{type(value).__name__}; coercing to string"
+        )
+        if isinstance(value, (dict, list)):
+            try:
+                return json.dumps(value, indent=2)
+            except (TypeError, ValueError):
+                return str(value)
+        return str(value)
 
     def replacer(match: re.Match) -> str:
         key = match.group(1)
         if key in vars:
-            return vars[key]
+            return _coerce(key, vars[key])
         logger.warning(f"[{caller}] unresolved variable: ${key}")
         return match.group(0)
 
@@ -98,6 +120,47 @@ def _read_json_file(path: Path) -> dict | None:
         return json.loads(raw)
     except json.JSONDecodeError:
         return None
+
+
+def _stage_summary(
+    data: dict | None,
+    fallback: str,
+) -> str:
+    """Return a string summary for a stage JSON payload.
+
+    Claude occasionally emits ``summary`` as a dict (e.g. a per-severity
+    count object like ``{"errors": 4, "warnings": 14, "info": 3}``) rather
+    than the expected human-readable sentence. Returning non-str values
+    from ``build_vars`` propagates into :func:`safe_substitute` and, prior
+    to the defensive coercion there, crashed the next stage with
+    ``TypeError: sequence item N: expected str instance, dict found``.
+
+    This helper keeps the prompt variable shape strictly ``str`` and
+    produces a legible one-line representation of count-dicts so the
+    downstream model still sees the information.
+    """
+    if not data:
+        return fallback
+    summary = data.get("summary")
+    if isinstance(summary, str):
+        return summary
+    if isinstance(summary, dict):
+        # Render "key: value, key: value" so downstream stages still see
+        # the per-severity counts rather than a raw dict repr.
+        if summary and all(isinstance(v, (int, float, str)) for v in summary.values()):
+            return ", ".join(f"{k}: {v}" for k, v in summary.items())
+        try:
+            return json.dumps(summary)
+        except (TypeError, ValueError):
+            return str(summary)
+    if isinstance(summary, list):
+        try:
+            return json.dumps(summary)
+        except (TypeError, ValueError):
+            return str(summary)
+    if summary is None:
+        return fallback
+    return str(summary)
 
 
 def build_diff_or_summary(
@@ -307,15 +370,15 @@ def build_vars(
         "build_json": build_json,
         "compiled_cursor_rules": cursor_rules,
         "triage_json": triage_json,
-        "triage_summary": (triage or {}).get("summary", "Triage: not yet run"),
-        "risk_level": (triage or {}).get("risk_level", "medium"),
+        "triage_summary": _stage_summary(triage, "Triage: not yet run"),
+        "risk_level": str((triage or {}).get("risk_level") or "medium"),
         "architecture_json": architecture_json,
-        "architecture_summary": (architecture or {}).get(
-            "summary", "Architecture review: skipped by triage"
+        "architecture_summary": _stage_summary(
+            architecture, "Architecture review: skipped by triage"
         ),
         "security_json": security_json,
-        "security_summary": (security or {}).get(
-            "summary", "Security review: skipped by triage"
+        "security_summary": _stage_summary(
+            security, "Security review: skipped by triage"
         ),
         "logic_json": logic_json,
         "prior_review_json": prior_review_json or '{ "has_prior": false }',

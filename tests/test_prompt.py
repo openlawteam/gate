@@ -5,6 +5,7 @@ import json
 from gate.prompt import (
     _read_file,
     _read_json_file,
+    _stage_summary,
     build_diff_or_summary,
     build_vars,
     safe_substitute,
@@ -38,6 +39,56 @@ class TestSafeSubstitute:
     def test_no_vars_in_template(self):
         result = safe_substitute("No variables here.", {"key": "val"})
         assert result == "No variables here."
+
+    def test_dict_value_is_coerced_not_raised(self):
+        # Regression: PR #216 architecture.summary came back as a count
+        # dict; re.sub's internal str.join crashed with "sequence item N:
+        # expected str instance, dict found". safe_substitute must coerce.
+        result = safe_substitute(
+            "summary=$architecture_summary",
+            {"architecture_summary": {"errors": 4, "warnings": 14, "info": 3}},
+        )
+        assert result.startswith("summary=")
+        assert "errors" in result and "4" in result
+
+    def test_list_value_is_coerced(self):
+        result = safe_substitute("$xs", {"xs": [1, 2, 3]})
+        assert "1" in result and "3" in result
+
+    def test_int_value_is_coerced(self):
+        result = safe_substitute("count=$n", {"n": 42})
+        assert result == "count=42"
+
+
+class TestStageSummary:
+    def test_string_summary_passthrough(self):
+        assert _stage_summary({"summary": "hello"}, "fallback") == "hello"
+
+    def test_missing_data_falls_back(self):
+        assert _stage_summary(None, "fallback") == "fallback"
+
+    def test_missing_summary_key_falls_back(self):
+        assert _stage_summary({"risk_level": "low"}, "fallback") == "fallback"
+
+    def test_count_dict_rendered_as_kv_pairs(self):
+        out = _stage_summary(
+            {"summary": {"errors": 4, "warnings": 14, "info": 3}},
+            "fallback",
+        )
+        assert "errors: 4" in out
+        assert "warnings: 14" in out
+        assert "info: 3" in out
+
+    def test_complex_dict_falls_back_to_json(self):
+        out = _stage_summary(
+            {"summary": {"nested": {"a": 1}}},
+            "fallback",
+        )
+        assert '"nested"' in out
+
+    def test_list_summary_rendered_as_json(self):
+        out = _stage_summary({"summary": ["a", "b"]}, "fallback")
+        assert "a" in out and "b" in out
 
 
 class TestTruncate:

@@ -18,6 +18,7 @@ Gate runs 13 health checks every 5 minutes via `gate health` (cron). Issues trig
 | `orphaned_windows` | Finds tmux windows with no active review | Auto-kills windows |
 | `circuit_breaker` | Checks if last 3 reviews were errors | Alerts; system auto-approves PRs until a success resets |
 | `quota` | Checks Anthropic quota cache freshness | Alerts if stale (>30min) |
+| `quota_auth` | Verifies the Claude OAuth token still authenticates (Group 4A) | Alerts once/24h via `quota_auth_drift`; refresh token with `claude auth login` |
 | `recent_errors` | Counts errors in last 5 reviews | Alerts if >= 3 |
 
 ## Running Health Checks
@@ -57,5 +58,28 @@ Alert state persisted in `<gate-dir>/logs/.health-alert-state`. Each check type 
 | Machine rebooted | No tmux session, runner down | `tmux new 'gate up'`, runner auto-starts via LaunchAgent |
 | Claude auth expired | All reviews fail immediately | `claude auth login --method browser` |
 | GitHub API rate limit | Checks fail to create/complete | Wait for rate limit reset; quota check will defer reviews |
-| Disk full | Build failures, worktree creation fails | `gate cleanup` or manual `rm -rf /tmp/gate-worktrees/*` |
+| Disk full | Build failures, worktree creation fails | `gate cleanup` or `gate prune` (worktrees only) |
 | Network outage | GitHub API unreachable | Reviews queued; auto-retry on reconnection |
+| Claude OAuth drift | Reviews run but quota check silently fail-opens (`quota_auth` health check tripped) | `claude auth login` — alert latches for 24h then clears on next successful probe |
+| Superseded review crashed mid-stage | `FileNotFoundError` on stage JSON write in logs | Benign — Group 2A suppresses the crash and Group 2B ensures the worktree is torn down once, not twice |
+| Stale worktree after crash | Disk fills up in `/tmp/gate-worktrees/` | `gate prune` (24h default) or `gate prune --aggressive` |
+
+## Fix Pipeline Behavior
+
+The fix pipeline has two execution paths selected per-verdict:
+
+- **Monolithic (`request_changes`):** single `fix-senior` call attempts
+  all findings in one go. Used when the reviewer is actually asking for
+  changes.
+- **Polish loop (`approve_with_notes`):** per-finding hopper-style loop
+  in `gate.fixer_polish`. Each finding gets a fresh Codex bootstrap,
+  its own timeout, a build checkpoint, and is reverted in isolation on
+  breakage. Controlled by `fix_polish_loop_enabled` (default `true`).
+
+When the fix pipeline runs but produces zero mechanical changes (the
+classic "nothing to actually fix, reviewer just wants a comment"
+case), the pipeline emits a **graceful no-op**: it reports success to
+the Gate Auto-Fix check with title "skipped (no mechanical changes
+needed)" and logs `fix_no_op` to `reviews.jsonl`. Soft fix-attempt
+counters are reset on no-op so we don't exhaust the retry budget.
+Toggle with `graceful_noop_on_approve_with_notes` (default `true`).

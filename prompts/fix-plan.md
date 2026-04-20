@@ -1,5 +1,12 @@
 # Fix Plan
 
+> **RESERVED (not live).** This prompt is kept in-tree for reference and
+> for future deep-plan experiments. It is **not** part of the current
+> fix pipeline, which is driven by `fix-senior.md` (monolithic path)
+> and the per-finding polish loop in `gate.fixer_polish`. Do not rely
+> on this file during a live fix run — edits here do not affect
+> production behavior.
+
 Create a concrete, ordered action plan to fix the findings below. You have codebase context from a prep phase — use it to plan accurate, dependency-aware fixes.
 
 ## Findings

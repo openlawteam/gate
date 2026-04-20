@@ -18,7 +18,7 @@ from gate.claude import spawn_review_stage
 from gate.config import repo_slug
 from gate.logger import log_review, read_recent_decisions, write_live_log
 from gate.runner import StructuredRunner, run_with_retry
-from gate.schemas import StageResult
+from gate.schemas import StageResult, WorkspaceVanishedError
 from gate.tmux import kill_window
 
 logger = logging.getLogger(__name__)
@@ -65,6 +65,7 @@ class ReviewOrchestrator:
         self._cancelled = threading.Event()
         self._active_panes: dict[str, str] = {}
         self._panes_lock = threading.Lock()
+        self._teardown_lock = threading.Lock()
         self._connection = None
         if self.socket_path:
             from gate.client import GateConnection
@@ -89,7 +90,18 @@ class ReviewOrchestrator:
             self._connection.emit(msg_type, **fields)
 
     def cancel(self) -> None:
-        """Cancel this review. Called by queue when a re-push arrives."""
+        """Cancel this review. Called by queue when a re-push arrives.
+
+        This is a **signal-only** operation: we set ``_cancelled``, tear
+        down tmux panes, and write the final ``cancelled`` status for the
+        old check run. We deliberately **do not** remove the worktree
+        here — that would race the still-running ``run()`` thread, which
+        may be mid-stage (``_save_stage_result`` writing ``triage.json``
+        etc.) and would crash with ``FileNotFoundError``. Worktree
+        removal is owned by ``run()``'s ``finally``, which runs after
+        the stages have observed the cancellation flag and exited
+        cleanly (Group 2B).
+        """
         self._cancelled.set()
         self._emit(
             "review_cancelled",
@@ -100,6 +112,9 @@ class ReviewOrchestrator:
         for stage, pane_id in panes.items():
             kill_window(pane_id)
         if self.check_run_id:
+            # This ``cancelled`` write is the marker for the OLD review;
+            # Group 2C prevents the continuing ``run()`` thread from
+            # clobbering it with a post-cancel ``error`` write.
             github.complete_check_run(
                 self.repo,
                 self.check_run_id,
@@ -108,8 +123,8 @@ class ReviewOrchestrator:
                 output_summary="A newer commit was pushed. This review was cancelled.",
                 sha=self.head_sha,
             )
-        if self.workspace:
-            workspace_mod.remove_worktree(self.workspace)
+        # NOTE: remove_worktree intentionally not called here — see
+        # docstring. run()'s finally handles it once the stages yield.
 
     def run(self) -> None:
         """Execute the full review pipeline."""
@@ -201,14 +216,47 @@ class ReviewOrchestrator:
                 return
 
             # === SETUP: Create worktree ===
-            self.workspace = workspace_mod.create_worktree(
-                self.config["repo"]["clone_path"],
-                self.pr_number,
-                self.head_sha,
-                self.branch,
-                repo=self.repo,
-                config=self.config,
-            )
+            try:
+                self.workspace = workspace_mod.create_worktree(
+                    self.config["repo"]["clone_path"],
+                    self.pr_number,
+                    self.head_sha,
+                    self.branch,
+                    repo=self.repo,
+                    config=self.config,
+                )
+            except workspace_mod.BranchNotFoundError as e:
+                # PR branch was deleted between webhook and fetch — the
+                # PR is effectively gone. Skip quietly; no fail-open
+                # approval spam on a branch that no longer exists
+                # (Group 3A).
+                logger.info(
+                    f"PR #{self.pr_number}: branch {self.branch!r} gone, skipping ({e})"
+                )
+                write_live_log(
+                    self.pr_number,
+                    f"Branch gone, skipping: {e}",
+                    "orchestrator", repo=self.repo,
+                )
+                if self.check_run_id:
+                    github.complete_check_run(
+                        self.repo, self.check_run_id,
+                        conclusion="neutral",
+                        output_title="Gate: branch not found",
+                        output_summary="PR branch no longer exists on origin.",
+                        sha=self.head_sha,
+                    )
+                self._emit("review_completed", review_id=review_id, decision="skip")
+                return
+            except WorkspaceVanishedError as e:
+                # Superseded before workspace finished setting up
+                # (Group 3B). Treat as a quiet cancel.
+                logger.info(
+                    f"PR #{self.pr_number}: workspace vanished during setup: {e}"
+                )
+                self._cancelled.set()
+                self._emit("review_completed", review_id=review_id, decision="cancelled")
+                return
             write_live_log(self.pr_number, f"Worktree: {self.workspace}", "setup", repo=self.repo)
 
             # Write PR metadata for agent stages running in tmux
@@ -357,6 +405,15 @@ class ReviewOrchestrator:
             verdict.data["review_time_seconds"] = elapsed
             self._save_stage_result("verdict", verdict)
 
+            # If a re-push landed while we were rendering the verdict,
+            # posting it now would confuse users (PR review/check for a
+            # superseded SHA) and stomp on the ``cancelled`` check run
+            # that ``cancel()`` already wrote. Bail quietly — the new
+            # orchestrator owns the live state (Group 2C).
+            if self._cancelled.is_set():
+                self._emit("review_completed", review_id=review_id, decision="cancelled")
+                return
+
             # === POST REVIEW ===
             github.post_review(
                 self.repo, self.pr_number, verdict.data, build_result, self.head_sha,
@@ -435,18 +492,28 @@ class ReviewOrchestrator:
                         with self._panes_lock:
                             self._active_panes["fix-senior"] = fixer.fix_pane_id
 
+                    # success=True && pushed=False == graceful no-op.
+                    # Report as a success ("no mechanical changes needed")
+                    # to GitHub but log as ``no_op`` so reviews.jsonl
+                    # consumers can tell the difference (audit A10).
+                    is_no_op = bool(
+                        fix_result.success and not fix_result.pushed
+                    )
                     fix_conclusion = "success" if fix_result.success else "failure"
+                    if is_no_op:
+                        check_title = "Gate Auto-Fix: skipped (no mechanical changes needed)"
+                    elif fix_result.success:
+                        check_title = "Gate Auto-Fix: succeeded"
+                    else:
+                        check_title = "Gate Auto-Fix: failed"
+
                     self._emit(
                         "review_stage_update", review_id=review_id,
                         stage="fix-commit", status="fixing",
                     )
                     github.complete_check_run(
                         self.repo, fix_check_id, fix_conclusion,
-                        output_title=(
-                            "Gate Auto-Fix: succeeded"
-                            if fix_result.success
-                            else "Gate Auto-Fix: failed"
-                        ),
+                        output_title=check_title,
                         output_summary=fix_result.summary,
                         sha=self.head_sha,
                     )
@@ -459,6 +526,10 @@ class ReviewOrchestrator:
                         self.pr_number, fix_result.success,
                         fix_result.summary, decision, repo=self.repo,
                         fix_elapsed_seconds=fix_elapsed,
+                        status=(
+                            "no_op" if is_no_op
+                            else ("succeeded" if fix_result.success else "failed")
+                        ),
                     )
                 except Exception as fix_err:
                     logger.exception(
@@ -481,27 +552,42 @@ class ReviewOrchestrator:
                 )
 
         except Exception as e:
-            # Fail-open
-            self._emit("review_completed", review_id=review_id, decision="error")
-            logger.exception(f"Review failed for PR #{self.pr_number}")
-            github.approve_pr(
-                self.repo, self.pr_number,
-                f"**Gate (error)** — review failed: {e}. Auto-approving.",
-            )
-            if self.check_run_id:
-                github.complete_check_run(
-                    self.repo, self.check_run_id,
-                    conclusion="cancelled",
-                    output_title="Gate Review: error",
-                    output_summary=f"Review crashed: {e}. PR auto-approved (fail-open).",
-                    sha=self.head_sha,
+            # When the review was cancelled, a crash on the way out is
+            # expected (worktree gone, agents killed). Downgrade the log
+            # level and skip the ``error`` GitHub write so we don't
+            # clobber the ``cancelled`` marker the cancel() wrote
+            # (Group 2C).
+            if self._cancelled.is_set():
+                logger.info(
+                    f"Review cancelled mid-stage for PR #{self.pr_number}: {e}"
                 )
-            notify.review_failed(self.pr_number, str(e), repo=self.repo)
-            write_live_log(self.pr_number, f"FAILED: {e}", "orchestrator", repo=self.repo)
+                self._emit("review_completed", review_id=review_id, decision="cancelled")
+            else:
+                # Fail-open
+                self._emit("review_completed", review_id=review_id, decision="error")
+                logger.exception(f"Review failed for PR #{self.pr_number}")
+                github.approve_pr(
+                    self.repo, self.pr_number,
+                    f"**Gate (error)** — review failed: {e}. Auto-approving.",
+                )
+                if self.check_run_id:
+                    github.complete_check_run(
+                        self.repo, self.check_run_id,
+                        conclusion="cancelled",
+                        output_title="Gate Review: error",
+                        output_summary=f"Review crashed: {e}. PR auto-approved (fail-open).",
+                        sha=self.head_sha,
+                    )
+                notify.review_failed(self.pr_number, str(e), repo=self.repo)
+                write_live_log(self.pr_number, f"FAILED: {e}", "orchestrator", repo=self.repo)
         finally:
             self._remove_active_marker()
+            # Single teardown path (Group 2B) — cancel() no longer does
+            # this, so we must, regardless of how run() exits.
             if self.workspace:
-                workspace_mod.remove_worktree(self.workspace)
+                with self._teardown_lock:
+                    workspace_mod.remove_worktree(self.workspace)
+                    self.workspace = None
             if self._connection:
                 self._connection.stop()
 
@@ -584,10 +670,26 @@ class ReviewOrchestrator:
         }
 
     def _should_fix(self, verdict: dict) -> bool:
-        """Determine if fix pipeline should run. Always unless suppressed by label."""
+        """Determine if fix pipeline should run.
+
+        Rules (in order):
+        - ``gate-no-fix`` label always short-circuits to False.
+        - ``request_changes`` always runs the fix pipeline.
+        - ``approve_with_notes`` runs the fix pipeline only when the
+          per-repo ``fix_on_approve_with_notes`` flag is true
+          (default true for back-compat). Repos that prefer to treat
+          ``approve_with_notes`` as a success-no-op can flip this off
+          per-repo in ``gate.toml`` (Group 1D).
+        """
+        from gate.config import get_repo_bool
         if "gate-no-fix" in self.labels:
             return False
-        return verdict.get("decision") in ("request_changes", "approve_with_notes")
+        decision = verdict.get("decision")
+        if decision == "request_changes":
+            return True
+        if decision == "approve_with_notes":
+            return get_repo_bool(self.config, "fix_on_approve_with_notes", True)
+        return False
 
     def _update_check(self, title: str) -> None:
         """Update check run with stage progress."""
@@ -598,10 +700,31 @@ class ReviewOrchestrator:
             )
 
     def _save_stage_result(self, stage_name: str, result: StageResult) -> None:
-        """Save stage result JSON to workspace."""
-        if self.workspace and result.data:
-            path = self.workspace / f"{stage_name}.json"
+        """Save stage result JSON to workspace (Group 2A).
+
+        Becomes a silent no-op when the review was cancelled AND the
+        workspace has been removed (i.e., the cancel tore down the
+        worktree between the stage completing and the orchestrator
+        getting here). Without the guard, a superseded review's
+        ``_save_stage_result`` crashes with ``FileNotFoundError`` on the
+        missing parent directory — observed on PRs 196, 204, 208, 211.
+
+        If the workspace is missing but the review was NOT cancelled,
+        that is a real bug and we re-raise so it shows up in logs.
+        """
+        if not self.workspace or not result.data:
+            return
+        if self._cancelled.is_set() or not self.workspace.exists():
+            logger.info(f"Skipping {stage_name}.json write: review cancelled")
+            return
+        path = self.workspace / f"{stage_name}.json"
+        try:
             path.write_text(json.dumps(result.data, indent=2))
+        except (FileNotFoundError, OSError) as e:
+            if self._cancelled.is_set():
+                logger.info(f"{stage_name}.json write failed after cancel: {e}")
+                return
+            raise
 
     def _circuit_breaker_tripped(self) -> bool:
         """Check if last 3 reviews were errors."""

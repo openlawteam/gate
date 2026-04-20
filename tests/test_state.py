@@ -153,6 +153,18 @@ class TestFixAttempts:
             assert a["soft"] == 2
             assert b["soft"] == 1
 
+    def test_no_op_resets_soft_counter_and_skips_total(self, tmp_path):
+        """Graceful no-op events must not consume the fix budget (Audit A9)."""
+        with patch("gate.state.state_dir", lambda: tmp_path):
+            record_fix_attempt(42)
+            record_fix_attempt(42)
+            before = get_fix_attempts(42)
+            assert before["soft"] == 2
+            record_fix_attempt(42, no_op=True)
+            after = get_fix_attempts(42)
+            assert after["soft"] == 0, "soft counter must reset on no-op"
+            assert after["total"] == before["total"], "total must NOT increment on no-op"
+
 
 # ── persist_review_state robustness (review warning regression) ─────
 

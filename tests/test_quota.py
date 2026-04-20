@@ -107,3 +107,75 @@ class TestCheckQuotaFast:
             patch("gate.quota.read_keychain_token", return_value=None),
         ):
             assert check_quota_fast() is None
+
+
+class TestAuthDrift:
+    """Group 4A: 401/403 on usage API must surface as auth_drift=True
+    and fire (at most) one ntfy alert per 24h window."""
+
+    def test_http_401_raises_auth_drift_error(self, tmp_path):
+        import urllib.error
+        from gate.quota import QuotaAuthDriftError, _fetch_usage
+
+        err = urllib.error.HTTPError("u", 401, "Unauthorized", {}, None)
+        with patch("gate.quota.urllib.request.urlopen", side_effect=err):
+            try:
+                _fetch_usage("bad-token")
+            except QuotaAuthDriftError:
+                pass
+            else:
+                assert False, "expected QuotaAuthDriftError"
+
+    def test_http_500_does_not_raise_auth_drift(self, tmp_path):
+        import urllib.error
+        from gate.quota import QuotaAuthDriftError, _fetch_usage
+
+        err = urllib.error.HTTPError("u", 500, "ise", {}, None)
+        with patch("gate.quota.urllib.request.urlopen", side_effect=err):
+            try:
+                _fetch_usage("token")
+            except QuotaAuthDriftError:
+                assert False, "500 must be treated as transient, not drift"
+            except urllib.error.HTTPError:
+                pass
+
+    def test_check_quota_marks_auth_drift_and_fires_alert_once(self, tmp_path):
+        from gate import notify
+        from gate.quota import QuotaAuthDriftError, check_quota
+
+        cache = tmp_path / "quota-cache.json"
+        marker = tmp_path / "quota-auth-drift-alerted.txt"
+        with (
+            patch.dict("os.environ", {"CLAUDE_CODE_OAUTH_TOKEN": "bad"}),
+            patch("gate.quota.quota_cache_path", lambda: cache),
+            patch("gate.quota._auth_drift_marker_path", lambda: marker),
+            patch("gate.quota._fetch_usage", side_effect=QuotaAuthDriftError("401")),
+            patch.object(notify, "quota_auth_drift") as mock_alert,
+        ):
+            r1 = check_quota()
+            r2 = check_quota()
+            assert r1["auth_drift"] is True
+            assert r1["quota_ok"] is True
+            assert mock_alert.call_count == 1
+
+    def test_successful_auth_clears_drift_marker(self, tmp_path):
+        from gate.quota import check_quota
+
+        cache = tmp_path / "quota-cache.json"
+        marker = tmp_path / "quota-auth-drift-alerted.txt"
+        marker.write_text("123.0")
+        with (
+            patch.dict("os.environ", {"CLAUDE_CODE_OAUTH_TOKEN": "good"}),
+            patch("gate.quota.quota_cache_path", lambda: cache),
+            patch("gate.quota._auth_drift_marker_path", lambda: marker),
+            patch(
+                "gate.quota._fetch_usage",
+                return_value={
+                    "five_hour": {"utilization": 10},
+                    "seven_day": {"utilization": 5},
+                },
+            ),
+        ):
+            result = check_quota()
+            assert result["quota_ok"] is True
+            assert not marker.exists(), "marker must be cleared on successful auth"

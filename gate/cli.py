@@ -575,6 +575,38 @@ def cmd_cleanup(args: list[str]) -> int:
     return 0
 
 
+@command("prune", "Remove stale worktrees without touching state/logs")
+def cmd_prune(args: list[str]) -> int:
+    """Targeted worktree-only cleanup (Group 5D).
+
+    ``gate cleanup`` rotates logs, trims reviews.jsonl, cleans up old
+    state dirs, AND prunes worktrees — useful as a full maintenance
+    cycle but overkill when a review crashed mid-flight and you just
+    want to reclaim disk space. ``gate prune`` does the worktree step
+    only so operators can unwedge a machine without perturbing audit
+    state.
+    """
+    parser = make_parser("gate prune", "Remove stale gate worktrees.")
+    parser.add_argument(
+        "--max-age-hours", type=int, default=24,
+        help="Worktrees older than this are removed (default: 24).",
+    )
+    parser.add_argument(
+        "--aggressive", action="store_true",
+        help="Also prune worktrees newer than max-age-hours whose PR "
+             "has no active review marker.",
+    )
+    parsed = parse_args(parser, args)
+
+    from gate.cleanup import cleanup_worktrees
+
+    cleanup_worktrees(max_age_hours=parsed.max_age_hours)
+    if parsed.aggressive:
+        cleanup_worktrees(max_age_hours=0)
+    print("Prune complete")
+    return 0
+
+
 @command("digest", "Send daily metrics digest")
 def cmd_digest(args: list[str]) -> int:
     """Send daily metrics digest via ntfy and Discord."""

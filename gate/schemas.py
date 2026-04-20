@@ -4,6 +4,38 @@ Ported from run-stage.js STAGE_SCHEMAS, STAGE_EFFORT, and buildFallback().
 """
 
 from dataclasses import dataclass, field
+from typing import Literal
+
+
+class WorkspaceVanishedError(Exception):
+    """Raised when a worktree is deleted out from under us mid-operation.
+
+    Signals the orchestrator to exit the review cleanly as ``cancelled``
+    rather than log a traceback — the vanishing is almost always caused
+    by a concurrent cancel/supersede of this review.
+    """
+
+
+@dataclass
+class CommitResult:
+    """Outcome of ``github.commit_and_push``.
+
+    Splits the three cases previous callers could not distinguish:
+
+    - ``pushed``  — a new commit was pushed, ``sha`` is the new HEAD
+    - ``no_diff`` — ``git add`` found no changes, nothing committed
+    - ``push_failed`` — commit or push raised ``CalledProcessError``,
+      ``error`` contains the stderr tail
+    """
+
+    status: Literal["pushed", "no_diff", "push_failed"]
+    sha: str = ""
+    error: str = ""
+
+    @property
+    def success(self) -> bool:
+        return self.status == "pushed"
+
 
 STAGE_SCHEMAS: dict[str, dict] = {
     "triage": {

@@ -234,8 +234,22 @@ The TUI runs inside tmux via `gate up`. Tokyo Night color scheme.
 |-------|--------|
 | `gate-skip` | Skip review, auto-approve |
 | `gate-emergency-bypass` | Emergency bypass, auto-approve |
-| `gate-rerun` | Re-trigger a review |
-| `gate-no-fix` | Block auto-fix for this PR |
+| `gate-rerun` | Re-trigger a review (label is removed automatically after the review starts) |
+| `gate-no-fix` | Block the auto-fix pipeline for this PR — Gate still reviews but will not attempt any commits |
+
+Per-repo fix-pipeline knobs live in `gate.toml` (see
+`config/gate.toml.example`):
+
+- `fix_on_approve_with_notes` — run the polish loop on
+  `approve_with_notes` verdicts. Default `true`.
+- `graceful_noop_on_approve_with_notes` — when the fix pipeline
+  produces no diff, report success (no red check) instead of failure.
+  Default `true`.
+- `fix_polish_loop_enabled` — master switch for the hopper-style
+  per-finding polish loop. Set to `false` to fall back to the
+  monolithic `fix-senior` call. Default `true`.
+- `polish_loop_total_budget_s` / `polish_per_finding_timeout_seconds`
+  — wall-clock caps for the polish loop.
 
 ## Operations
 
@@ -246,6 +260,13 @@ The TUI runs inside tmux via `gate up`. Tokyo Night color scheme.
 0 9 * * *    gate digest        → daily metrics summary
 0 3 * * *    gate cleanup       → log rotation + worktree pruning
 ```
+
+Ad-hoc:
+
+- `gate prune` — worktree-only pruning (safe to run any time; does not
+  touch logs or review state).
+- `gate prune --aggressive` — also removes worktrees that have no
+  active review marker regardless of age.
 
 ### LaunchAgent
 

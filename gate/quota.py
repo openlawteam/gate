@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import subprocess
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,8 +55,16 @@ def read_keychain_token() -> str | None:
         return None
 
 
+class QuotaAuthDriftError(Exception):
+    """Raised when the Claude OAuth token is expired/invalid (401/403)."""
+
+
 def _fetch_usage(token: str) -> dict:
-    """Call Anthropic usage API. Ported from fetchUsage() in check-quota.js."""
+    """Call Anthropic usage API. Ported from fetchUsage() in check-quota.js.
+
+    Raises ``QuotaAuthDriftError`` on 401/403 so the caller can distinguish
+    auth drift from transient failures and alert exactly once (Group 4A).
+    """
     req = urllib.request.Request(
         "https://api.anthropic.com/api/oauth/usage",
         headers={
@@ -64,8 +73,15 @@ def _fetch_usage(token: str) -> dict:
             "User-Agent": "claude-code/2.1",
         },
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            raise QuotaAuthDriftError(
+                f"HTTP {e.code} from usage API — token expired/invalid"
+            ) from e
+        raise
 
 
 def _write_cache(usage: dict) -> None:
@@ -99,15 +115,76 @@ def _read_cache() -> dict | None:
         return None
 
 
-def _fail_open(reason: str) -> dict:
-    """Return a fail-open result so reviews are never blocked by monitoring failures."""
+def _fail_open(reason: str, auth_drift: bool = False) -> dict:
+    """Return a fail-open result so reviews are never blocked by monitoring failures.
+
+    When ``auth_drift`` is True the reason is surfaced so health checks
+    and the operator can tell "Anthropic is down" apart from "the token
+    expired". A one-shot ntfy alert is fired at most once per 24h so we
+    don't spam the operator (Group 4A).
+    """
     logger.warning(f"Quota check fail-open: {reason}")
+    if auth_drift:
+        _maybe_alert_auth_drift(reason)
     return {
         "quota_ok": True,
         "five_hour_pct": -1,
         "seven_day_pct": -1,
         "resets_at": "",
         "reason": f"fail-open: {reason}",
+        "auth_drift": auth_drift,
+    }
+
+
+_AUTH_DRIFT_ALERT_COOLDOWN_S = 24 * 60 * 60  # once per day
+
+
+def _auth_drift_marker_path() -> Path:
+    return state_dir() / "quota-auth-drift-alerted.txt"
+
+
+def _maybe_alert_auth_drift(reason: str) -> None:
+    """Fire a single auth-drift alert per 24h window."""
+    try:
+        from gate import notify
+    except Exception:
+        return
+    marker = _auth_drift_marker_path()
+    now = datetime.now(timezone.utc).timestamp()
+    try:
+        last = float(marker.read_text().strip() or "0")
+    except (OSError, ValueError):
+        last = 0.0
+    if now - last < _AUTH_DRIFT_ALERT_COOLDOWN_S:
+        return
+    try:
+        notify.quota_auth_drift(reason)
+    except Exception as e:
+        logger.info(f"quota_auth_drift notify failed: {e}")
+    try:
+        atomic_write(marker, str(now))
+    except OSError:
+        pass
+
+
+def health_check() -> dict:
+    """Expose a simple quota-system health snapshot for operators (Group 4A).
+
+    Returns the current quota result plus whether an auth-drift alert
+    is currently latched. Primarily used by the ``gate`` CLI's health
+    subcommand and ad-hoc scripts.
+    """
+    result = check_quota()
+    marker = _auth_drift_marker_path()
+    alerted_at = ""
+    try:
+        alerted_at = marker.read_text().strip()
+    except OSError:
+        pass
+    return {
+        "quota": result,
+        "auth_drift_alert_latched_at": alerted_at,
+        "auth_drift_active": bool(result.get("auth_drift")),
     }
 
 
@@ -133,6 +210,16 @@ def check_quota(
     try:
         usage = _fetch_usage(token)
         from_api = True
+    except QuotaAuthDriftError as e:
+        # Token is bad — not a transient failure. Alert and fail-open
+        # so we don't block PR reviews while the operator refreshes.
+        cached = _read_cache()
+        if cached:
+            logger.warning(f"Auth drift, using cached quota: {e}")
+            usage = cached
+            _maybe_alert_auth_drift(str(e))
+        else:
+            return _fail_open(str(e), auth_drift=True)
     except Exception as e:
         cached = _read_cache()
         if cached:
@@ -152,6 +239,15 @@ def check_quota(
 
     if from_api:
         _write_cache(usage)
+        # A successful auth call clears the latched alert marker so the
+        # next drift re-alerts instead of being swallowed by the 24h
+        # cooldown (Group 4A).
+        marker = _auth_drift_marker_path()
+        try:
+            if marker.exists():
+                marker.unlink()
+        except OSError:
+            pass
 
     five_hour = usage.get("five_hour") or {}
     seven_day = usage.get("seven_day") or {}

@@ -147,6 +147,58 @@ def build_diff_or_summary(
     return "\n".join(parts)
 
 
+_POLISH_MODE_SECTION = """## Mode: polish (approve_with_notes)
+
+The reviewer already approved this PR. These findings are polish items: \
+missing comments, naming inconsistencies, small typing gaps, eslint-disable \
+lines without justification, barrel re-exports, new nanostores without \
+justification comments. They are *expected* to be fixable with one-to-few \
+line additions.
+
+Finding breakdown: $fixability_summary_inline
+
+Rules for polish mode (override earlier guidance where they conflict):
+
+- You MUST attempt every finding classified `trivial` or `scoped`.
+- You MUST NOT return `fixed: []` while non-empty findings exist unless you \
+have recorded every finding in `not_fixed` with a specific `reason` and a \
+non-placeholder `detail` (at least 20 chars explaining the concrete blocker).
+- `deferred` is NOT a valid reason in polish mode. Choose `blocked_file`, \
+`would_break_build`, `too_broad` (with a file count), or `requires_architecture_change`.
+- Prefer one-line additions (explanatory comments on eslint-disable, JSDoc \
+on new exports, justification comments on new stores) over larger rewrites.
+- A clean build still matters — but the bar is "leave 5 trivial fixes \
+landed", not "attempt zero fixes to guarantee zero regressions".
+
+Every entry in `fixed[]` and `not_fixed[]` MUST include a `finding_id` field \
+copied verbatim from the `Findings to Fix` payload above. Do not invent ids.
+"""
+
+_STRICT_MODE_SECTION = """## Mode: strict (request_changes)
+
+These findings are blocking issues. Your job is to fix every finding with \
+real code changes. Skipping is only acceptable when the fix would break the \
+build, touch a blocked file, or require more than 8 files of churn.
+
+Every entry in `fixed[]` and `not_fixed[]` MUST include a `finding_id` field \
+copied verbatim from the `Findings to Fix` payload above. Do not invent ids.
+"""
+
+
+def _build_polish_mode_section(fix_mode: str, fixability_summary: str) -> str:
+    """Render the mode-specific guidance block injected into fix-senior.md.
+
+    Kept in prompt.py (not fixer.py) because build_vars is the single place
+    that assembles the final template and we want the block to follow the
+    same substitution rules as other variables.
+    """
+    if fix_mode == "polish":
+        section = _POLISH_MODE_SECTION
+    else:
+        section = _STRICT_MODE_SECTION
+    return section.replace("$fixability_summary_inline", fixability_summary)
+
+
 def build_vars(
     workspace: Path,
     stage: str,
@@ -209,6 +261,22 @@ def build_vars(
             and f.get("severity") in ("critical", "error", "warning")
         ]
 
+    # Tag each finding with a stable `finding_id` and a `fixability` class
+    # (audit A2 + 1E.ii) before handing the list to the fix-senior prompt.
+    # Import lazily to avoid a fixer → prompt → fixer cycle at module load.
+    try:
+        from gate.fixer import (
+            fixability_summary as _fixability_summary,
+            tag_findings as _tag_findings,
+        )
+        fixable_findings = _tag_findings(fixable_findings)
+        fix_mode = "polish" if (verdict or {}).get("decision") == "approve_with_notes" else "strict"
+        summary_line = _fixability_summary(fixable_findings)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"fix-senior tagging failed: {e}")
+        fix_mode = "strict"
+        summary_line = "0 trivial, 0 scoped, 0 broad, 0 unknown"
+
     blocklist_path = repo_cfg.get("fix_blocklist", "")
     if blocklist_path:
         blocklist = _read_file(Path(blocklist_path))
@@ -257,6 +325,9 @@ def build_vars(
             _read_file(workspace / "fix-build-lint-errors.txt") or "(no lint errors)"
         ),
         "findings_json": json.dumps(fixable_findings, indent=2),
+        "fix_mode": fix_mode,
+        "fixability_summary": summary_line,
+        "polish_mode_section": _build_polish_mode_section(fix_mode, summary_line),
         "blocklist": blocklist or "(no blocklist configured)",
         "prep_context": prep_context or "(prep phase skipped)",
         "fix_plan": fix_plan or "(plan phase skipped — fix all findings using your judgment)",

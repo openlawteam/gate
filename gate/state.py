@@ -228,13 +228,31 @@ def get_fix_attempts(pr_number: int, repo: str = "") -> dict:
     return {"soft": soft, "total": total, "last_fix_at": last_fix_at}
 
 
-def record_fix_attempt(pr_number: int, repo: str = "") -> None:
+def record_fix_attempt(
+    pr_number: int,
+    repo: str = "",
+    no_op: bool = False,
+) -> None:
     """Increment fix attempt counters and update timestamp.
 
-    Safe without file locks because the ``ReviewQueue`` serialises work per
-    PR; concurrent incrementers for the same PR are not possible.
+    When ``no_op`` is true (graceful no-op on ``approve_with_notes`` — see
+    audit A9), the soft counter is **reset** to 0 and nothing is added
+    to the total. The rationale: a no-op did not consume a real attempt,
+    and otherwise a PR that sees N pushes with zero mechanical work
+    would silently exhaust its limit and block future real fixes.
+
+    Safe without file locks because the ``ReviewQueue`` serialises work
+    per PR; concurrent incrementers for the same PR are not possible.
     """
     pr_state_dir = get_pr_state_dir(pr_number, repo)
+
+    if no_op:
+        # Clear the soft counter so a subsequent real finding still gets
+        # a full attempt budget. Leave the total alone — it's a lifetime
+        # counter we don't want no-ops resetting.
+        atomic_write(pr_state_dir / "fix_attempts.txt", "0")
+        atomic_write(pr_state_dir / "last_fix_no_op_at.txt", str(time.time()))
+        return
 
     soft = 0
     try:

@@ -210,6 +210,63 @@ class TestCancel:
         call = mock_github.complete_check_run.call_args
         assert call[1]["conclusion"] == "cancelled"
 
+    @patch("gate.orchestrator.workspace_mod")
+    @patch("gate.orchestrator.kill_window")
+    @patch("gate.orchestrator.github")
+    def test_cancel_does_not_remove_worktree(
+        self, mock_github, mock_kill, mock_ws, orchestrator, tmp_path,
+    ):
+        """Group 2B: cancel() must not call remove_worktree — that is
+        owned by run()'s finally block so stages see a live worktree
+        until they yield on the cancellation flag."""
+        orchestrator.workspace = tmp_path
+        orchestrator.cancel()
+        mock_ws.remove_worktree.assert_not_called()
+
+
+class TestSaveStageResult:
+    """Group 2A: _save_stage_result must be a no-op when the review was
+    cancelled or the workspace vanished."""
+
+    def test_noop_when_cancelled(self, orchestrator, tmp_path):
+        from gate.schemas import StageResult
+
+        orchestrator.workspace = tmp_path
+        orchestrator._cancelled.set()
+        result = StageResult(stage="triage", success=True, data={"ok": True})
+        orchestrator._save_stage_result("triage", result)
+        assert not (tmp_path / "triage.json").exists()
+
+    def test_noop_when_workspace_missing(self, orchestrator, tmp_path):
+        from gate.schemas import StageResult
+
+        orchestrator.workspace = tmp_path / "ghost"
+        orchestrator._cancelled.set()
+        result = StageResult(stage="triage", success=True, data={"ok": True})
+        orchestrator._save_stage_result("triage", result)
+
+    def test_swallows_file_not_found_after_cancel(self, orchestrator, tmp_path):
+        from unittest.mock import patch
+
+        from gate.schemas import StageResult
+
+        orchestrator.workspace = tmp_path
+        orchestrator._cancelled.set()
+        result = StageResult(stage="triage", success=True, data={"ok": True})
+        # Workspace exists at dispatch, but write_text raises (e.g. a
+        # concurrent cleanup races between the exists() check and the
+        # actual write).
+        with patch("pathlib.Path.write_text", side_effect=FileNotFoundError(2, "gone")):
+            orchestrator._save_stage_result("triage", result)
+
+    def test_writes_when_healthy(self, orchestrator, tmp_path):
+        from gate.schemas import StageResult
+
+        orchestrator.workspace = tmp_path
+        result = StageResult(stage="triage", success=True, data={"ok": True})
+        orchestrator._save_stage_result("triage", result)
+        assert (tmp_path / "triage.json").exists()
+
 
 # ── Gate 1: Labels ───────────────────────────────────────────
 

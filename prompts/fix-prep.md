@@ -1,5 +1,10 @@
 # Fix Prep: Build Context
 
+> **RESERVED (not live).** This prompt is kept in-tree for reference
+> only. The live fix pipeline does not invoke a separate prep phase —
+> `fix-senior.md` performs its own research via the Codex delegate.
+> Do not rely on this file during a live fix run.
+
 You are preparing context for a code fix agent. Your job is to read every file cited in the findings below, trace dependencies, and map the codebase structure the fix agent will need.
 
 ## Findings to Research

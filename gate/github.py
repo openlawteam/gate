@@ -536,13 +536,19 @@ def comment_pr(repo: str, pr_number: int, body: str) -> None:
         logger.warning(f"Failed to comment on PR #{pr_number}")
 
 
-def commit_and_push(worktree: Path, message: str, branch: str = "") -> str | None:
+def commit_and_push(worktree: Path, message: str, branch: str = "") -> "CommitResult":
     """Stage all changes, commit, and push from a worktree.
 
     Uses GATE_PAT for push authentication via git HTTPS extraheader.
 
-    Returns the new HEAD SHA on success, None on failure or no changes.
+    Returns a :class:`CommitResult` with ``status`` one of ``pushed``,
+    ``no_diff`` (index was empty so nothing was committed) or
+    ``push_failed`` (git raised). Callers that previously treated ``None``
+    as a single failure state must now branch on ``status`` — ``no_diff``
+    and ``push_failed`` should report distinct failure messages so the
+    PR's check run doesn't falsely claim success.
     """
+    from gate.schemas import CommitResult
     from gate.workspace import _git_env
 
     env = _git_env()
@@ -555,7 +561,7 @@ def commit_and_push(worktree: Path, message: str, branch: str = "") -> str | Non
         )
         if result.returncode == 0:
             logger.info("No changes to commit")
-            return None
+            return CommitResult(status="no_diff")
         subprocess.run(
             ["git", "commit", "-m", message],
             cwd=cwd, check=True, capture_output=True, env=env,
@@ -571,7 +577,12 @@ def commit_and_push(worktree: Path, message: str, branch: str = "") -> str | Non
         )
         new_sha = sha_result.stdout.strip() if sha_result.returncode == 0 else ""
         logger.info(f"Committed and pushed: {message} ({new_sha[:8]})")
-        return new_sha or "unknown"
+        return CommitResult(status="pushed", sha=new_sha or "unknown")
     except subprocess.CalledProcessError as e:
-        logger.error(f"Commit/push failed: {e}")
-        return None
+        stderr_tail = ""
+        if getattr(e, "stderr", None):
+            stderr_bytes = e.stderr if isinstance(e.stderr, bytes) else str(e.stderr).encode()
+            stderr_tail = stderr_bytes.decode("utf-8", errors="replace").strip().splitlines()[-5:]
+            stderr_tail = "\n".join(stderr_tail) if isinstance(stderr_tail, list) else str(stderr_tail)
+        logger.error(f"Commit/push failed: {e}\n{stderr_tail}")
+        return CommitResult(status="push_failed", error=stderr_tail or str(e))

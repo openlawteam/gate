@@ -1,5 +1,11 @@
 # Fix Plan Refine
 
+> **RESERVED (not live).** This prompt is kept in-tree for reference
+> only. The live fix pipeline does not invoke a plan-refine phase;
+> planning and refinement are handled inside `fix-senior.md` and,
+> for polish mode, inside `gate.fixer_polish`. Do not rely on this
+> file during a live fix run.
+
 You are validating and refining a fix plan produced by the planning phase. Your job is to read the files cited in the plan, verify that the plan's assumptions are correct, and produce a refined implementation spec.
 
 ## Original Plan

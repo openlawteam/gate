@@ -214,3 +214,20 @@ def runner_down(runner_id: str) -> None:
         tags="rotating_light",
         priority="high",
     )
+
+
+def quota_auth_drift(reason: str) -> None:
+    """Notify when the Claude OAuth token is expired/invalid (Group 4A).
+
+    Gate's quota probe fails-open, so an expired token silently lets
+    every review through without a quota check. That is safe, but it
+    also means an operator may not notice their token has drifted for
+    days. This fires a single high-priority alert so someone actually
+    refreshes the token.
+    """
+    notify(
+        "Gate: Claude OAuth token looks expired",
+        f"Quota check is fail-open. Refresh the token. Reason: {reason}",
+        tags="warning",
+        priority="high",
+    )

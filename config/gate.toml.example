@@ -20,6 +20,37 @@ project_type = "node"   # node | python | go | rust | none
 # cursor_rules = "/path/to/config/cursor-rules.md"
 # fix_blocklist = "/path/to/config/fix-blocklist.txt"
 
+# --- Fix pipeline behavior (per-repo) ---
+# Whether to run the fix pipeline for `approve_with_notes` verdicts.
+# Default: true (preserves pre-1.1 behavior).
+# fix_on_approve_with_notes = true
+#
+# When `fix_on_approve_with_notes` is true and the pipeline produces zero
+# mechanical changes on the first iteration, exit as a success no-op instead
+# of a failure. This stops the "red X on PR even though there's nothing
+# to fix" pattern.
+# Default: true.
+# graceful_noop_on_approve_with_notes = true
+#
+# Enable the hopper-style per-finding polish loop for `approve_with_notes`.
+# When false, the fixer falls back to the monolithic fix-senior call.
+# This flag is the primary rollback lever if the polish loop regresses.
+# Default: true.
+# fix_polish_loop_enabled = true
+#
+# Per-finding timeouts (seconds) for the polish loop. Broad findings are
+# skipped by default (timeout 0) because they are expected to require
+# architectural changes that do not fit inside a bounded polish attempt.
+# [repos.polish_per_finding_timeout_seconds]
+# trivial = 180
+# scoped = 600
+# broad = 0
+#
+# Total wall-clock budget for the polish loop, in seconds. Any findings not
+# yet attempted when the budget is exhausted are added to `not_fixed` with
+# reason = "deferred_by_budget". Default: 1800 (30 minutes).
+# polish_loop_total_budget_s = 1800
+
 # Per-repo overrides (optional):
 # [repos.limits]
 # max_fix_attempts_soft = 3

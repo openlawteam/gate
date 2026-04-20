@@ -128,6 +128,58 @@ def resolve_repo_config(repo_name: str, config: dict | None = None) -> dict:
     return config
 
 
+def get_repo_bool(config: dict, key: str, default: bool) -> bool:
+    """Fetch a boolean override from ``config["repo"]`` with a safe default.
+
+    Central helper so the polish-loop and approve-with-notes flags have one
+    well-typed read path. TOML already returns proper booleans, so this is
+    mostly a ``.get(...)`` wrapper with defensive coercion.
+    """
+    repo = (config or {}).get("repo", {}) or {}
+    raw = repo.get(key)
+    if raw is None:
+        return default
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        return raw.strip().lower() in ("true", "1", "yes", "on")
+    return bool(raw)
+
+
+def get_polish_timeouts(config: dict) -> dict[str, int]:
+    """Return per-fixability polish-loop timeouts (seconds).
+
+    Defaults: trivial=180s, scoped=600s, broad=0 (skip). The "0" sentinel
+    tells the polish loop to add the finding to ``not_fixed`` immediately
+    with reason ``"skipped_broad_in_polish"`` instead of dispatching the
+    junior against it — broad findings almost always require architectural
+    changes that do not fit inside a bounded polish budget.
+    """
+    defaults = {"trivial": 180, "scoped": 600, "broad": 0}
+    override = ((config or {}).get("repo", {}) or {}).get(
+        "polish_per_finding_timeout_seconds", {}
+    )
+    if not isinstance(override, dict):
+        return defaults
+    merged = dict(defaults)
+    for key, value in override.items():
+        try:
+            merged[str(key)] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return merged
+
+
+def get_polish_total_budget_s(config: dict) -> int:
+    """Return the total wall-clock budget for the polish loop in seconds."""
+    repo = (config or {}).get("repo", {}) or {}
+    raw = repo.get("polish_loop_total_budget_s", 1800)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 1800
+
+
 def build_claude_env() -> dict[str, str]:
     """Build the sandboxed environment dict for Claude subprocesses.
 

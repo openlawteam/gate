@@ -644,3 +644,124 @@ class TestGitSubprocessTimeouts:
         mock_run.side_effect = FileNotFoundError(2, "No git", "git")
         # Must not raise
         _revert_file(tmp_path, "x.txt")
+
+
+# ── Finding-ID + fixability helpers (Audit A2, Group 1E) ─────
+
+
+class TestComputeFindingId:
+    def test_stable_for_same_inputs(self):
+        from gate.fixer import compute_finding_id
+        f = {"file": "a.ts", "line": 10, "source_stage": "logic", "message": "bad"}
+        assert compute_finding_id(f) == compute_finding_id(dict(f))
+
+    def test_differs_on_file_change(self):
+        from gate.fixer import compute_finding_id
+        a = {"file": "a.ts", "line": 10, "source_stage": "logic", "message": "x"}
+        b = {"file": "b.ts", "line": 10, "source_stage": "logic", "message": "x"}
+        assert compute_finding_id(a) != compute_finding_id(b)
+
+    def test_handles_missing_fields(self):
+        from gate.fixer import compute_finding_id
+        assert len(compute_finding_id({})) == 10
+
+
+class TestClassifyFixability:
+    def test_respects_preset_fixability(self):
+        from gate.fixer import classify_fixability
+        assert classify_fixability({"fixability": "broad"}) == "broad"
+        assert classify_fixability({"fixability": "TRIVIAL"}) == "trivial"
+
+    def test_unknown_when_no_keywords(self):
+        from gate.fixer import classify_fixability
+        assert classify_fixability({"message": "something unusual"}) == "unknown"
+
+
+class TestTagFindings:
+    def test_adds_ids_and_fixability(self):
+        from gate.fixer import tag_findings
+        tagged = tag_findings([{"file": "x.ts", "line": 1, "message": "m"}])
+        assert "finding_id" in tagged[0]
+        assert "fixability" in tagged[0]
+
+    def test_preserves_existing_id(self):
+        from gate.fixer import tag_findings
+        tagged = tag_findings([{"file": "x.ts", "finding_id": "preset"}])
+        assert tagged[0]["finding_id"] == "preset"
+
+    def test_does_not_mutate_input(self):
+        from gate.fixer import tag_findings
+        orig = {"file": "x.ts", "line": 1, "message": "m"}
+        tag_findings([orig])
+        assert "finding_id" not in orig
+
+
+class TestFixabilitySummary:
+    def test_counts_each_bucket(self):
+        from gate.fixer import fixability_summary
+        summary = fixability_summary([
+            {"fixability": "trivial"}, {"fixability": "trivial"},
+            {"fixability": "scoped"}, {"fixability": "broad"},
+        ])
+        assert "2 trivial" in summary
+        assert "1 scoped" in summary
+        assert "1 broad" in summary
+        assert "0 unknown" in summary
+
+
+class TestValidateFixJson:
+    def test_none_returns_warnings_and_empty_shape(self):
+        from gate.fixer import _validate_fix_json
+        warnings, norm = _validate_fix_json(None)
+        assert warnings
+        assert norm == {"fixed": [], "not_fixed": [], "stats": {}}
+
+    def test_synthesizes_missing_fix_description(self):
+        from gate.fixer import _validate_fix_json
+        data = {"fixed": [{"file": "a.ts", "line": 1}], "not_fixed": []}
+        warnings, norm = _validate_fix_json(data)
+        entry = norm["fixed"][0]
+        assert entry["_description_synthesized"] is True
+        assert "fix-senior" in entry["fix_description"]
+        assert warnings  # synthesis logs a warning
+
+    def test_synthesizes_missing_not_fixed_detail(self):
+        from gate.fixer import _validate_fix_json
+        data = {"fixed": [], "not_fixed": [{"file": "a.ts", "line": 1}]}
+        _, norm = _validate_fix_json(data)
+        assert norm["not_fixed"][0]["_detail_synthesized"] is True
+        assert norm["not_fixed"][0]["reason"] == "deferred"
+
+    def test_resolves_missing_finding_id_from_findings(self):
+        from gate.fixer import _validate_fix_json
+        findings = [{"file": "a.ts", "line": 5, "finding_id": "xyz"}]
+        data = {
+            "fixed": [{"file": "a.ts", "line": 5, "fix_description": "ok"}],
+            "not_fixed": [],
+        }
+        _, norm = _validate_fix_json(data, findings=findings)
+        assert norm["fixed"][0]["finding_id"] == "xyz"
+
+    def test_drops_non_dict_entries(self):
+        from gate.fixer import _validate_fix_json
+        data = {"fixed": ["oops"], "not_fixed": [42]}
+        warnings, norm = _validate_fix_json(data)
+        assert norm["fixed"] == []
+        assert norm["not_fixed"] == []
+        assert any("not a dict" in w for w in warnings)
+
+
+class TestDedupFixed:
+    def test_dedups_by_finding_id_keeping_latest(self):
+        from gate.fixer import _dedup_fixed
+        entries = [
+            {"finding_id": "a", "iter": 1, "fix_description": "old"},
+            {"finding_id": "b", "iter": 1},
+            {"finding_id": "a", "iter": 2, "fix_description": "new"},
+        ]
+        out = _dedup_fixed(entries)
+        assert len(out) == 2
+        ids = [e["finding_id"] for e in out]
+        assert ids == ["a", "b"]
+        a = next(e for e in out if e["finding_id"] == "a")
+        assert a["iter"] == 2

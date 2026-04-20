@@ -355,3 +355,57 @@ class TestCommentPr:
         mock_gh.side_effect = subprocess.CalledProcessError(1, ["gh"])
         # Should not raise.
         comment_pr("owner/repo", 99, "hello")
+
+
+class TestCommitAndPush:
+    """Regression: commit_and_push must return a CommitResult that
+    distinguishes pushed/no_diff/push_failed (Group 1A)."""
+
+    @patch("gate.github.subprocess.run")
+    @patch("gate.workspace._git_env", return_value={})
+    def test_returns_no_diff_when_index_empty(self, _env, mock_run, tmp_path):
+        from gate.github import commit_and_push
+
+        def fake_run(cmd, **kwargs):
+            if cmd[:4] == ["git", "diff", "--cached", "--quiet"]:
+                return subprocess.CompletedProcess(cmd, 0)
+            return subprocess.CompletedProcess(cmd, 0)
+        mock_run.side_effect = fake_run
+        result = commit_and_push(tmp_path, "msg", branch="feat")
+        assert result.status == "no_diff"
+        assert result.success is False
+
+    @patch("gate.github.subprocess.run")
+    @patch("gate.workspace._git_env", return_value={})
+    def test_returns_push_failed_on_push_error(self, _env, mock_run, tmp_path):
+        from gate.github import commit_and_push
+
+        def fake_run(cmd, **kwargs):
+            if cmd[:4] == ["git", "diff", "--cached", "--quiet"]:
+                return subprocess.CompletedProcess(cmd, 1)
+            if cmd[:2] == ["git", "push"]:
+                e = subprocess.CalledProcessError(1, cmd)
+                e.stderr = b"denied: network down\n"
+                raise e
+            return subprocess.CompletedProcess(cmd, 0)
+        mock_run.side_effect = fake_run
+        result = commit_and_push(tmp_path, "msg", branch="feat")
+        assert result.status == "push_failed"
+        assert "denied" in result.error
+
+    @patch("gate.github.subprocess.run")
+    @patch("gate.workspace._git_env", return_value={})
+    def test_returns_pushed_with_sha_on_success(self, _env, mock_run, tmp_path):
+        from gate.github import commit_and_push
+
+        def fake_run(cmd, **kwargs):
+            if cmd[:4] == ["git", "diff", "--cached", "--quiet"]:
+                return subprocess.CompletedProcess(cmd, 1)
+            if cmd[:2] == ["git", "rev-parse"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout="abcdef1234\n")
+            return subprocess.CompletedProcess(cmd, 0)
+        mock_run.side_effect = fake_run
+        result = commit_and_push(tmp_path, "msg", branch="feat")
+        assert result.status == "pushed"
+        assert result.success is True
+        assert result.sha.startswith("abcdef")

@@ -75,9 +75,48 @@ def _git_env() -> dict[str, str]:
     return env
 
 
-def _git_fetch_with_retry(repo_path: str, branch: str, max_retries: int = 3) -> None:
-    """Fetch with retry and explicit auth."""
+class BranchNotFoundError(Exception):
+    """Raised when the PR branch no longer exists on the remote.
+
+    Typically means the PR was force-deleted/squash-merged between
+    webhook receipt and our fetch. The orchestrator should treat this
+    as a quiet skip (no crash, no fail-open approval spam).
+    """
+
+
+def _is_branch_not_found(stderr: str) -> bool:
+    """Heuristic: does this git error indicate the branch is gone?
+
+    Matches common forms from ``git fetch origin <branch>`` when the
+    ref does not exist on the remote. Kept conservative so transient
+    network errors ("Could not resolve host") don't get misclassified
+    and swallow retries.
+    """
+    low = stderr.lower()
+    return (
+        "couldn't find remote ref" in low
+        or "could not find remote ref" in low
+        or "fatal: couldn't find remote ref" in low
+    )
+
+
+def _git_fetch_with_retry(
+    repo_path: str, branch: str, max_retries: int = 4,
+) -> None:
+    """Fetch a branch with exponential backoff + recovery (Group 3A).
+
+    - Exponential backoff (2s, 4s, 8s, 16s) instead of linear 5/10/15s
+      — matches the rate limiter's typical back-pressure window.
+    - Detects ``BranchNotFoundError`` explicitly so callers can skip
+      reviewing a vanished branch instead of treating it as a generic
+      fetch failure.
+    - On the FIRST transient failure, runs ``git fetch --prune`` to
+      evict stale local refs that can cause later fetches to race on
+      ref advances (observed on PR 196 when a force-push invalidated
+      the old ref).
+    """
     env = _git_env()
+    last_err: Exception | None = None
     for attempt in range(1, max_retries + 1):
         try:
             subprocess.run(
@@ -89,22 +128,65 @@ def _git_fetch_with_retry(repo_path: str, branch: str, max_retries: int = 3) -> 
                 env=env,
             )
             return
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
+        except subprocess.CalledProcessError as e:
+            stderr = (e.stderr or b"").decode("utf-8", errors="replace")
+            if _is_branch_not_found(stderr):
+                raise BranchNotFoundError(
+                    f"branch {branch!r} not found on origin: {stderr.strip()}"
+                ) from e
+            last_err = e
+            if attempt == 1:
+                try:
+                    subprocess.run(
+                        ["git", "fetch", "--prune", "origin"],
+                        cwd=repo_path, capture_output=True, timeout=90, env=env,
+                    )
+                except Exception as prune_err:
+                    logger.info(f"git fetch --prune failed: {prune_err}")
             if attempt < max_retries:
-                logger.warning(f"git fetch retry {attempt}/{max_retries}: {e}")
-                time.sleep(5 * attempt)
+                backoff = 2 ** attempt
+                logger.warning(
+                    f"git fetch retry {attempt}/{max_retries} in {backoff}s: "
+                    f"{stderr.strip() or e}"
+                )
+                time.sleep(backoff)
                 continue
             raise
+        except subprocess.TimeoutExpired as e:
+            last_err = e
+            if attempt < max_retries:
+                backoff = 2 ** attempt
+                logger.warning(
+                    f"git fetch timeout retry {attempt}/{max_retries} in {backoff}s"
+                )
+                time.sleep(backoff)
+                continue
+            raise
+    if last_err:
+        raise last_err
 
 
 def _install_deps_with_retry(
     worktree_path: Path, cmd: str, max_retries: int = 2,
 ) -> None:
-    """Run a dependency install command with retry logic."""
+    """Run dependency install with retries (Group 3B).
+
+    If the worktree vanishes during install — which happens when a
+    re-push triggers ``cancel()`` and the old orchestrator's worktree
+    is torn down by the single-teardown path — raise
+    ``WorkspaceVanishedError`` so the orchestrator can treat it as a
+    quiet cancel instead of a real install failure.
+    """
+    from gate.schemas import WorkspaceVanishedError
+
     env = os.environ.copy()
     env["npm_config_cache"] = str(data_dir() / "npm-cache")
     args = shlex.split(cmd)
     for attempt in range(1, max_retries + 1):
+        if not worktree_path.exists():
+            raise WorkspaceVanishedError(
+                f"worktree {worktree_path} disappeared before install attempt {attempt}"
+            )
         try:
             subprocess.run(
                 args,
@@ -115,7 +197,15 @@ def _install_deps_with_retry(
                 env=env,
             )
             return
+        except FileNotFoundError as e:
+            raise WorkspaceVanishedError(
+                f"worktree {worktree_path} vanished during {cmd}: {e}"
+            ) from e
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
+            if not worktree_path.exists():
+                raise WorkspaceVanishedError(
+                    f"worktree {worktree_path} vanished during {cmd}"
+                ) from e
             if attempt < max_retries:
                 logger.warning(f"dep install retry {attempt}/{max_retries} ({cmd}): {e}")
                 time.sleep(10)

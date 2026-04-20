@@ -78,6 +78,30 @@ def cleanup_logs(max_log_size_mb: int = 10, max_jsonl_lines: int = 5000) -> None
             except OSError:
                 pass
 
+    # Rotate/prune per-runner process logs (Group 5D). Runners emit a
+    # file per review into logs/runners/; without rotation these
+    # accumulate indefinitely and swamp disk on busy repos. We keep:
+    #   - files < 7 days old as-is
+    #   - files 7-30 days old, compressed
+    #   - files > 30 days old deleted
+    runners = logs / "runners"
+    if runners.exists():
+        now = time.time()
+        for f in runners.iterdir():
+            if not f.is_file():
+                continue
+            try:
+                age = now - f.stat().st_mtime
+            except OSError:
+                continue
+            try:
+                if age > 30 * 86400:
+                    f.unlink(missing_ok=True)
+                elif age > 7 * 86400 and f.suffix != ".gz":
+                    _compress_file(f)
+            except OSError:
+                pass
+
 
 def cleanup_worktrees(max_age_hours: int = 24) -> None:
     """Remove stale worktrees older than max_age_hours."""

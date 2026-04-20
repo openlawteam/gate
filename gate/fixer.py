@@ -3,6 +3,7 @@
 Single continuous Claude session with Codex delegation.
 """
 
+import hashlib
 import json
 import logging
 import re
@@ -465,6 +466,232 @@ def _build_codex_bootstrap_prompt() -> str:
         return "You are a junior engineer. Follow the senior's directions precisely."
 
 
+# ── Finding helpers (audit A2, 1E.ii, 4B) ────────────────────
+
+# Keywords used to heuristically classify a finding's fixability when the
+# triage agent has not annotated it. Kept intentionally narrow: false
+# negatives (→ "unknown") are safe; false positives (→ "trivial") would
+# encourage the senior to attempt broad fixes under a tight per-finding
+# budget, which is the exact failure mode the polish loop is designed to
+# avoid.
+_TRIVIAL_KEYWORDS = (
+    "add comment", "add a comment", "explanatory comment",
+    "justification comment", "missing jsdoc", "add jsdoc",
+    "missing import", "unused import", "rename ", "typo",
+    "add type annotation", "missing type annotation",
+    "eslint-disable", "no-img-element",
+    "without an explanatory", "without justification",
+)
+_BROAD_KEYWORDS = (
+    "split file", "extract ", "duplicate ", "refactor",
+    "move to separate", "introduce abstraction", "rewrite ",
+    "line ceiling", "exceeding the", "exceeds the",
+    "over the ", "hard ceiling", "soft target",
+)
+
+
+def compute_finding_id(finding: dict) -> str:
+    """Return a short stable id for a finding.
+
+    The id is a SHA-1 prefix over the fields that uniquely identify a
+    finding from the reviewer's perspective: ``(file, line, source_stage,
+    message)``. Using a stable id lets the fixer dedup ``fixed[]`` entries
+    across iterations even when the senior paraphrases ``finding_message``
+    between runs (which it frequently does — see audit A2).
+    """
+    file = str(finding.get("file", ""))
+    line = str(finding.get("line", ""))
+    stage = str(finding.get("source_stage", ""))
+    message = str(finding.get("message", finding.get("title", "")))
+    payload = f"{file}|{line}|{stage}|{message}"
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:10]
+
+
+def classify_fixability(finding: dict) -> str:
+    """Classify a finding by how mechanical a fix is likely to be.
+
+    Returns one of ``"trivial" | "scoped" | "broad" | "unknown"``. The
+    classification is intentionally heuristic — triage may override it
+    later by setting ``finding["fixability"]`` directly.
+    """
+    if isinstance(finding.get("fixability"), str):
+        val = finding["fixability"].lower()
+        if val in ("trivial", "scoped", "broad", "unknown"):
+            return val
+
+    message = str(finding.get("message", "")).lower()
+    title = str(finding.get("title", "")).lower()
+    text = f"{title} {message}"
+
+    # Broad signals dominate: "over the line ceiling" findings explicitly
+    # require splitting files, and we do not want the senior to attempt
+    # those in polish mode.
+    for kw in _BROAD_KEYWORDS:
+        if kw in text:
+            return "broad"
+    for kw in _TRIVIAL_KEYWORDS:
+        if kw in text:
+            return "trivial"
+    return "unknown"
+
+
+def tag_findings(findings: list[dict]) -> list[dict]:
+    """Annotate each finding with a stable ``finding_id`` and ``fixability``.
+
+    Returns a new list of dicts (does not mutate the input). Missing fields
+    default to safe values so callers never have to defend against
+    ``None``.
+    """
+    tagged: list[dict] = []
+    for f in findings:
+        enriched = dict(f)
+        enriched.setdefault("finding_id", compute_finding_id(f))
+        if "fixability" not in enriched:
+            enriched["fixability"] = classify_fixability(f)
+        tagged.append(enriched)
+    return tagged
+
+
+def fixability_summary(findings: list[dict]) -> str:
+    """Return a one-line human-readable count, e.g. ``5 trivial, 3 scoped, 2 broad, 0 unknown``."""
+    buckets = {"trivial": 0, "scoped": 0, "broad": 0, "unknown": 0}
+    for f in findings:
+        cls = f.get("fixability") or "unknown"
+        if cls not in buckets:
+            cls = "unknown"
+        buckets[cls] += 1
+    parts = [f"{buckets[k]} {k}" for k in ("trivial", "scoped", "broad", "unknown")]
+    return ", ".join(parts)
+
+
+def _validate_fix_json(
+    data: dict | None,
+    findings: list[dict] | None = None,
+) -> tuple[list[str], dict]:
+    """Validate and normalize a ``fix.json`` / ``fix-senior-findings.json`` payload.
+
+    Contract (audit 4B, A15):
+
+    - ``None`` and ``{}`` are treated identically — both return a warning
+      and an empty normalized shape.
+    - Every ``fixed[]`` entry is guaranteed to have ``file``, ``line``,
+      ``finding_id``, ``finding_message`` and a non-placeholder
+      ``fix_description``. Missing values are synthesized.
+    - Every ``not_fixed[]`` entry is guaranteed to have ``reason`` and a
+      non-empty ``detail``.
+
+    ``findings`` is the original tagged finding list. When provided, the
+    normalizer will resolve a missing ``finding_id`` on an entry by
+    matching on ``(file, line)``.
+    """
+    warnings: list[str] = []
+    if not data:
+        warnings.append("fix.json missing or empty")
+        return warnings, {"fixed": [], "not_fixed": [], "stats": {}}
+
+    findings_by_fl: dict[tuple[str, int], dict] = {}
+    if findings:
+        for f in findings:
+            try:
+                key = (str(f.get("file", "")), int(f.get("line", 0) or 0))
+            except (TypeError, ValueError):
+                key = (str(f.get("file", "")), 0)
+            findings_by_fl[key] = f
+
+    def _lookup_finding_id(entry: dict) -> str:
+        fid = entry.get("finding_id")
+        if isinstance(fid, str) and fid:
+            return fid
+        try:
+            key = (str(entry.get("file", "")), int(entry.get("line", 0) or 0))
+        except (TypeError, ValueError):
+            key = (str(entry.get("file", "")), 0)
+        match = findings_by_fl.get(key)
+        if match and isinstance(match.get("finding_id"), str):
+            return match["finding_id"]
+        # Fall back to computing an id from the entry itself so dedup
+        # still has something stable to key on.
+        return compute_finding_id(entry)
+
+    fixed_raw = data.get("fixed") or []
+    if not isinstance(fixed_raw, list):
+        warnings.append("fix.json `fixed` is not a list")
+        fixed_raw = []
+
+    not_fixed_raw = data.get("not_fixed") or []
+    if not isinstance(not_fixed_raw, list):
+        warnings.append("fix.json `not_fixed` is not a list")
+        not_fixed_raw = []
+
+    normalized_fixed: list[dict] = []
+    for entry in fixed_raw:
+        if not isinstance(entry, dict):
+            warnings.append("fixed[] entry is not a dict — dropping")
+            continue
+        out = dict(entry)
+        out["finding_id"] = _lookup_finding_id(out)
+        out.setdefault("file", "?")
+        out.setdefault("line", 0)
+        out.setdefault("finding_message", "(no finding_message)")
+        desc = out.get("fix_description")
+        if not isinstance(desc, str) or not desc.strip() or desc.strip().lower() == "fixed":
+            warnings.append(
+                f"fixed[] entry for {out.get('file')}:{out.get('line')} has no fix_description"
+            )
+            out["fix_description"] = (
+                f"fix-senior modified {out.get('file', '?')} but did not describe the change"
+            )
+            out["_description_synthesized"] = True
+        normalized_fixed.append(out)
+
+    normalized_not_fixed: list[dict] = []
+    for entry in not_fixed_raw:
+        if not isinstance(entry, dict):
+            warnings.append("not_fixed[] entry is not a dict — dropping")
+            continue
+        out = dict(entry)
+        out["finding_id"] = _lookup_finding_id(out)
+        out.setdefault("file", "?")
+        out.setdefault("line", 0)
+        out.setdefault("finding_message", "(no finding_message)")
+        out.setdefault("reason", "deferred")
+        detail = out.get("detail")
+        if not isinstance(detail, str) or not detail.strip():
+            warnings.append(
+                f"not_fixed[] entry for {out.get('file')}:{out.get('line')} has no detail"
+            )
+            out["detail"] = "fix-senior did not provide a detail"
+            out["_detail_synthesized"] = True
+        normalized_not_fixed.append(out)
+
+    stats = data.get("stats") if isinstance(data.get("stats"), dict) else {}
+
+    return warnings, {
+        "fixed": normalized_fixed,
+        "not_fixed": normalized_not_fixed,
+        "stats": stats,
+    }
+
+
+def _dedup_fixed(entries: list[dict]) -> list[dict]:
+    """Dedup ``fixed[]`` entries by ``finding_id`` (preferring later entries).
+
+    Later iterations see post-rereview feedback and usually produce better
+    descriptions, so we keep the most recent entry for each id. Synthesized
+    entries (audit A3) are keyed on a separate ``synth:<file>`` id so they
+    never collapse into each other when multiple files were reconstructed
+    from the diff.
+    """
+    by_id: dict[str, dict] = {}
+    order: list[str] = []
+    for entry in entries:
+        fid = entry.get("finding_id") or compute_finding_id(entry)
+        if fid not in by_id:
+            order.append(fid)
+        by_id[fid] = entry
+    return [by_id[fid] for fid in order]
+
+
 # ── Fix Pipeline ─────────────────────────────────────────────
 
 
@@ -577,6 +804,24 @@ class FixPipeline:
             all_fixed: list[dict] = []
             last_fix_json: dict | None = None
 
+            # Tagged, fixability-classified findings — used for validation
+            # and for dedup key resolution in _validate_fix_json. Read from
+            # the actionable list so dedup aligns with what fix-senior
+            # actually sees in its prompt.
+            tagged_findings = tag_findings(actionable)
+
+            # ── Polish path: one attempt per finding ─────────
+            # When the verdict is approve_with_notes and the polish loop
+            # feature flag is on, dispatch the hopper-style per-finding
+            # loop instead of the monolithic iteration. See fixer_polish
+            # module docstring for the design rationale.
+            from gate.config import get_repo_bool
+            polish_enabled = get_repo_bool(
+                self.config, "fix_polish_loop_enabled", True
+            )
+            if self.is_polish and polish_enabled and tagged_findings:
+                return self._run_polish_path(tagged_findings, finding_count)
+
             for iteration in range(1, MAX_ITERATIONS + 1):
                 if self._cancelled.is_set():
                     return FixResult(success=False, summary="Cancelled")
@@ -598,16 +843,74 @@ class FixPipeline:
                     fix_result = self._resume_fix_session(feedback)
 
                 last_fix_json = fix_result.get("fix_json")
-                new_fixed = (last_fix_json or {}).get("fixed", [])
+
+                # Validate + normalize the senior's output (Group 4B)
+                # before merging into all_fixed. The validator also
+                # synthesizes missing fix_description / detail fields so
+                # downstream commit messages never show literal "fixed".
+                warnings, normalized = _validate_fix_json(last_fix_json, tagged_findings)
+                for w in warnings:
+                    logger.info(f"fix.json validation: {w}")
+                new_fixed = normalized["fixed"]
+
+                # Synthesize entries when the workspace has changes but
+                # fixed[] is empty — signals that fix-senior wrote files
+                # but skipped the report (Group 1E.iv). Tagged as
+                # synth:<file> so the dedup helper keeps them distinct.
+                if fix_result.get("has_changes") and not new_fixed:
+                    changed = _get_changed_files(self.workspace)
+                    for f in changed:
+                        new_fixed.append({
+                            "finding_id": f"synth:{f}",
+                            "file": f,
+                            "line": 0,
+                            "finding_message": "unreported change",
+                            "fix_description": (
+                                f"Agent modified {f} but did not record a finding mapping"
+                            ),
+                            "_synthesized": True,
+                        })
+
                 all_fixed.extend(new_fixed)
+
+                # Minimum-effort floor (Group 1E.iii): when the senior
+                # skipped any trivial finding, re-prompt once in-place
+                # so new_fixed picks up whatever the second pass lands.
+                # Only runs on the first iteration to avoid infinite
+                # loops and only when the senior is resumable.
+                if iteration == 1 and self._reprompt_trivial_skips(
+                    last_fix_json, tagged_findings
+                ):
+                    follow_up_json = self._read_json("fix.json") or self._read_json(
+                        "fix-senior-findings.json"
+                    )
+                    _, follow_up_normalized = _validate_fix_json(
+                        follow_up_json, tagged_findings
+                    )
+                    reprompt_fixed = follow_up_normalized["fixed"]
+                    if reprompt_fixed:
+                        all_fixed.extend(reprompt_fixed)
+                        last_fix_json = follow_up_json
+                        fix_result["has_changes"] = (
+                            len(_get_changed_files(self.workspace)) > 0
+                        )
 
                 if not fix_result.get("has_changes"):
                     logger.info(f"Iteration {iteration}: no changes")
+                    # Iter 1 with zero changes on approve_with_notes =
+                    # graceful no-op (Group 1C). Checked before looping
+                    # into iter 2 with empty re-review feedback.
+                    if iteration == 1 and self._is_graceful_noop_case():
+                        return self._graceful_noop_result(finding_count)
                     if iteration >= MAX_ITERATIONS:
                         state.record_fix_attempt(self.pr_number, repo=self.repo)
                         return FixResult(
                             success=False,
-                            summary=f"No changes after {iteration} iterations",
+                            summary=(
+                                f"Fix-senior produced no changes for {finding_count} "
+                                f"findings after {iteration} iterations "
+                                "(investigation required)"
+                            ),
                         )
                     continue
 
@@ -837,6 +1140,158 @@ class FixPipeline:
         logger.info(f"Re-review: {'pass' if passed else 'fail'}")
         return passed
 
+    def _reprompt_trivial_skips(
+        self,
+        last_fix_json: dict | None,
+        tagged_findings: list[dict],
+    ) -> bool:
+        """Minimum-effort floor re-prompt (Group 1E.iii / audit A7).
+
+        When fix-senior returned a non-empty ``not_fixed`` that contains
+        findings classified ``fixability == "trivial"``, resume the
+        session with a focused re-prompt enumerating those findings.
+
+        The re-prompt explicitly says *concrete blocker or fix* — it
+        does NOT pressure the senior to fabricate fixes. A senior that
+        has a real reason the trivial fix is unsafe can still record
+        ``not_fixed`` with an expanded, specific ``detail``.
+
+        Returns ``True`` if a re-prompt was dispatched, ``False`` if no
+        trivial findings were skipped.
+        """
+        if not self.session_id or not last_fix_json:
+            return False
+        not_fixed = last_fix_json.get("not_fixed") or []
+        if not isinstance(not_fixed, list):
+            return False
+
+        trivial_ids = {
+            f["finding_id"]
+            for f in tagged_findings
+            if f.get("fixability") == "trivial"
+        }
+        skipped_trivial = [
+            entry for entry in not_fixed
+            if isinstance(entry, dict)
+            and entry.get("finding_id") in trivial_ids
+        ]
+        if not skipped_trivial:
+            return False
+
+        bullet_lines = "\n".join(
+            f"- `{e.get('finding_id')}` {e.get('file')}:{e.get('line')} — "
+            f"{e.get('finding_message', '')[:120]}"
+            for e in skipped_trivial
+        )
+        reprompt = (
+            "# Trivial findings were left unfixed\n\n"
+            "The findings below were classified `trivial` (single-line or "
+            "near-single-line mechanical fixes). You placed them in "
+            "`not_fixed` without a concrete blocker.\n\n"
+            "For each finding, either:\n\n"
+            "1. **Fix it mechanically** (preferred) — dispatch `gate-code "
+            "implement` with a one-sentence direction and re-emit the "
+            "entry in `fixed[]` with the `finding_id` below.\n"
+            "2. **Provide a concrete per-finding blocker** — file "
+            "references, exact line numbers, and the specific reason the "
+            "mechanical change is unsafe. Do NOT guess. Do NOT use "
+            "placeholder detail text.\n\n"
+            f"{bullet_lines}\n\n"
+            "When you are done, rewrite `fix-senior-findings.json` with "
+            "the updated entries (each trivial finding must appear "
+            "exactly once in either `fixed[]` or `not_fixed[]`) and stop."
+        )
+        write_live_log(
+            self.pr_number,
+            f"Min-effort floor: re-prompting on {len(skipped_trivial)} "
+            "skipped trivial findings",
+            prefix="fix", repo=self.repo,
+        )
+        self._resume_fix_session(reprompt)
+        return True
+
+    def _run_polish_path(
+        self,
+        tagged_findings: list[dict],
+        finding_count: int,
+    ) -> FixResult:
+        """Execute the per-finding polish loop and finalize the result.
+
+        On zero changes we honor the ``graceful_noop_on_approve_with_notes``
+        flag — same semantics as the monolithic iter-1 no-op case. On
+        changes we run the structured re-review and then commit via
+        ``_commit_and_finish`` so the audit-corrected pushed/no_diff/
+        push_failed reporting applies uniformly.
+        """
+        from gate import fixer_polish
+
+        aggregate = fixer_polish.run_polish_loop(self, tagged_findings)
+        (self.workspace / "fix.json").write_text(json.dumps(aggregate, indent=2))
+
+        all_fixed = list(aggregate.get("fixed", []))
+        fixed_count = len(all_fixed)
+        has_changes = len(_get_changed_files(self.workspace)) > 0
+
+        if not has_changes:
+            if self._is_graceful_noop_case():
+                return self._graceful_noop_result(finding_count)
+            state.record_fix_attempt(self.pr_number, repo=self.repo)
+            return FixResult(
+                success=False,
+                summary=(
+                    f"Polish loop produced no changes for {finding_count} "
+                    "findings (investigation required)"
+                ),
+            )
+
+        write_diff(self.workspace)
+        self._emit_fix_stage("fix-rereview")
+        rereview_pass = self._run_rereview()
+        if not rereview_pass:
+            _revert_all(self.workspace)
+            state.record_fix_attempt(self.pr_number, repo=self.repo)
+            notify.fix_failed(
+                self.pr_number, "re-review rejected polish changes", 1, self.repo,
+            )
+            return FixResult(
+                success=False,
+                summary=(
+                    f"Polish loop fixed {fixed_count}/{finding_count} findings "
+                    "but re-review rejected the changes"
+                ),
+            )
+
+        return self._commit_and_finish(1, all_fixed, aggregate, finding_count)
+
+    def _is_graceful_noop_case(self) -> bool:
+        """Whether zero-change iter 1 should be treated as a success no-op.
+
+        Only applies to ``approve_with_notes`` verdicts, and only when the
+        per-repo flag ``graceful_noop_on_approve_with_notes`` is true.
+        Request-changes verdicts always fail on "no changes" — that is
+        a legitimate regression signal (audit A9).
+        """
+        from gate.config import get_repo_bool
+        if not self.is_polish:
+            return False
+        return get_repo_bool(self.config, "graceful_noop_on_approve_with_notes", True)
+
+    def _graceful_noop_result(self, finding_count: int) -> FixResult:
+        """Return a success no-op for approve_with_notes PRs with zero fixes.
+
+        Records the attempt as a no-op (``no_op=True``) so it does not
+        count against ``check_fix_limits`` and clears any prior
+        ``fix_attempts.txt`` counter since no real attempt occurred
+        (Group 5D, audit A9).
+        """
+        summary = (
+            f"No mechanical fixes needed "
+            f"(approve_with_notes — {finding_count} findings were notes only)"
+        )
+        write_live_log(self.pr_number, summary, prefix="fix", repo=self.repo)
+        state.record_fix_attempt(self.pr_number, repo=self.repo, no_op=True)
+        return FixResult(success=True, pushed=False, summary=summary)
+
     def _commit_and_finish(
         self,
         iteration: int,
@@ -844,59 +1299,129 @@ class FixPipeline:
         last_fix_json: dict | None,
         finding_count: int,
     ) -> FixResult:
-        """Commit, push, and return success.
+        """Commit, push, and return a status-accurate :class:`FixResult`.
 
-        Ported from commitAndPush() in run-fix-loop.js.
+        Splits the three commit outcomes that the old implementation
+        collapsed into ``success=True``:
+
+        - ``pushed``      → success, with a detailed PR comment
+        - ``no_diff``     → failure, summary explains the empty push
+        - ``push_failed`` → failure, summary includes the git error tail
+
+        Ports ``commitAndPush()`` from run-fix-loop.js with the Group 1A
+        semantics bolted on.
         """
         write_live_log(
             self.pr_number, "Re-review passed, committing...",
             prefix="fix", repo=self.repo,
         )
 
-        fixed_count = len(all_fixed)
-        not_fixed = (last_fix_json or {}).get("not_fixed", [])
+        # Dedup all_fixed by finding_id before reporting (Group 1B / A2)
+        all_fixed = _dedup_fixed(all_fixed)
+        real_fixed = [f for f in all_fixed if not str(f.get("finding_id", "")).startswith("synth:")]
+        synth_fixed = [f for f in all_fixed if str(f.get("finding_id", "")).startswith("synth:")]
+        # Public counts never exceed the input finding_count.
+        fixed_count = min(len(real_fixed), finding_count)
+        synth_count = len(synth_fixed)
 
-        # Build commit message
-        commit_msg = f"fix(gate): auto-fix {fixed_count} issues from Gate review"
+        not_fixed_raw = (last_fix_json or {}).get("not_fixed", [])
+        # Validate not_fixed too so synthesized details propagate into
+        # the commit message / PR comment (Group 4B + 4C).
+        _, normalized_nf = _validate_fix_json(
+            {"fixed": [], "not_fixed": not_fixed_raw},
+            tag_findings(self.verdict.get("findings", [])),
+        )
+        not_fixed = normalized_nf["not_fixed"]
+
+        commit_msg = f"fix(gate): auto-fix {fixed_count}/{finding_count} findings"
+        if synth_count:
+            commit_msg += f" (+{synth_count} file-level reconstructions)"
+        commit_msg += " from Gate review"
+
         fixed_details = "\n".join(
-            f"- {f.get('file', '?')} — {f.get('fix_description', 'fixed')}"
-            for f in all_fixed
+            f"- {f.get('file', '?')} — {f.get('fix_description')}"
+            for f in real_fixed
         )
         if fixed_details:
             commit_msg += f"\n\nFindings fixed:\n{fixed_details}"
+        if synth_fixed:
+            synth_lines = "\n".join(
+                f"- {f.get('file', '?')} — {f.get('fix_description')}"
+                for f in synth_fixed
+            )
+            commit_msg += (
+                "\n\nFile-level changes reconstructed from diff "
+                "(fix-senior did not report them):\n" + synth_lines
+            )
         not_fixed_details = "\n".join(
-            f"- {f.get('reason', '?')}: {f.get('detail', '')}" for f in not_fixed
+            f"- {f.get('file', '?')} ({f.get('reason')}): {f.get('detail')}"
+            for f in not_fixed
         )
         if not_fixed_details:
             commit_msg += f"\n\nNot fixed (require human action):\n{not_fixed_details}"
 
+        synthesized_any = any(
+            f.get("_description_synthesized") for f in real_fixed
+        )
+        if synthesized_any:
+            commit_msg += (
+                "\n\n_Some descriptions synthesized from diff; "
+                "fix-senior omitted fix_description._"
+            )
+
         cleanup_artifacts(self.workspace)
-        new_sha = github.commit_and_push(self.workspace, commit_msg, branch=self.branch)
-        pushed = new_sha is not None
+        result = github.commit_and_push(self.workspace, commit_msg, branch=self.branch)
 
-        if pushed:
-            marker = self._state_dir / "fix-rereview-passed.txt"
-            marker.write_text(new_sha)
+        if result.status == "no_diff":
+            state.record_fix_attempt(self.pr_number, repo=self.repo)
+            msg = (
+                "Re-review passed but no diff to push "
+                "(fix-senior made no file changes)"
+            )
+            write_live_log(self.pr_number, msg, prefix="fix", repo=self.repo)
+            notify.fix_failed(self.pr_number, "no diff to push", iteration, self.repo)
+            return FixResult(success=False, pushed=False, summary=msg)
 
-            # Post visible summary on the PR (original review gets dismissed
-            # by GitHub when the fix commit arrives, so this is the only
-            # on-PR confirmation the user sees).
-            fixed_lines = "\n".join(
-                f"- `{f.get('file', '?')}` — {f.get('fix_description', 'fixed')}"
-                for f in all_fixed
+        if result.status == "push_failed":
+            state.record_fix_attempt(self.pr_number, repo=self.repo)
+            error_tail = (result.error or "unknown").splitlines()[-1]
+            msg = f"Push rejected by remote: {error_tail}"
+            write_live_log(self.pr_number, msg, prefix="fix", repo=self.repo)
+            notify.fix_failed(self.pr_number, f"push failed: {error_tail}", iteration, self.repo)
+            return FixResult(
+                success=False,
+                pushed=False,
+                error=result.error,
+                summary=msg,
             )
-            not_fixed_lines = "\n".join(
-                f"- {f.get('reason', '?')}: {f.get('detail', '')}"
-                for f in not_fixed
+
+        new_sha = result.sha
+        marker = self._state_dir / "fix-rereview-passed.txt"
+        marker.write_text(new_sha)
+
+        fixed_lines = "\n".join(
+            f"- `{f.get('file', '?')}` — {f.get('fix_description')}"
+            for f in real_fixed
+        )
+        not_fixed_lines = "\n".join(
+            f"- `{f.get('file', '?')}` ({f.get('reason')}): {f.get('detail')}"
+            for f in not_fixed
+        )
+        body = "## Gate Auto-Fix Applied\n\n"
+        body += f"Fixed {fixed_count}/{finding_count} findings "
+        if synth_count:
+            body += f"(plus {synth_count} file-level reconstructions) "
+        body += f"in {iteration} iteration(s) ({new_sha[:8]}).\n\n"
+        if fixed_lines:
+            body += f"**Fixed:**\n{fixed_lines}\n\n"
+        if not_fixed_lines:
+            body += f"**Not fixed (require human action):**\n{not_fixed_lines}\n"
+        if synthesized_any:
+            body += (
+                "\n_Some descriptions synthesized from the diff because "
+                "fix-senior omitted `fix_description`._\n"
             )
-            body = "## Gate Auto-Fix Applied\n\n"
-            body += f"Fixed {fixed_count}/{finding_count} findings "
-            body += f"in {iteration} iteration(s) ({new_sha[:8]}).\n\n"
-            if fixed_lines:
-                body += f"**Fixed:**\n{fixed_lines}\n\n"
-            if not_fixed_lines:
-                body += f"**Not fixed (require human action):**\n{not_fixed_lines}\n"
-            github.comment_pr(self.repo, self.pr_number, body)
+        github.comment_pr(self.repo, self.pr_number, body)
 
         state.record_fix_attempt(self.pr_number, repo=self.repo)
         notify.fix_complete(self.pr_number, fixed_count, finding_count, iteration, self.repo)
@@ -904,11 +1429,13 @@ class FixPipeline:
         summary = (
             f"Fixed {fixed_count}/{finding_count} findings in {iteration} iteration(s)"
         )
+        if synth_count:
+            summary += f" (+{synth_count} reconstructions)"
         write_live_log(self.pr_number, summary, prefix="fix", repo=self.repo)
 
         return FixResult(
             success=True,
-            pushed=pushed,
+            pushed=True,
             summary=summary,
         )
 

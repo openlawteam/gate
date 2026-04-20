@@ -126,13 +126,31 @@ def log_fix_result(
     original_decision: str,
     repo: str = "",
     fix_elapsed_seconds: int = 0,
+    status: str | None = None,
 ) -> None:
-    """Append a fix result entry to reviews.jsonl."""
+    """Append a fix result entry to reviews.jsonl.
+
+    ``status`` may be one of ``"succeeded"``, ``"failed"``, or ``"no_op"``.
+    When not provided it is derived from ``fix_success`` (legacy callers
+    that have not been updated yet). ``no_op`` lets log consumers
+    distinguish "the fix pipeline intentionally did nothing" (e.g. a
+    graceful no-op on an approve_with_notes PR with no mechanical work)
+    from "the fix pipeline landed commits" and from "the fix pipeline
+    failed" (audit A10).
+    """
+    if status is None:
+        status = "succeeded" if fix_success else "failed"
+    if status == "no_op":
+        decision = "fix_no_op"
+    elif status == "succeeded":
+        decision = "fix_succeeded"
+    else:
+        decision = "fix_failed"
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "repo": repo,
         "pr": pr_number,
-        "decision": "fix_succeeded" if fix_success else "fix_failed",
+        "decision": decision,
         "original_decision": original_decision,
         "fix_summary": fix_summary,
         "is_fix_followup": True,
@@ -143,10 +161,7 @@ def log_fix_result(
     with open(logs / "reviews.jsonl", "a") as f:
         f.write(json.dumps(entry) + "\n")
 
-    _logger.info(
-        f"Logged fix result PR #{pr_number}: "
-        f"{'succeeded' if fix_success else 'failed'}"
-    )
+    _logger.info(f"Logged fix result PR #{pr_number}: {status}")
 
 
 def write_live_log(pr_number: int, message: str, prefix: str = "", repo: str = "") -> None:

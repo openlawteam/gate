@@ -12,6 +12,14 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, labeled, closed]
     branches: [main]
 
+# Audit A20 / Group 3C — cancel superseded runs at the GitHub Actions
+# level so a rapid-fire sequence of pushes doesn't queue up N runners
+# all trying to grab the same worktree. Gate's queue still handles
+# in-process cancellation; this just prevents the upstream pile-up.
+concurrency:
+  group: gate-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

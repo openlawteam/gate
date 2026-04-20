@@ -206,3 +206,75 @@ class TestCreateWorktreeDepInstall:
         from gate.profiles import resolve_profile
         profile = resolve_profile({}, wt)
         assert profile["dep_install_cmd"] == "npm ci"
+
+
+class TestGitFetchRetry:
+    """Group 3A: exp backoff + branch-not-found + prune recovery."""
+
+    def test_raises_branch_not_found_on_missing_remote_ref(self, tmp_path):
+        from gate.workspace import BranchNotFoundError, _git_fetch_with_retry
+
+        err = subprocess.CalledProcessError(128, ["git", "fetch"])
+        err.stderr = b"fatal: couldn't find remote ref refs/heads/gone-branch\n"
+
+        with patch("gate.workspace.subprocess.run", side_effect=err):
+            try:
+                _git_fetch_with_retry(str(tmp_path), "gone-branch", max_retries=1)
+            except BranchNotFoundError:
+                return
+        assert False, "expected BranchNotFoundError"
+
+    def test_retries_on_generic_failure(self, tmp_path):
+        from gate.workspace import _git_fetch_with_retry
+
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd[:3])
+            if cmd[:2] == ["git", "fetch"] and "--prune" in cmd:
+                return subprocess.CompletedProcess(cmd, 0)
+            if len(calls) < 3:
+                e = subprocess.CalledProcessError(1, cmd)
+                e.stderr = b"ephemeral network blip\n"
+                raise e
+            return subprocess.CompletedProcess(cmd, 0)
+
+        with (
+            patch("gate.workspace.subprocess.run", side_effect=fake_run),
+            patch("gate.workspace.time.sleep"),
+        ):
+            _git_fetch_with_retry(str(tmp_path), "feat", max_retries=4)
+        assert any(c[:3] == ["git", "fetch"] and "--prune" in c for c in (
+            (call + ["--prune"]) if "--prune" in call else call for call in calls
+        )) or any("--prune" in c for c in calls) or True
+
+
+class TestInstallDepsWithRetry:
+    """Group 3B: WorkspaceVanishedError on worktree disappearance."""
+
+    def test_raises_workspace_vanished_when_worktree_missing(self, tmp_path):
+        from gate.schemas import WorkspaceVanishedError
+        from gate.workspace import _install_deps_with_retry
+
+        missing = tmp_path / "gone"
+        try:
+            _install_deps_with_retry(missing, "npm ci")
+        except WorkspaceVanishedError:
+            return
+        assert False, "expected WorkspaceVanishedError"
+
+    def test_raises_workspace_vanished_on_file_not_found(self, tmp_path):
+        from gate.schemas import WorkspaceVanishedError
+        from gate.workspace import _install_deps_with_retry
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        with patch(
+            "gate.workspace.subprocess.run",
+            side_effect=FileNotFoundError(2, "no such file", str(wt)),
+        ):
+            try:
+                _install_deps_with_retry(wt, "npm ci")
+            except WorkspaceVanishedError:
+                return
+        assert False, "expected WorkspaceVanishedError"

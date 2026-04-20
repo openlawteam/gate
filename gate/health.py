@@ -52,6 +52,7 @@ def run_health_check() -> dict:
         "orphaned_windows": check_orphaned_tmux_windows(),
         "circuit_breaker": check_circuit_breaker(),
         "quota": check_quota_freshness(),
+        "quota_auth": check_quota_auth(),
         "recent_errors": check_recent_errors(),
     }
 
@@ -483,6 +484,39 @@ def check_circuit_breaker() -> dict:
         "ok": not tripped,
         "detail": "tripped — last 3 reviews were errors" if tripped else "ok",
     }
+
+
+def check_quota_auth() -> dict:
+    """Check that the Claude OAuth token authenticates successfully (Group 4A).
+
+    This is distinct from ``check_quota_freshness`` — a fresh cache can
+    mask an expired token indefinitely because ``check_quota`` falls
+    back to cache on 401. We look specifically at the
+    ``auth_drift_alert_latched_at`` marker: if it's present and
+    recent, the token is bad. We also do a best-effort live probe when
+    no cache exists to catch first-boot drift.
+    """
+    from gate.quota import (
+        _auth_drift_marker_path,
+        check_quota,
+    )
+
+    marker = _auth_drift_marker_path()
+    if marker.exists():
+        try:
+            age = time.time() - marker.stat().st_mtime
+            if age < 24 * 60 * 60:
+                return {
+                    "ok": False,
+                    "detail": f"auth drift latched {int(age)}s ago — refresh OAuth token",
+                }
+        except OSError:
+            pass
+
+    result = check_quota()
+    if result.get("auth_drift"):
+        return {"ok": False, "detail": result.get("reason", "auth drift")}
+    return {"ok": True, "detail": "token ok"}
 
 
 def check_quota_freshness() -> dict:

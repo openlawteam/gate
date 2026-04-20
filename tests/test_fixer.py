@@ -750,6 +750,144 @@ class TestValidateFixJson:
         assert norm["not_fixed"] == []
         assert any("not a dict" in w for w in warnings)
 
+    def test_hopper_sub_scope_log_normalized(self):
+        from gate.fixer import _validate_fix_json
+        data = {
+            "fixed": [],
+            "not_fixed": [],
+            "sub_scope_log": [
+                {
+                    "name": "scope1",
+                    "finding_ids": ["a", "b"],
+                    "iterations": "2",
+                    "outcome": "committed",
+                    "checkpoint_sha": "abc12345",
+                },
+                {
+                    "name": "scope2",
+                    "finding_ids": ["c"],
+                    "iterations": 3,
+                    "outcome": "reverted",
+                    "reason": "subscope_exhausted",
+                },
+            ],
+            "final_commit_message": "  fix(gate): ok  ",
+        }
+        warnings, norm = _validate_fix_json(data)
+        assert [s["name"] for s in norm["sub_scope_log"]] == ["scope1", "scope2"]
+        assert norm["sub_scope_log"][0]["iterations"] == 2  # coerced
+        assert norm["sub_scope_log"][0]["outcome"] == "committed"
+        assert norm["final_commit_message"] == "fix(gate): ok"
+        assert not any("sub_scope_log" in w for w in warnings)
+
+    def test_hopper_invalid_outcome_warns_but_keeps(self):
+        from gate.fixer import _validate_fix_json
+        data = {
+            "fixed": [],
+            "not_fixed": [],
+            "sub_scope_log": [
+                {"name": "scope1", "outcome": "weird-value"},
+            ],
+        }
+        warnings, norm = _validate_fix_json(data)
+        assert any("outcome" in w for w in warnings)
+        assert norm["sub_scope_log"][0]["outcome"] == "weird-value"
+
+    def test_hopper_missing_name_drops_entry(self):
+        from gate.fixer import _validate_fix_json
+        data = {
+            "fixed": [],
+            "not_fixed": [],
+            "sub_scope_log": [
+                {"outcome": "committed"},
+                {"name": "  ", "outcome": "committed"},
+                {"name": "kept", "outcome": "committed"},
+            ],
+        }
+        warnings, norm = _validate_fix_json(data)
+        assert [s["name"] for s in norm["sub_scope_log"]] == ["kept"]
+        assert sum("missing name" in w for w in warnings) == 2
+
+    def test_hopper_non_list_sub_scope_log_warns(self):
+        from gate.fixer import _validate_fix_json
+        data = {"fixed": [], "not_fixed": [], "sub_scope_log": "nope"}
+        warnings, norm = _validate_fix_json(data)
+        assert any("sub_scope_log" in w for w in warnings)
+        assert norm["sub_scope_log"] == []
+
+    def test_hopper_final_commit_non_string_warns(self):
+        from gate.fixer import _validate_fix_json
+        data = {"fixed": [], "not_fixed": [], "final_commit_message": 42}
+        warnings, norm = _validate_fix_json(data)
+        assert any("final_commit_message" in w for w in warnings)
+        assert norm["final_commit_message"] == ""
+
+
+class TestReprompTrivialSkipsHopperGate:
+    """``_reprompt_trivial_skips`` must no-op under hopper mode.
+
+    Under hopper the senior plans the whole scope up-front and the
+    fixability classes are informational. Re-prompting based on them
+    reintroduces the PR #217 pattern that motivated the pipeline switch.
+    """
+
+    def _make_fixer(self, tmp_path, config):
+        from gate.fixer import FixPipeline
+        f = FixPipeline(
+            pr_number=1, repo="org/repo", workspace=tmp_path,
+            verdict={"findings": []}, build=None, config=config,
+        )
+        f.session_id = "stub-session"
+        return f
+
+    def test_hopper_mode_does_not_reprompt(self, tmp_path):
+        f = self._make_fixer(tmp_path, {"fix_pipeline": {"mode": "hopper"}})
+        result = f._reprompt_trivial_skips(
+            {"not_fixed": [{"finding_id": "x"}]},
+            [{"finding_id": "x", "fixability": "trivial"}],
+        )
+        assert result is False
+
+    def test_hopper_watchdog_trips_and_sets_flag(self, tmp_path):
+        """Watchdog cancels the run and sets ``_runaway_guard_hit``."""
+        from gate.fixer import FixPipeline
+        cfg = {
+            "fix_pipeline": {
+                "mode": "hopper",
+                "max_wall_clock_s": 1,
+                "senior_session_timeout_s": 1,
+            }
+        }
+        f = FixPipeline(
+            pr_number=1, repo="org/repo", workspace=tmp_path,
+            verdict={"findings": []}, build=None, config=cfg,
+        )
+        import time as _time
+        f._fix_start_monotonic = _time.monotonic()
+        f._start_watchdog()
+        # Give the daemon thread up to 5s to trip the 1s cap.
+        deadline = _time.monotonic() + 5.0
+        while _time.monotonic() < deadline and not f._cancelled.is_set():
+            _time.sleep(0.1)
+        assert f._cancelled.is_set()
+        assert f._runaway_guard_hit is True
+
+    def test_polish_legacy_still_reprompts(self, tmp_path, monkeypatch):
+        from gate import fixer
+        f = self._make_fixer(tmp_path, {"fix_pipeline": {"mode": "polish_legacy"}})
+        # Stub out the heavyweight helpers this path would normally hit.
+        monkeypatch.setattr(
+            f, "_resume_fix_session", lambda *_a, **_k: {"fix_json": {}}
+        )
+        monkeypatch.setattr(fixer, "write_live_log", lambda *a, **k: None)
+        result = f._reprompt_trivial_skips(
+            {"not_fixed": [
+                {"finding_id": "x", "reason": "skipped_broad_in_polish"}
+            ]},
+            [{"finding_id": "x", "fixability": "trivial"}],
+        )
+        assert result is True
+
 
 class TestDedupFixed:
     def test_dedups_by_finding_id_keeping_latest(self):

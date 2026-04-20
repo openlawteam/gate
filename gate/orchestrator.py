@@ -58,6 +58,8 @@ class ReviewOrchestrator:
         self.socket_path = socket_path
         self.workspace: Path | None = None
         self.check_run_id: int | None = None
+        self.check_name: str = "gate-review"
+        self.is_post_fix_rereview: bool = False
         self.start_time: float | None = None
         self.pr_title: str = ""
         self.pr_body: str = ""
@@ -154,9 +156,24 @@ class ReviewOrchestrator:
                     " at start, proceeding anyway (fail-open)"
                 )
 
+            # === DETECT POST-FIX RE-REVIEW ===
+            # If the head commit was authored by the bot, this is Gate
+            # re-reviewing its own auto-fix. Tag the check status
+            # accordingly so humans can tell at a glance.
+            bot_account = self.config.get("repo", {}).get("bot_account") or "gate-bot"
+            bot_email = f"{bot_account}@users.noreply.github.com"
+            author_email = github.get_commit_author_email(self.repo, self.head_sha)
+            if author_email and author_email.strip().lower() == bot_email.lower():
+                self.is_post_fix_rereview = True
+                self.check_name = "gate-review (post-fix)"
+                logger.info(
+                    f"PR #{self.pr_number}: HEAD {self.head_sha[:8]} "
+                    f"authored by bot ({bot_email}) — tagging as post-fix re-review"
+                )
+
             # === CREATE CHECK RUN FIRST ===
             self.check_run_id = github.create_check_run(
-                self.repo, self.head_sha, name="gate-review", status="queued"
+                self.repo, self.head_sha, name=self.check_name, status="queued"
             )
             self._write_active_marker()
 
@@ -403,6 +420,16 @@ class ReviewOrchestrator:
             verdict = self._run_structured_stage("verdict")
             elapsed = int(time.monotonic() - self.start_time)
             verdict.data["review_time_seconds"] = elapsed
+
+            # Stamp stable finding_ids on every finding BEFORE we persist
+            # verdict.json. Without this, the ROI diff in post-fix
+            # re-reviews can't match prior→current findings
+            # (Group 2D, audit-revealed).
+            from gate.finding_id import compute_finding_id as _cfi
+            for _f in verdict.data.get("findings") or []:
+                if isinstance(_f, dict) and not _f.get("finding_id"):
+                    _f["finding_id"] = _cfi(_f)
+
             self._save_stage_result("verdict", verdict)
 
             # If a re-push landed while we were rendering the verdict,
@@ -435,9 +462,32 @@ class ReviewOrchestrator:
             )
 
             # === LOG + NOTIFY ===
+            # Re-review ROI diff (Group 2D): count prior → current finding
+            # overlap so we can later ask "how often does post-fix
+            # re-review surface NEW findings?". Only populated when we
+            # have a prior verdict to compare against.
+            roi_kwargs: dict = {}
+            if prior and prior.get("has_prior"):
+                prior_ids = {
+                    f["finding_id"] for f in prior.get("prior_findings", [])
+                    if f.get("finding_id")
+                }
+                current_ids = {
+                    f["finding_id"] for f in verdict.data.get("findings", []) or []
+                    if f.get("finding_id")
+                }
+                roi_kwargs = {
+                    "is_post_fix_rereview": self.is_post_fix_rereview,
+                    "prior_findings_count": len(prior_ids),
+                    "new_findings_count": len(current_ids - prior_ids),
+                    "persisting_findings_count": len(current_ids & prior_ids),
+                    "resolved_since_prior_count": len(prior_ids - current_ids),
+                }
+
             log_review(
                 self.pr_number, verdict.data, build_result,
                 elapsed, quota, triage=triage.data, repo=self.repo,
+                **roi_kwargs,
             )
             notify.review_complete(self.pr_number, verdict.data, self.repo)
 
@@ -499,13 +549,28 @@ class ReviewOrchestrator:
                     is_no_op = bool(
                         fix_result.success and not fix_result.pushed
                     )
-                    fix_conclusion = "success" if fix_result.success else "failure"
-                    if is_no_op:
-                        check_title = "Gate Auto-Fix: skipped (no mechanical changes needed)"
-                    elif fix_result.success:
-                        check_title = "Gate Auto-Fix: succeeded"
-                    else:
+                    # Distinguish partial success ("pushed but some findings
+                    # require human action") from clean success so humans can
+                    # see it on the PR without opening the comment. The legacy
+                    # statuses API maps ``neutral`` → ``success`` state; the
+                    # title/description is the primary visible signal.
+                    fix_total = fix_result.fixed_count + fix_result.not_fixed_count
+                    if not fix_result.success:
+                        fix_conclusion = "failure"
                         check_title = "Gate Auto-Fix: failed"
+                    elif is_no_op:
+                        fix_conclusion = "success"
+                        check_title = "Gate Auto-Fix: skipped (no mechanical changes needed)"
+                    elif fix_result.not_fixed_count > 0:
+                        fix_conclusion = "neutral"
+                        check_title = (
+                            f"Gate Auto-Fix: partial "
+                            f"({fix_result.fixed_count}/{fix_total}) — "
+                            f"{fix_result.not_fixed_count} require human action"
+                        )
+                    else:
+                        fix_conclusion = "success"
+                        check_title = "Gate Auto-Fix: all findings resolved"
 
                     self._emit(
                         "review_stage_update", review_id=review_id,
@@ -529,6 +594,45 @@ class ReviewOrchestrator:
                         status=(
                             "no_op" if is_no_op
                             else ("succeeded" if fix_result.success else "failed")
+                        ),
+                        pipeline_mode=fix_result.pipeline_mode or None,
+                        sub_scope_total=(
+                            fix_result.sub_scope_total
+                            if fix_result.sub_scope_total
+                            else None
+                        ),
+                        sub_scope_committed=(
+                            fix_result.sub_scope_committed
+                            if fix_result.sub_scope_total
+                            else None
+                        ),
+                        sub_scope_reverted=(
+                            fix_result.sub_scope_reverted
+                            if fix_result.sub_scope_total
+                            else None
+                        ),
+                        sub_scope_empty=(
+                            fix_result.sub_scope_empty
+                            if fix_result.sub_scope_total
+                            else None
+                        ),
+                        wall_clock_seconds=(
+                            fix_result.wall_clock_seconds
+                            if fix_result.wall_clock_seconds
+                            else None
+                        ),
+                        runaway_guard_hit=(
+                            True if fix_result.runaway_guard_hit else None
+                        ),
+                        fixed_count=(
+                            fix_result.fixed_count
+                            if fix_result.fixed_count or fix_result.not_fixed_count
+                            else None
+                        ),
+                        not_fixed_count=(
+                            fix_result.not_fixed_count
+                            if fix_result.fixed_count or fix_result.not_fixed_count
+                            else None
                         ),
                     )
                 except Exception as fix_err:

@@ -51,6 +51,24 @@ class TestCmdReview:
         ])
         assert result == 1
 
+    @patch("gate.client.send_message")
+    @patch("gate.config.gate_dir")
+    def test_passes_expected_types_filter(self, mock_gate_dir, mock_send, tmp_path):
+        """Regression: PR #216 — CLI must filter noise broadcasts (see client.send_message)."""
+        mock_gate_dir.return_value = tmp_path
+        mock_send.return_value = {"type": "review_accepted", "pr_number": 42}
+
+        result = cmd_review([
+            "--pr", "42",
+            "--repo", "test-org/test-repo",
+            "--head-sha", "abc12345",
+            "--branch", "feature",
+        ])
+        assert result == 0
+        kwargs = mock_send.call_args.kwargs
+        assert kwargs.get("expected_types") == {"review_accepted", "error"}
+        assert kwargs.get("wait_for_response") is True
+
 
 class TestCmdCancel:
     @patch("gate.client.send_message")

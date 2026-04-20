@@ -193,6 +193,24 @@ def get_pr_info(repo: str, pr_number: int) -> dict:
     return data
 
 
+def get_commit_author_email(repo: str, sha: str) -> str | None:
+    """Return the git-author email of a commit, or None on error.
+
+    Used by the orchestrator to detect post-fix re-reviews (Gate reviewing
+    its own bot commit) and label the check status accordingly.
+    """
+    try:
+        out = _gh([
+            "api", f"repos/{repo}/commits/{sha}",
+            "-q", ".commit.author.email",
+        ])
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"Failed to fetch commit author email for {sha[:8]}: {e}")
+        return None
+    email = out.strip()
+    return email or None
+
+
 def get_pr_labels(repo: str, pr_number: int) -> list[str]:
     """Fetch current labels on a PR."""
     out = _gh(["pr", "view", str(pr_number), "--repo", repo, "--json", "labels"])

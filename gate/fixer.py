@@ -3,7 +3,6 @@
 Single continuous Claude session with Codex delegation.
 """
 
-import hashlib
 import json
 import logging
 import re
@@ -17,9 +16,12 @@ from pathlib import Path
 from gate import builder, github, notify, prompt, state
 from gate.codex import bootstrap_codex
 from gate.config import build_claude_env, gate_dir
+from gate.finding_id import compute_finding_id  # re-exported for back-compat
 from gate.logger import write_live_log
 from gate.runner import StructuredRunner, run_with_retry
 from gate.schemas import FixResult
+
+__all__ = ["compute_finding_id"]
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,9 @@ GATE_ARTIFACT_FILES = {
     "fix-build.json", "fix-diff.txt", "fix-env.json",
     "fix-resume-prompt.md", "fix-rereview.json",
     "no-codex.txt", "fix.json",
+    # Polish-loop / hopper-pipeline state files (PR #217 regression
+    # guard — these must never land in PR commits).
+    "fix-polish.json", "fix-decomposition.json",
 }
 
 GATE_ARTIFACT_GLOBS = [
@@ -85,6 +90,12 @@ def cleanup_artifacts(workspace: Path) -> list[str]:
     if build_dir.is_dir():
         shutil.rmtree(build_dir, ignore_errors=True)
         removed.append("fix-build/")
+
+    # .gate/ hopper-mode baseline marker directory (never ship to PRs)
+    gate_marker = workspace / ".gate"
+    if gate_marker.is_dir():
+        shutil.rmtree(gate_marker, ignore_errors=True)
+        removed.append(".gate/")
 
     # Unstage any removed paths still in the git index
     if removed:
@@ -490,23 +501,6 @@ _BROAD_KEYWORDS = (
 )
 
 
-def compute_finding_id(finding: dict) -> str:
-    """Return a short stable id for a finding.
-
-    The id is a SHA-1 prefix over the fields that uniquely identify a
-    finding from the reviewer's perspective: ``(file, line, source_stage,
-    message)``. Using a stable id lets the fixer dedup ``fixed[]`` entries
-    across iterations even when the senior paraphrases ``finding_message``
-    between runs (which it frequently does — see audit A2).
-    """
-    file = str(finding.get("file", ""))
-    line = str(finding.get("line", ""))
-    stage = str(finding.get("source_stage", ""))
-    message = str(finding.get("message", finding.get("title", "")))
-    payload = f"{file}|{line}|{stage}|{message}"
-    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:10]
-
-
 def classify_fixability(finding: dict) -> str:
     """Classify a finding by how mechanical a fix is likely to be.
 
@@ -666,10 +660,65 @@ def _validate_fix_json(
 
     stats = data.get("stats") if isinstance(data.get("stats"), dict) else {}
 
+    # Hopper-mode extensions (Part 3 of the hardening plan). The legacy
+    # shape stays unchanged; new keys default to empty so callers on the
+    # polish_legacy path don't need to care.
+    sub_scope_log_raw = data.get("sub_scope_log") or []
+    if not isinstance(sub_scope_log_raw, list):
+        warnings.append("fix.json `sub_scope_log` is not a list - ignoring")
+        sub_scope_log_raw = []
+
+    _valid_outcomes = {"committed", "reverted", "empty"}
+    normalized_sub_scope_log: list[dict] = []
+    for entry in sub_scope_log_raw:
+        if not isinstance(entry, dict):
+            warnings.append("sub_scope_log entry is not a dict - dropping")
+            continue
+        out = dict(entry)
+        name = out.get("name")
+        if not isinstance(name, str) or not name.strip():
+            warnings.append("sub_scope_log entry missing name - dropping")
+            continue
+        out["name"] = name.strip()
+
+        finding_ids = out.get("finding_ids") or []
+        if not isinstance(finding_ids, list):
+            warnings.append(
+                f"sub_scope_log '{out['name']}' finding_ids is not a list"
+            )
+            finding_ids = []
+        out["finding_ids"] = [str(x) for x in finding_ids if x]
+
+        try:
+            out["iterations"] = int(out.get("iterations") or 0)
+        except (TypeError, ValueError):
+            warnings.append(
+                f"sub_scope_log '{out['name']}' iterations not an int"
+            )
+            out["iterations"] = 0
+
+        outcome = out.get("outcome")
+        if outcome not in _valid_outcomes:
+            warnings.append(
+                f"sub_scope_log '{out['name']}' outcome "
+                f"'{outcome}' not in {sorted(_valid_outcomes)}"
+            )
+            out["outcome"] = "committed" if outcome is None else str(outcome)
+        normalized_sub_scope_log.append(out)
+
+    final_commit_message = data.get("final_commit_message")
+    if final_commit_message is not None and not isinstance(final_commit_message, str):
+        warnings.append("fix.json `final_commit_message` is not a string")
+        final_commit_message = None
+    if isinstance(final_commit_message, str):
+        final_commit_message = final_commit_message.strip()
+
     return warnings, {
         "fixed": normalized_fixed,
         "not_fixed": normalized_not_fixed,
         "stats": stats,
+        "sub_scope_log": normalized_sub_scope_log,
+        "final_commit_message": final_commit_message or "",
     }
 
 
@@ -730,6 +779,16 @@ class FixPipeline:
         self.fix_pane_id: str | None = None
         self.is_polish = verdict.get("decision") == "approve_with_notes"
         self._state_dir = state.get_pr_state_dir(pr_number, repo)
+        # Captured when ``run()`` starts, used by ``_commit_and_finish`` to
+        # squash any intermediate polish/checkpoint commits. Without this,
+        # ``gate-polish checkpoint`` commits leaked onto PR #217's
+        # branch (see Part 1B / Part 2E of the hardening plan).
+        self._pre_fix_sha: str = ""
+        # Hopper-mode metrics — populated opportunistically so the
+        # orchestrator can forward them to ``log_fix_result``. Defaults
+        # are chosen so polish_legacy callers serialise nothing new.
+        self._fix_start_monotonic: float = 0.0
+        self._runaway_guard_hit: bool = False
 
     def _emit_fix_stage(self, stage: str) -> None:
         """Emit a fix stage update to the server (no-op if no connection)."""
@@ -741,16 +800,116 @@ class FixPipeline:
                 status="fixing",
             )
 
+    def _start_watchdog(self) -> None:
+        """Launch the hopper-mode runaway guard.
+
+        Polls ``time.monotonic()`` once per 30 s on a daemon thread. When
+        the overall wall-clock budget elapses, sets ``self._cancelled``
+        (which every stage already respects) and flips
+        ``self._runaway_guard_hit`` so the final ``FixResult`` + the
+        reviews.jsonl entry carry the signal.
+
+        Only active in hopper mode — polish_legacy has its own per-finding
+        timeouts and doesn't need a global wall-clock cap.
+        """
+        from gate.config import (
+            get_fix_pipeline_max_wall_clock_s,
+            get_fix_pipeline_mode,
+            get_fix_pipeline_senior_session_timeout_s,
+        )
+
+        if get_fix_pipeline_mode(self.config) != "hopper":
+            return
+
+        wall_cap = get_fix_pipeline_max_wall_clock_s(self.config)
+        session_cap = get_fix_pipeline_senior_session_timeout_s(self.config)
+        cap = max(wall_cap, session_cap)
+        if cap <= 0:
+            return
+
+        start = self._fix_start_monotonic or time.monotonic()
+
+        def _loop() -> None:
+            while not self._cancelled.is_set():
+                elapsed = time.monotonic() - start
+                if elapsed >= cap:
+                    logger.warning(
+                        f"PR #{self.pr_number}: hopper watchdog tripped "
+                        f"after {int(elapsed)}s (cap {cap}s) — cancelling"
+                    )
+                    self._runaway_guard_hit = True
+                    self._cancelled.set()
+                    try:
+                        from gate.logger import write_live_log as _wll
+                        _wll(
+                            self.pr_number,
+                            f"Hopper watchdog tripped at {int(elapsed)}s "
+                            f"(cap {cap}s) — cancelling fix run",
+                            prefix="fix", repo=self.repo,
+                        )
+                    except Exception:  # noqa: BLE001 — best-effort
+                        pass
+                    return
+                # Bounded sleep so cancellation propagates within 30 s.
+                self._cancelled.wait(timeout=min(30.0, cap - elapsed))
+
+        t = threading.Thread(
+            target=_loop,
+            name=f"gate-hopper-watchdog-pr{self.pr_number}",
+            daemon=True,
+        )
+        t.start()
+
     def run(self) -> FixResult:
         """Execute the fix pipeline."""
         if self._cancelled.is_set():
             return FixResult(success=False, summary="Cancelled before start")
 
+        self._fix_start_monotonic = time.monotonic()
+        self._start_watchdog()
         self._connection = None
         if self.socket_path and self.review_id:
             from gate.client import GateConnection
             self._connection = GateConnection(self.socket_path)
             self._connection.start()
+
+        # Snapshot HEAD before any fix attempt so ``_commit_and_finish``
+        # can ``git reset --soft`` over intermediate checkpoint commits.
+        try:
+            self._pre_fix_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(self.workspace),
+                capture_output=True, text=True, check=True, timeout=10,
+            ).stdout.strip()
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            logger.warning(
+                f"PR #{self.pr_number}: could not snapshot pre-fix HEAD: {exc}"
+            )
+            self._pre_fix_sha = ""
+
+        # Publish the baseline for ``gate checkpoint`` invoked by senior
+        # Claude from inside the worktree. Hopper-mode subcommands read
+        # ``.gate/pre-fix-sha`` to know what the "clean baseline" is
+        # during save/revert/finalize and ``.gate/context.json`` to
+        # route live-log / progress lines back to the correct PR.
+        if self._pre_fix_sha:
+            try:
+                gate_dir_marker = self.workspace / ".gate"
+                gate_dir_marker.mkdir(exist_ok=True)
+                (gate_dir_marker / "pre-fix-sha").write_text(
+                    self._pre_fix_sha + "\n"
+                )
+                (gate_dir_marker / "context.json").write_text(
+                    json.dumps({
+                        "pr_number": self.pr_number,
+                        "repo": self.repo,
+                    }) + "\n"
+                )
+            except OSError as exc:
+                logger.warning(
+                    f"PR #{self.pr_number}: could not write "
+                    f".gate/pre-fix-sha marker: {exc}"
+                )
 
         findings = self.verdict.get("findings", [])
         actionable = [f for f in findings if f.get("severity", "") != "info"]
@@ -811,15 +970,21 @@ class FixPipeline:
             tagged_findings = tag_findings(actionable)
 
             # ── Polish path: one attempt per finding ─────────
-            # When the verdict is approve_with_notes and the polish loop
-            # feature flag is on, dispatch the hopper-style per-finding
-            # loop instead of the monolithic iteration. See fixer_polish
-            # module docstring for the design rationale.
-            from gate.config import get_repo_bool
+            # Dispatched ONLY when the repo is pinned to the legacy
+            # polish_legacy mode. Under the default hopper mode the
+            # senior-driven monolithic path runs over all findings with
+            # sub-scope checkpointing (see Part 3 of the hardening plan).
+            from gate.config import get_fix_pipeline_mode, get_repo_bool
+            pipeline_mode = get_fix_pipeline_mode(self.config)
             polish_enabled = get_repo_bool(
                 self.config, "fix_polish_loop_enabled", True
             )
-            if self.is_polish and polish_enabled and tagged_findings:
+            if (
+                pipeline_mode == "polish_legacy"
+                and self.is_polish
+                and polish_enabled
+                and tagged_findings
+            ):
                 return self._run_polish_path(tagged_findings, finding_count)
 
             for iteration in range(1, MAX_ITERATIONS + 1):
@@ -1158,7 +1323,15 @@ class FixPipeline:
 
         Returns ``True`` if a re-prompt was dispatched, ``False`` if no
         trivial findings were skipped.
+
+        Gated behind ``fix_pipeline.mode = "polish_legacy"``. Under
+        hopper mode the senior plans the entire scope up-front and we
+        don't want to re-prompt based on fixability classes (those are
+        informational-only in hopper mode — see Part 3).
         """
+        from gate.config import get_fix_pipeline_mode
+        if get_fix_pipeline_mode(self.config) != "polish_legacy":
+            return False
         if not self.session_id or not last_fix_json:
             return False
         not_fixed = last_fix_json.get("not_fixed") or []
@@ -1370,6 +1543,29 @@ class FixPipeline:
             )
 
         cleanup_artifacts(self.workspace)
+
+        # Squash any intermediate ``gate-polish checkpoint`` commits left
+        # behind by fixer_polish._git_checkpoint. Without this the
+        # checkpoints pushed straight through to the PR branch (see PR
+        # #217 pollution in Part 1B). ``--soft`` keeps the final tree
+        # state intact so the next commit captures the real fixes.
+        if self._pre_fix_sha:
+            try:
+                subprocess.run(
+                    ["git", "reset", "--soft", self._pre_fix_sha],
+                    cwd=str(self.workspace),
+                    check=True, capture_output=True, timeout=10,
+                )
+            except (
+                subprocess.CalledProcessError,
+                subprocess.TimeoutExpired,
+                FileNotFoundError,
+            ) as exc:
+                logger.warning(
+                    f"PR #{self.pr_number}: pre-commit reset "
+                    f"to pre-fix sha failed: {exc}"
+                )
+
         result = github.commit_and_push(self.workspace, commit_msg, branch=self.branch)
 
         if result.status == "no_diff":
@@ -1380,7 +1576,13 @@ class FixPipeline:
             )
             write_live_log(self.pr_number, msg, prefix="fix", repo=self.repo)
             notify.fix_failed(self.pr_number, "no diff to push", iteration, self.repo)
-            return FixResult(success=False, pushed=False, summary=msg)
+            return FixResult(
+                success=False,
+                pushed=False,
+                summary=msg,
+                fixed_count=fixed_count,
+                not_fixed_count=len(not_fixed),
+            )
 
         if result.status == "push_failed":
             state.record_fix_attempt(self.pr_number, repo=self.repo)
@@ -1393,6 +1595,8 @@ class FixPipeline:
                 pushed=False,
                 error=result.error,
                 summary=msg,
+                fixed_count=fixed_count,
+                not_fixed_count=len(not_fixed),
             )
 
         new_sha = result.sha
@@ -1407,7 +1611,14 @@ class FixPipeline:
             f"- `{f.get('file', '?')}` ({f.get('reason')}): {f.get('detail')}"
             for f in not_fixed
         )
-        body = "## Gate Auto-Fix Applied\n\n"
+        not_fixed_count = len(not_fixed)
+        body = ""
+        if not_fixed_count > 0:
+            body += (
+                f"> **Gate Auto-Fix: {fixed_count} fixed, "
+                f"{not_fixed_count} require human action**\n\n"
+            )
+        body += "## Gate Auto-Fix Applied\n\n"
         body += f"Fixed {fixed_count}/{finding_count} findings "
         if synth_count:
             body += f"(plus {synth_count} file-level reconstructions) "
@@ -1433,10 +1644,46 @@ class FixPipeline:
             summary += f" (+{synth_count} reconstructions)"
         write_live_log(self.pr_number, summary, prefix="fix", repo=self.repo)
 
+        # Hopper-mode observability: summarise the senior's sub_scope_log
+        # (validated by ``_validate_fix_json``) so the orchestrator can
+        # forward the counts to reviews.jsonl. polish_legacy runs leave
+        # these at their zero defaults.
+        _, normalized = _validate_fix_json(
+            last_fix_json, tag_findings(self.verdict.get("findings", []))
+        )
+        sub_scope_log = normalized.get("sub_scope_log") or []
+        sub_scope_total = len(sub_scope_log)
+        sub_scope_committed = sum(
+            1 for s in sub_scope_log if s.get("outcome") == "committed"
+        )
+        sub_scope_reverted = sum(
+            1 for s in sub_scope_log if s.get("outcome") == "reverted"
+        )
+        sub_scope_empty = sum(
+            1 for s in sub_scope_log if s.get("outcome") == "empty"
+        )
+
+        from gate.config import get_fix_pipeline_mode
+        pipeline_mode = get_fix_pipeline_mode(self.config)
+        wall_clock = (
+            int(time.monotonic() - self._fix_start_monotonic)
+            if self._fix_start_monotonic
+            else 0
+        )
+
         return FixResult(
             success=True,
             pushed=True,
             summary=summary,
+            fixed_count=fixed_count,
+            not_fixed_count=not_fixed_count,
+            pipeline_mode=pipeline_mode,
+            sub_scope_total=sub_scope_total,
+            sub_scope_committed=sub_scope_committed,
+            sub_scope_reverted=sub_scope_reverted,
+            sub_scope_empty=sub_scope_empty,
+            wall_clock_seconds=wall_clock,
+            runaway_guard_hit=self._runaway_guard_hit,
         )
 
     def _read_json(self, filename: str) -> dict | None:

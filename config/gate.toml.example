@@ -51,6 +51,32 @@ project_type = "node"   # node | python | go | rust | none
 # reason = "deferred_by_budget". Default: 1800 (30 minutes).
 # polish_loop_total_budget_s = 1800
 
+# --- Hopper-style fix pipeline ---
+# The holistic pipeline driven by fix-senior.md + `gate checkpoint`. Replaces
+# the per-finding polish loop above. Sub-scopes are decomposed by the senior,
+# each one is iterated (implement → audit → checkpoint), and sub-scope
+# checkpoints are squashed into a single final commit before push.
+#
+# Set `mode = "hopper"` per-repo to enable. During rollout we leave the
+# default at `polish_legacy` so only opt-in repos get the new pipeline; flip
+# per repo once you've verified on a low-stakes PR.
+# [fix_pipeline]
+# mode = "polish_legacy"  # "hopper" | "polish_legacy"
+#
+# Runaway guard: total wall-clock ceiling for a single fix run. When the
+# watchdog trips it cancels the run and records `runaway_guard_hit = true`
+# in reviews.jsonl. Default: 14400 (4 hours).
+# max_wall_clock_s = 14400
+#
+# Per-senior-session timeout. Separate from the overall cap so a hung
+# senior session can be detected independently of the aggregate budget.
+# Default: 7200 (2 hours).
+# senior_session_timeout_s = 7200
+#
+# Maximum implement/audit iterations per sub-scope before deferring all
+# of its findings with reason = "subscope_exhausted". Default: 3.
+# max_subscope_iterations = 3
+
 # Per-repo overrides (optional):
 # [repos.limits]
 # max_fix_attempts_soft = 3

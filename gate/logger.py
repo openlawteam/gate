@@ -64,10 +64,19 @@ def log_review(
     run_id: str = "",
     triage: dict | None = None,
     repo: str = "",
+    is_post_fix_rereview: bool = False,
+    prior_findings_count: int | None = None,
+    new_findings_count: int | None = None,
+    persisting_findings_count: int | None = None,
+    resolved_since_prior_count: int | None = None,
 ) -> None:
     """Append a review entry to reviews.jsonl.
 
     Ported from assemble-log-entry.js buildEntry().
+
+    Optional re-review ROI fields (Group 2D) are serialised only when
+    provided — callers on the normal review path still pass no extra
+    args so the JSONL schema stays backward-compatible.
     """
     findings = verdict.get("findings", [])
     stats = verdict.get("stats", {})
@@ -108,6 +117,18 @@ def log_review(
         "stages_run": stats.get("stages_run", 0),
     }
 
+    # Re-review ROI fields (only serialised when populated).
+    if is_post_fix_rereview:
+        entry["is_post_fix_rereview"] = True
+    for key, value in (
+        ("prior_findings_count", prior_findings_count),
+        ("new_findings_count", new_findings_count),
+        ("persisting_findings_count", persisting_findings_count),
+        ("resolved_since_prior_count", resolved_since_prior_count),
+    ):
+        if value is not None:
+            entry[key] = value
+
     logs = logs_dir()
     logs.mkdir(parents=True, exist_ok=True)
     with open(logs / "reviews.jsonl", "a") as f:
@@ -127,6 +148,15 @@ def log_fix_result(
     repo: str = "",
     fix_elapsed_seconds: int = 0,
     status: str | None = None,
+    pipeline_mode: str | None = None,
+    sub_scope_total: int | None = None,
+    sub_scope_committed: int | None = None,
+    sub_scope_reverted: int | None = None,
+    sub_scope_empty: int | None = None,
+    wall_clock_seconds: int | None = None,
+    runaway_guard_hit: bool | None = None,
+    fixed_count: int | None = None,
+    not_fixed_count: int | None = None,
 ) -> None:
     """Append a fix result entry to reviews.jsonl.
 
@@ -137,6 +167,11 @@ def log_fix_result(
     graceful no-op on an approve_with_notes PR with no mechanical work)
     from "the fix pipeline landed commits" and from "the fix pipeline
     failed" (audit A10).
+
+    Hopper-mode kwargs (``pipeline_mode``, ``sub_scope_*``,
+    ``wall_clock_seconds``, ``runaway_guard_hit``, ``fixed_count``,
+    ``not_fixed_count``) are serialised only when populated so legacy
+    polish_legacy entries remain byte-identical.
     """
     if status is None:
         status = "succeeded" if fix_success else "failed"
@@ -156,6 +191,19 @@ def log_fix_result(
         "is_fix_followup": True,
         "review_time_seconds": fix_elapsed_seconds,
     }
+    for key, value in (
+        ("pipeline_mode", pipeline_mode),
+        ("sub_scope_total", sub_scope_total),
+        ("sub_scope_committed", sub_scope_committed),
+        ("sub_scope_reverted", sub_scope_reverted),
+        ("sub_scope_empty", sub_scope_empty),
+        ("wall_clock_seconds", wall_clock_seconds),
+        ("runaway_guard_hit", runaway_guard_hit),
+        ("fixed_count", fixed_count),
+        ("not_fixed_count", not_fixed_count),
+    ):
+        if value is not None:
+            entry[key] = value
     logs = logs_dir()
     logs.mkdir(parents=True, exist_ok=True)
     with open(logs / "reviews.jsonl", "a") as f:

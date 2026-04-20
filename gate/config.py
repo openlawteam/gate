@@ -180,6 +180,74 @@ def get_polish_total_budget_s(config: dict) -> int:
         return 1800
 
 
+_VALID_FIX_PIPELINE_MODES = ("hopper", "polish_legacy")
+
+
+def get_fix_pipeline_mode(config: dict) -> str:
+    """Return the active fix-pipeline mode (``"hopper"`` | ``"polish_legacy"``).
+
+    Resolution order (first non-empty wins):
+      1. ``[fix_pipeline].mode`` (new section — preferred going forward)
+      2. ``[repo].fix_pipeline_mode``
+      3. Default ``"polish_legacy"`` (pre-rollout default; flip per repo
+         during cutover — see the hardening plan's rollout section).
+    """
+    if not isinstance(config, dict):
+        return "polish_legacy"
+    fp = config.get("fix_pipeline")
+    if isinstance(fp, dict):
+        mode = str(fp.get("mode", "")).strip().lower()
+        if mode in _VALID_FIX_PIPELINE_MODES:
+            return mode
+    repo = config.get("repo", {}) or {}
+    mode = str(repo.get("fix_pipeline_mode", "")).strip().lower()
+    if mode in _VALID_FIX_PIPELINE_MODES:
+        return mode
+    return "polish_legacy"
+
+
+def get_fix_pipeline_max_wall_clock_s(config: dict) -> int:
+    """Runaway guard for hopper-mode fix runs (default 4h)."""
+    default = 14400
+    if not isinstance(config, dict):
+        return default
+    fp = config.get("fix_pipeline")
+    if isinstance(fp, dict) and fp.get("max_wall_clock_s") is not None:
+        try:
+            return int(fp["max_wall_clock_s"])
+        except (TypeError, ValueError):
+            pass
+    return default
+
+
+def get_fix_pipeline_senior_session_timeout_s(config: dict) -> int:
+    """Per-senior-session timeout (default 2h). Separate from the overall cap."""
+    default = 7200
+    if not isinstance(config, dict):
+        return default
+    fp = config.get("fix_pipeline")
+    if isinstance(fp, dict) and fp.get("senior_session_timeout_s") is not None:
+        try:
+            return int(fp["senior_session_timeout_s"])
+        except (TypeError, ValueError):
+            pass
+    return default
+
+
+def get_fix_pipeline_max_subscope_iterations(config: dict) -> int:
+    """Max implement/audit iterations per sub-scope before defer (default 3)."""
+    default = 3
+    if not isinstance(config, dict):
+        return default
+    fp = config.get("fix_pipeline")
+    if isinstance(fp, dict) and fp.get("max_subscope_iterations") is not None:
+        try:
+            return int(fp["max_subscope_iterations"])
+        except (TypeError, ValueError):
+            pass
+    return default
+
+
 def build_claude_env() -> dict[str, str]:
     """Build the sandboxed environment dict for Claude subprocesses.
 

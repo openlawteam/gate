@@ -151,8 +151,18 @@ def send_message(
     message: dict,
     timeout: float = 2.0,
     wait_for_response: bool = False,
+    expected_types: set[str] | None = None,
+    max_skipped_frames: int = 10,
 ) -> dict | None:
-    """Send a one-shot message to the server."""
+    """Send a one-shot message to the server.
+
+    When ``expected_types`` is provided, frames whose ``type`` is not in the set
+    are skipped (with a debug log) and we keep reading until a matching frame
+    arrives, the cumulative ``timeout`` elapses, or ``max_skipped_frames`` is
+    exceeded. This lets the CLI tolerate interleaved broadcasts (e.g.
+    ``review_cancelled``) that arrive on the same socket as the request's
+    actual response (e.g. ``review_accepted``).
+    """
     try:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(timeout)
@@ -161,15 +171,42 @@ def send_message(
         sock.sendall(line.encode("utf-8"))
         if wait_for_response:
             buffer = ""
+            skipped = 0
+            deadline = time.monotonic() + timeout
             while True:
-                data = sock.recv(4096)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                sock.settimeout(remaining)
+                try:
+                    data = sock.recv(4096)
+                except socket.timeout:
+                    break
                 if not data:
                     break
                 buffer += data.decode("utf-8")
-                if "\n" in buffer:
-                    response_line, _ = buffer.split("\n", 1)
+                while "\n" in buffer:
+                    response_line, buffer = buffer.split("\n", 1)
+                    response_line = response_line.strip()
+                    if not response_line:
+                        continue
+                    try:
+                        parsed = json.loads(response_line)
+                    except json.JSONDecodeError:
+                        continue
+                    if expected_types is not None and parsed.get("type") not in expected_types:
+                        skipped += 1
+                        logger.debug(
+                            "send_message: skipping unexpected frame type=%s (skipped=%d)",
+                            parsed.get("type"),
+                            skipped,
+                        )
+                        if skipped >= max_skipped_frames:
+                            sock.close()
+                            return None
+                        continue
                     sock.close()
-                    return json.loads(response_line)
+                    return parsed
         sock.close()
         return None
     except Exception:

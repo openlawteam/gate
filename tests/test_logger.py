@@ -145,6 +145,49 @@ class TestLogFixResult:
             assert entry["review_time_seconds"] == 0
             assert entry["decision"] == "fix_failed"
 
+    def test_fix_result_serialises_hopper_kwargs(self, tmp_path):
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+        jsonl = logs_dir / "reviews.jsonl"
+
+        with _patch_logs(logs_dir):
+            log_fix_result(
+                17, True, "hopper ok", "approve_with_notes",
+                pipeline_mode="hopper",
+                sub_scope_total=3, sub_scope_committed=2,
+                sub_scope_reverted=1, sub_scope_empty=0,
+                wall_clock_seconds=900,
+                runaway_guard_hit=False,
+                fixed_count=5, not_fixed_count=2,
+            )
+            entry = json.loads(jsonl.read_text().strip())
+            assert entry["pipeline_mode"] == "hopper"
+            assert entry["sub_scope_total"] == 3
+            assert entry["sub_scope_committed"] == 2
+            assert entry["sub_scope_reverted"] == 1
+            assert entry["sub_scope_empty"] == 0
+            assert entry["wall_clock_seconds"] == 900
+            assert entry["fixed_count"] == 5
+            assert entry["not_fixed_count"] == 2
+            # runaway_guard_hit is False → should be serialised when explicitly
+            # passed so we can diff "ran to completion" from "never populated".
+            assert entry["runaway_guard_hit"] is False
+
+    def test_fix_result_omits_hopper_kwargs_when_not_set(self, tmp_path):
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+        jsonl = logs_dir / "reviews.jsonl"
+
+        with _patch_logs(logs_dir):
+            log_fix_result(99, True, "ok", "approve_with_notes")
+            entry = json.loads(jsonl.read_text().strip())
+            for key in (
+                "pipeline_mode", "sub_scope_total", "sub_scope_committed",
+                "sub_scope_reverted", "sub_scope_empty", "wall_clock_seconds",
+                "runaway_guard_hit", "fixed_count", "not_fixed_count",
+            ):
+                assert key not in entry
+
 
 class TestWriteSidecarMeta:
     def test_writes_meta_file(self, tmp_path):

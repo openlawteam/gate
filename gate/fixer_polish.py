@@ -1,4 +1,15 @@
-"""Hopper-style per-finding polish loop.
+"""Legacy per-finding polish loop (``fix_pipeline.mode = "polish_legacy"``).
+
+.. deprecated::
+    Superseded by the holistic hopper-mode pipeline driven directly by
+    ``fix-senior.md`` + ``gate checkpoint`` (see Part 3 of the gate
+    hardening plan). Kept for rollback + bake-in only — slated for
+    deletion ~2 weeks after hopper mode stabilises in production. The
+    retirement checklist (``fixer_polish.py``, ``prompts/fix-polish.md``,
+    ``fixer._run_polish_path``, ``_reprompt_trivial_skips``, the
+    ``fix_polish_loop_enabled`` / ``polish_per_finding_timeout_seconds``
+    / ``polish_loop_total_budget_s`` config keys, and related tests)
+    lives in the plan's "Legacy retire" section.
 
 Runs one focused fix-senior attempt per finding, in descending fixability
 order (trivial → scoped → broad). Each attempt gets a fresh Codex

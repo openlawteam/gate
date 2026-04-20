@@ -47,6 +47,11 @@ fix-resume-prompt.md
 fix-rereview.json
 no-codex.txt
 fix.json
+# Polish-loop / hopper-pipeline state files (PR #217 regression guard).
+fix-polish.json
+fix-decomposition.json
+# Hopper-mode baseline marker written by fixer.ReviewFixer.run()
+.gate/
 *-findings.json
 *-result.json
 *-session-id.txt
@@ -73,6 +78,32 @@ def _git_env() -> dict[str, str]:
         env["GIT_CONFIG_KEY_0"] = "http.https://github.com/.extraheader"
         env["GIT_CONFIG_VALUE_0"] = f"Authorization: Basic {_b64_token(pat)}"
     return env
+
+
+def _is_auto_fix_head(workspace: Path, bot_email: str) -> bool:
+    """Return True iff HEAD in ``workspace`` was authored by the Gate bot.
+
+    Used to distinguish a post-fix re-review (Gate reviewing its own
+    auto-fix commit) from a normal human-authored PR push so the check
+    status name can be labelled accordingly.
+
+    Returns False on any subprocess error so the caller falls back to
+    the normal ``gate-review`` name.
+    """
+    if not bot_email:
+        return False
+    try:
+        result = subprocess.run(
+            ["git", "show", "-s", "--format=%ae", "HEAD"],
+            cwd=str(workspace),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+    return result.stdout.strip().lower() == bot_email.strip().lower()
 
 
 class BranchNotFoundError(Exception):

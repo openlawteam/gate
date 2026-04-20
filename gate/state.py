@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 from gate.config import repo_slug, state_dir
+from gate.finding_id import compute_finding_id
 from gate.io import atomic_write
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,9 @@ def load_prior_review(pr_number: int, workspace: Path, repo: str = "") -> dict:
             "message": f.get("message"),
             "evidence_level": f.get("evidence_level"),
             "introduced_by_pr": f.get("introduced_by_pr"),
+            # Stable id (Group 2D ROI diff). Backfilled on-the-fly for
+            # legacy verdicts written before compute_finding_id existed.
+            "finding_id": f.get("finding_id") or compute_finding_id(f),
         }
         for f in (verdict.get("findings") or [])
     ]

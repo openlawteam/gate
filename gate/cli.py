@@ -338,7 +338,11 @@ def cmd_review(args: list[str]) -> int:
     response = None
     for attempt in range(max_retries):
         response = send_message(
-            socket_path, message, timeout=5.0, wait_for_response=True,
+            socket_path,
+            message,
+            timeout=5.0,
+            wait_for_response=True,
+            expected_types={"review_accepted", "error"},
         )
         if response is not None:
             break
@@ -773,6 +777,21 @@ def cmd_update(args: list[str]) -> int:
     except subprocess.CalledProcessError as e:
         print(f"Update failed: {e}")
         return 1
+
+
+@command(
+    "checkpoint",
+    "Hopper-mode sub-scope checkpoint helpers (save/revert/finalize/list)",
+    group="internal",
+)
+def cmd_checkpoint(args: list[str]) -> int:
+    """Dispatch to ``gate.checkpoint.cli_main``.
+
+    Registered here (not in ``checkpoint.py``) so ``gate.cli.COMMANDS``
+    remains the single source of truth for ``gate <cmd>`` dispatch.
+    """
+    from gate import checkpoint as _checkpoint
+    return _checkpoint.cli_main(args)
 
 
 def main() -> int:

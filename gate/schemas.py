@@ -240,10 +240,25 @@ class StageResult:
 
 @dataclass
 class FixResult:
-    """Result from the fix pipeline."""
+    """Result from the fix pipeline.
+
+    The hopper-mode metrics (``pipeline_mode`` / ``sub_scope_*`` /
+    ``wall_clock_seconds`` / ``runaway_guard_hit``) stay at their empty
+    defaults for polish_legacy callers so nothing changes on that path.
+    The orchestrator forwards any populated field to ``log_fix_result``.
+    """
 
     success: bool
     pushed: bool = False
     reason: str = ""
     error: str | None = None
     summary: str = ""
+    fixed_count: int = 0
+    not_fixed_count: int = 0
+    pipeline_mode: str = ""
+    sub_scope_total: int = 0
+    sub_scope_committed: int = 0
+    sub_scope_reverted: int = 0
+    sub_scope_empty: int = 0
+    wall_clock_seconds: int = 0
+    runaway_guard_hit: bool = False

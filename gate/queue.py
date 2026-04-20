@@ -34,6 +34,12 @@ class ReviewQueue:
         self._socket_path = socket_path or _default_socket_path()
         self._queue: queue.PriorityQueue = queue.PriorityQueue()
         self._active: dict[tuple[str, int], ReviewOrchestrator] = {}
+        # Tracks the most recent enqueue token per PR so the dispatcher can
+        # skip superseded entries. Without this a burst of enqueues within
+        # the same tick (e.g. a fix-push that triggers the GitHub webhook
+        # twice) would produce two orchestrators racing on the same PR.
+        self._latest_token: dict[tuple[str, int], int] = {}
+        self._enqueue_counter = 0
         self._lock = threading.Lock()
         max_concurrent = self.config.get("limits", {}).get(
             "max_concurrent_reviews", DEFAULT_MAX_CONCURRENT
@@ -74,10 +80,14 @@ class ReviewQueue:
                 logger.info(f"Cancelling in-flight review for {repo} PR #{pr_number}")
                 self._active[key].cancel()
                 del self._active[key]
+            self._enqueue_counter += 1
+            token = self._enqueue_counter
+            self._latest_token[key] = token
 
         self._queue.put((
             time.time(),
             pr_number,
+            token,
             {
                 "repo": repo,
                 "head_sha": head_sha,
@@ -118,22 +128,39 @@ class ReviewQueue:
                 continue
 
             try:
-                priority, pr_number, kwargs = self._queue.get(timeout=1.0)
+                priority, pr_number, token, kwargs = self._queue.get(timeout=1.0)
             except queue.Empty:
                 continue
+
+            repo = kwargs.get("repo", "")
+            key = (repo, pr_number)
+
+            # Drop stale entries: if a newer enqueue for the same PR has
+            # arrived, that entry supersedes this one. ``enqueue`` already
+            # updated ``_latest_token``, so any token older than the current
+            # latest is stale by construction.
+            with self._lock:
+                latest = self._latest_token.get(key)
+                if latest is None or token != latest:
+                    logger.info(
+                        f"Dropping superseded queue entry for {repo} PR #{pr_number}"
+                    )
+                    continue
 
             quota = quota_mod.check_quota()
             if not quota["quota_ok"]:
                 logger.info("Quota low, deferring all dispatch for 60s")
                 self._deferred_until = time.time() + 60
-                self._queue.put((priority, pr_number, kwargs))
+                self._queue.put((priority, pr_number, token, kwargs))
                 continue
 
-            repo = kwargs.get("repo", "")
             try:
                 orch_config = resolve_repo_config(repo, self.config)
             except ValueError:
                 logger.error(f"No config for repo {repo}, skipping PR #{pr_number}")
+                with self._lock:
+                    if self._latest_token.get(key) == token:
+                        del self._latest_token[key]
                 continue
 
             orchestrator = ReviewOrchestrator(
@@ -142,8 +169,14 @@ class ReviewQueue:
                 socket_path=self._socket_path,
                 **kwargs,
             )
-            key = (repo, pr_number)
             with self._lock:
+                # Re-check latest token under lock to rule out any enqueue
+                # that landed between the earlier check and now.
+                if self._latest_token.get(key) != token:
+                    logger.info(
+                        f"Dropping superseded queue entry for {repo} PR #{pr_number}"
+                    )
+                    continue
                 existing = self._active.get(key)
                 if existing is not None:
                     logger.info(
@@ -151,6 +184,9 @@ class ReviewQueue:
                     )
                     existing.cancel()
                 self._active[key] = orchestrator
+                # Token is now owned by _active; future enqueues will either
+                # cancel via the _active path or set a new _latest_token.
+                del self._latest_token[key]
             self._pool.submit(self._run_review, key, orchestrator)
 
     def _run_review(self, key: tuple[str, int], orchestrator: ReviewOrchestrator) -> None:

@@ -192,6 +192,14 @@ class ReviewOrchestrator:
             self.pr_body = pr_info.get("body") or ""
             self.pr_author = pr_info.get("user", {}).get("login", "unknown")
 
+            # A cancel that arrives while we are still in pre-workspace
+            # setup (fetch PR metadata, etc.) would otherwise race a
+            # superseding orchestrator on ``git worktree add`` — both pick
+            # the same path and the loser fails with exit 128.
+            if self._cancelled.is_set():
+                self._emit("review_completed", review_id=review_id, decision="skip")
+                return
+
             # === SETUP: Create worktree ===
             self.workspace = workspace_mod.create_worktree(
                 self.config["repo"]["clone_path"],

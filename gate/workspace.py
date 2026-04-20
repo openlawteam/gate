@@ -8,6 +8,7 @@ import base64
 import json
 import logging
 import os
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -152,11 +153,16 @@ def create_worktree(
     config = config or load_config()
     repo_cfg = config.get("repo", {})
     worktree_base = repo_cfg.get("worktree_base", "/tmp/gate-worktrees")
+    # Use millisecond timestamp + random suffix to make path collisions
+    # structurally impossible when two orchestrators start for the same
+    # PR within the same second (can happen when a fix-push triggers the
+    # GitHub webhook multiple times in quick succession).
+    unique = f"{int(time.time() * 1000)}-{secrets.token_hex(3)}"
     slug = repo_slug(repo) if repo else ""
     if slug:
-        worktree_path = Path(worktree_base) / f"{slug}-pr{pr_number}-{int(time.time())}"
+        worktree_path = Path(worktree_base) / f"{slug}-pr{pr_number}-{unique}"
     else:
-        worktree_path = Path(worktree_base) / f"pr{pr_number}-{int(time.time())}"
+        worktree_path = Path(worktree_base) / f"pr{pr_number}-{unique}"
 
     resolved_repo = str(Path(repo_path).expanduser())
 

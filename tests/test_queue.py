@@ -31,7 +31,7 @@ class TestEnqueue:
 
         items = []
         while not review_queue._queue.empty():
-            priority, pr, kwargs = review_queue._queue.get()
+            priority, pr, _token, kwargs = review_queue._queue.get()
             items.append(pr)
         assert items == [1, 2, 3]
 
@@ -178,9 +178,12 @@ class TestDispatchCancelsSupersededReview:
         key = ("test-org/test-repo", 42)
         with q._lock:
             q._active[key] = older_orch
+            q._enqueue_counter += 1
+            token = q._enqueue_counter
+            q._latest_token[key] = token
 
         q._queue.put((
-            time.time(), 42,
+            time.time(), 42, token,
             {"repo": "test-org/test-repo", "head_sha": "sha",
              "event": "sync", "branch": "main", "labels": []},
         ))
@@ -192,6 +195,59 @@ class TestDispatchCancelsSupersededReview:
         assert q._active[key] is new_orch
         release.set()
         q.stop()
+
+
+class TestDuplicateEnqueueSupersede:
+    """Two ``enqueue`` calls for the same PR within the same tick must
+    result in a single orchestrator being dispatched, not two racing on
+    the same worktree path. See PR post-fix-push double-webhook race."""
+
+    @patch("gate.queue.quota_mod")
+    @patch("gate.queue.ReviewOrchestrator")
+    def test_back_to_back_enqueues_dispatch_once(
+        self, MockOrch, mock_quota, sample_config, tmp_path
+    ):
+        import threading
+
+        mock_quota.check_quota.return_value = {"quota_ok": True}
+        release = threading.Event()
+
+        orchestrators = []
+
+        def make_orch(*args, **kwargs):
+            m = MagicMock()
+            m.run.side_effect = lambda: release.wait(timeout=1.0)
+            orchestrators.append(m)
+            return m
+
+        MockOrch.side_effect = make_orch
+
+        q = ReviewQueue(config=sample_config, socket_path=tmp_path / "s.sock")
+
+        # Two enqueues back-to-back with the dispatcher quiesced. Only the
+        # most recent token survives in ``_latest_token``, so the first
+        # queue entry must be dropped as superseded at dispatch time.
+        q.enqueue(42, "test-org/test-repo", "sha1", "sync", "main", [])
+        q.enqueue(42, "test-org/test-repo", "sha2", "sync", "main", [])
+
+        q.start()
+        try:
+            # Give the dispatcher time to drain both queue entries.
+            for _ in range(50):
+                if orchestrators:
+                    break
+                time.sleep(0.02)
+            # Only one orchestrator should ever be constructed.
+            time.sleep(0.1)
+            assert len(orchestrators) == 1, (
+                f"expected 1 orchestrator, got {len(orchestrators)}"
+            )
+            # And it should be for the newer head_sha.
+            call_kwargs = MockOrch.call_args_list[0].kwargs
+            assert call_kwargs["head_sha"] == "sha2"
+        finally:
+            release.set()
+            q.stop()
 
 
 class TestRunReviewIdentityAwarePop:

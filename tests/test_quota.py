@@ -115,6 +115,7 @@ class TestAuthDrift:
 
     def test_http_401_raises_auth_drift_error(self, tmp_path):
         import urllib.error
+
         from gate.quota import QuotaAuthDriftError, _fetch_usage
 
         err = urllib.error.HTTPError("u", 401, "Unauthorized", {}, None)
@@ -128,6 +129,7 @@ class TestAuthDrift:
 
     def test_http_500_does_not_raise_auth_drift(self, tmp_path):
         import urllib.error
+
         from gate.quota import QuotaAuthDriftError, _fetch_usage
 
         err = urllib.error.HTTPError("u", 500, "ise", {}, None)
@@ -153,7 +155,7 @@ class TestAuthDrift:
             patch.object(notify, "quota_auth_drift") as mock_alert,
         ):
             r1 = check_quota()
-            r2 = check_quota()
+            check_quota()
             assert r1["auth_drift"] is True
             assert r1["quota_ok"] is True
             assert mock_alert.call_count == 1

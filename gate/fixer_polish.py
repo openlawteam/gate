@@ -96,12 +96,23 @@ def _render_single_finding_prompt(finding: dict, context_findings: list[dict]) -
     to batch fixes. The polish_mode_section is forced on because this
     loop only runs when ``is_polish`` is true.
     """
+    other_summaries = [
+        {
+            "finding_id": f["finding_id"],
+            "file": f.get("file"),
+            "fixability": f.get("fixability"),
+            "message": (f.get("message") or "")[:80],
+        }
+        for f in context_findings
+        if f.get("finding_id") != finding.get("finding_id")
+    ]
+    others_json = json.dumps(other_summaries, indent=2)
     return (
         "CURRENT FOCUS (single finding):\n\n"
         f"```json\n{json.dumps([finding], indent=2)}\n```\n\n"
         "Other findings in this PR (for awareness — do NOT attempt them "
         "in this call, they will be dispatched separately):\n\n"
-        f"```json\n{json.dumps([{'finding_id': f['finding_id'], 'file': f.get('file'), 'fixability': f.get('fixability'), 'message': (f.get('message') or '')[:80]} for f in context_findings if f.get('finding_id') != finding.get('finding_id')], indent=2)}\n```\n"
+        f"```json\n{others_json}\n```\n"
     )
 
 

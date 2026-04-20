@@ -267,6 +267,8 @@ def build_vars(
     try:
         from gate.fixer import (
             fixability_summary as _fixability_summary,
+        )
+        from gate.fixer import (
             tag_findings as _tag_findings,
         )
         fixable_findings = _tag_findings(fixable_findings)

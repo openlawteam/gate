@@ -11,6 +11,10 @@ import random
 import subprocess
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from gate.schemas import CommitResult
 
 logger = logging.getLogger(__name__)
 
@@ -581,8 +585,11 @@ def commit_and_push(worktree: Path, message: str, branch: str = "") -> "CommitRe
     except subprocess.CalledProcessError as e:
         stderr_tail = ""
         if getattr(e, "stderr", None):
-            stderr_bytes = e.stderr if isinstance(e.stderr, bytes) else str(e.stderr).encode()
-            stderr_tail = stderr_bytes.decode("utf-8", errors="replace").strip().splitlines()[-5:]
-            stderr_tail = "\n".join(stderr_tail) if isinstance(stderr_tail, list) else str(stderr_tail)
+            stderr_bytes = (
+                e.stderr if isinstance(e.stderr, bytes) else str(e.stderr).encode()
+            )
+            decoded = stderr_bytes.decode("utf-8", errors="replace").strip()
+            tail_lines = decoded.splitlines()[-5:]
+            stderr_tail = "\n".join(tail_lines)
         logger.error(f"Commit/push failed: {e}\n{stderr_tail}")
         return CommitResult(status="push_failed", error=stderr_tail or str(e))

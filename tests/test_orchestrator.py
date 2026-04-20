@@ -593,4 +593,41 @@ class TestEmit:
                 socket_path=tmp_path / "sock",
             )
             o._emit("review_started", review={"id": "x"})
-            conn.emit.assert_called_once_with("review_started", review={"id": "x"})
+            conn.emit.assert_called_once_with(
+                "review_started", review={"id": "x"}, head_sha="x"
+            )
+
+    def test_emit_stamps_head_sha_for_race_disambiguation(
+        self, sample_config, tmp_path
+    ):
+        """Every lifecycle event is stamped with this orchestrator's
+        ``head_sha`` so the server can drop late events from a superseded
+        orchestrator on the same PR (both share ``review_id``)."""
+        with patch("gate.client.GateConnection") as conn_cls:
+            conn = MagicMock()
+            conn_cls.return_value = conn
+            o = ReviewOrchestrator(
+                pr_number=1, repo="a/b", head_sha="deadbeef", event="s",
+                branch="m", labels=[], config=sample_config,
+                socket_path=tmp_path / "sock",
+            )
+            o._emit("review_cancelled", review_id="a-b-pr1")
+            conn.emit.assert_called_once_with(
+                "review_cancelled", review_id="a-b-pr1", head_sha="deadbeef"
+            )
+
+    def test_emit_preserves_explicit_head_sha_if_caller_provides(
+        self, sample_config, tmp_path
+    ):
+        with patch("gate.client.GateConnection") as conn_cls:
+            conn = MagicMock()
+            conn_cls.return_value = conn
+            o = ReviewOrchestrator(
+                pr_number=1, repo="a/b", head_sha="deadbeef", event="s",
+                branch="m", labels=[], config=sample_config,
+                socket_path=tmp_path / "sock",
+            )
+            o._emit("review_cancelled", review_id="a-b-pr1", head_sha="override")
+            conn.emit.assert_called_once_with(
+                "review_cancelled", review_id="a-b-pr1", head_sha="override"
+            )

@@ -537,7 +537,7 @@ _AMBIGUITY_HIGH_KEYWORDS: tuple[str, ...] = (
     "could mean",
     "ambiguous",
     "unclear whether",
-    "either ... or",
+    "either ",
     "intended behavior",
     "it is unclear",
     "may be",
@@ -1824,7 +1824,14 @@ class FixPipeline:
                 if self._disambig_digest(e) not in already
             ]
             cap = int(repo_cfg.get("max_disambig_questions_per_pr", 2))
-            fresh = fresh[: max(0, cap)]
+            # Audit fix N4 — when ``cap`` is 0 the repo has explicitly
+            # opted out of asking questions. We must not bump the stale
+            # counter in that case (which would otherwise eventually
+            # trip ``force_safest_interpretation`` despite the repo's
+            # opt-out).
+            if cap <= 0:
+                return
+            fresh = fresh[:cap]
             if not fresh:
                 # Increment a stale counter so the orchestrator can
                 # eventually force the safest interpretation.
@@ -1842,6 +1849,14 @@ class FixPipeline:
                 already | {self._disambig_digest(e) for e in fresh}
             )
             asked_path.write_text("\n".join(updated) + "\n")
+            # Audit fix W8 — the stale counter is for unanswered
+            # questions only. Posting a fresh batch starts a brand-new
+            # waiting clock, so reset the counter to 0. Without this,
+            # a single trip past ``max_disambig_stale_retries``
+            # permanently locks ``force_safest_interpretation`` for the
+            # remainder of the PR's life — including subsequent pushes
+            # that introduce legitimately new ambiguous findings.
+            self._reset_disambig_stale_count()
         except Exception as e:  # noqa: BLE001
             logger.warning(
                 f"PR #{self.pr_number}: disambig comment pipeline failed: {e}"
@@ -1870,6 +1885,25 @@ class FixPipeline:
         except Exception as e:  # noqa: BLE001
             logger.info(
                 f"PR #{self.pr_number}: disambig stale counter bump failed: {e}"
+            )
+
+    def _reset_disambig_stale_count(self) -> None:
+        """Zero the stale counter when a fresh question is posted.
+
+        See audit fix W8 — without this, a single trip past
+        ``max_disambig_stale_retries`` would permanently lock
+        ``force_safest_interpretation`` for the rest of the PR's life.
+        """
+        try:
+            count_path = (
+                state.get_pr_state_dir(self.pr_number, self.repo)
+                / "disambig_stale_count.txt"
+            )
+            if count_path.exists():
+                count_path.write_text("0")
+        except Exception as e:  # noqa: BLE001
+            logger.info(
+                f"PR #{self.pr_number}: disambig stale counter reset failed: {e}"
             )
 
     @staticmethod

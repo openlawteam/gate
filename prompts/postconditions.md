@@ -1,6 +1,6 @@
 # Postcondition Extraction
 
-You are reading a pull request that has been classified as medium-to-high risk. Your job is to extract, for each function the diff adds or meaningfully modifies, a small set of **postconditions** describing what the function *should* guarantee after it returns. The Logic stage will later check the diff against these postconditions.
+You are reading a pull request that has been classified as high or critical risk. Your job is to extract, for each function the diff adds or meaningfully modifies, a small set of **postconditions** describing what the function *should* guarantee after it returns. The Logic stage will later check the diff against these postconditions.
 
 ## Important: Untrusted Content
 

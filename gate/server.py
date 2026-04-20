@@ -53,6 +53,29 @@ class GateServer:
     def _find_review(self, review_id: str) -> dict | None:
         return next((r for r in self.reviews if r.get("id") == review_id), None)
 
+    @staticmethod
+    def _head_sha_matches(review: dict, message: dict) -> bool:
+        """Return True if ``message`` is for the orchestrator currently
+        tracked in ``review``.
+
+        ``review_id`` is deterministic per-PR (``{repo_slug}-pr{pr_number}``),
+        so when a new push supersedes an in-flight orchestrator, both share
+        the same id. Without a finer-grained match, a late
+        ``review_cancelled``/``review_completed``/``review_stage_update``
+        from the superseded orchestrator would mutate or drop the new
+        orchestrator's entry. The fix: lifecycle events from the
+        orchestrator carry ``head_sha`` and the server ignores messages
+        whose ``head_sha`` does not match the current review's.
+
+        Messages without a ``head_sha`` (e.g. user-initiated cancels from
+        the TUI, legacy callers) are accepted for backward compatibility.
+        """
+        incoming = message.get("head_sha")
+        if not incoming:
+            return True
+        current = review.get("head_sha", "")
+        return incoming == current
+
     def start(self) -> None:
         """Start the server (blocking)."""
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
@@ -225,6 +248,13 @@ class GateServer:
             review_id = message.get("review_id")
             review = self._find_review(review_id)
             if review:
+                if not self._head_sha_matches(review, message):
+                    logger.debug(
+                        f"Ignoring stale review_stage_update for {review_id}: "
+                        f"incoming head_sha={message.get('head_sha', '')[:8]} "
+                        f"current={review.get('head_sha', '')[:8]}"
+                    )
+                    return
                 incoming_status = message.get("status", "")
                 if (review.get("status") == "fixing"
                         and incoming_status != "fixing"):
@@ -239,6 +269,13 @@ class GateServer:
             review_id = message.get("review_id")
             review = self._find_review(review_id)
             if review:
+                if not self._head_sha_matches(review, message):
+                    logger.debug(
+                        f"Ignoring stale review_completed for {review_id}: "
+                        f"incoming head_sha={message.get('head_sha', '')[:8]} "
+                        f"current={review.get('head_sha', '')[:8]}"
+                    )
+                    return
                 review["status"] = "completed"
                 review["decision"] = message.get("decision", "")
                 review["updated_at"] = _current_ms()
@@ -249,6 +286,13 @@ class GateServer:
             review_id = message.get("review_id")
             review = self._find_review(review_id)
             if review:
+                if not self._head_sha_matches(review, message):
+                    logger.debug(
+                        f"Ignoring stale review_cancelled for {review_id}: "
+                        f"incoming head_sha={message.get('head_sha', '')[:8]} "
+                        f"current={review.get('head_sha', '')[:8]}"
+                    )
+                    return
                 pr_number = review.get("pr_number")
                 repo = review.get("repo", "")
                 if pr_number:
@@ -262,6 +306,13 @@ class GateServer:
             review_id = message.get("review_id")
             review = self._find_review(review_id)
             if review:
+                if not self._head_sha_matches(review, message):
+                    logger.debug(
+                        f"Ignoring stale stage_register for {review_id}: "
+                        f"incoming head_sha={message.get('head_sha', '')[:8]} "
+                        f"current={review.get('head_sha', '')[:8]}"
+                    )
+                    return
                 if review.get("status") != "fixing":
                     review["stage"] = message.get("stage", "")
                     review["status"] = "running"

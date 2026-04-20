@@ -17,6 +17,7 @@ from gate import quota as quota_mod
 from gate import workspace as workspace_mod
 from gate.claude import spawn_review_stage
 from gate.config import repo_slug
+from gate.io import atomic_write
 from gate.logger import log_review, read_recent_decisions, write_live_log
 from gate.runner import StructuredRunner, run_with_retry
 from gate.schemas import StageResult, WorkspaceVanishedError
@@ -88,8 +89,17 @@ class ReviewOrchestrator:
         return Path(clone).expanduser()
 
     def _emit(self, msg_type: str, **fields) -> None:
-        """Emit a lifecycle event to the server (no-op if no connection)."""
+        """Emit a lifecycle event to the server (no-op if no connection).
+
+        Every event is stamped with this orchestrator's ``head_sha`` so the
+        server can distinguish it from a **stale** event emitted by a
+        superseded orchestrator for the same ``review_id`` (which is
+        deterministic per-PR — ``{repo_slug}-pr{pr_number}`` — so two
+        orchestrators racing on the same PR collide). See
+        ``GateServer._head_sha_matches``.
+        """
         if self._connection:
+            fields.setdefault("head_sha", self.head_sha)
             self._connection.emit(msg_type, **fields)
 
     def cancel(self) -> None:
@@ -368,11 +378,14 @@ class ReviewOrchestrator:
 
             if not fast_track:
                 # === STAGE 2.5: POSTCONDITIONS (structured — inline) ===
-                # Only runs on medium/high/critical risk and only when
-                # the repo has not opted out. Fast-tracked PRs skip
-                # entirely (we're inside `if not fast_track`). Fix
-                # reruns reuse the cached postconditions so Logic sees
-                # the same contract on every iteration.
+                # Only runs on high/critical risk and only when the repo
+                # has not opted out. Fast-tracked PRs skip entirely
+                # (we're inside `if not fast_track`). Fix reruns reuse
+                # the cached postconditions so Logic sees the same
+                # contract on every iteration. The risk-level guard
+                # below (``risk in ("high", "critical")``) is the
+                # source of truth — keep ``prompts/postconditions.md``
+                # and this comment in sync if you change it.
                 if is_fix_rerun:
                     cached_pc = self._load_cached_postconditions()
                     if cached_pc is not None:
@@ -947,7 +960,7 @@ class ReviewOrchestrator:
                 return
             meta = json.loads(meta_path.read_text())
             meta["force_safest_interpretation"] = True
-            meta_path.write_text(json.dumps(meta))
+            atomic_write(meta_path, json.dumps(meta))
             logger.info(
                 f"PR #{self.pr_number}: forcing safest interpretation "
                 f"after {count} fix-reruns without author response"
@@ -1052,37 +1065,51 @@ class ReviewOrchestrator:
             sidecar = pr_state_dir / "spec_tests"
             sidecar.mkdir(parents=True, exist_ok=True)
 
+            # Audit fix W6 — path-traversal containment. The Logic agent
+            # is an LLM whose prompt context includes diff text and could
+            # be coerced into emitting a relative path like
+            # ``../../../etc/passwd``. We must (a) confirm the resolved
+            # source is inside the workspace, (b) restrict the glob
+            # fallback to the expected ``__gate_test_*`` family, and (c)
+            # sanitise the destination filename so even a controlled
+            # basename cannot escape the sidecar dir.
+            workspace_root = self.workspace.resolve()
             captured: list[Path] = []
-            workspace_resolved = self.workspace.resolve()
             for t in qualifying:
                 rel = t.get("file") or t.get("path") or ""
                 if not rel:
                     continue
+                rel_name = Path(rel).name
+                if not (
+                    rel_name.startswith("__gate_test_")
+                    or rel_name.startswith("__gate_fix_test_")
+                ):
+                    logger.info(
+                        f"PR #{self.pr_number}: spec test {rel!r} does not "
+                        f"match __gate_test_* / __gate_fix_test_* prefix — skipping"
+                    )
+                    continue
                 src = self.workspace / rel
-                if not src.exists():
-                    # Fallback: glob for the __gate_test_* filename,
-                    # restricted to the expected prefix so prompt-injected
-                    # basenames cannot pull unrelated files out of the tree.
-                    name = Path(rel).name
-                    if not name.startswith("__gate_test_"):
-                        continue
-                    matches = list(self.workspace.glob(f"**/{name}"))
+                try:
+                    resolved_src = src.resolve()
+                except (OSError, RuntimeError):
+                    continue
+                if not src.exists() or not resolved_src.is_relative_to(workspace_root):
+                    matches = [
+                        m for m in self.workspace.glob(f"**/{rel_name}")
+                        if m.resolve().is_relative_to(workspace_root)
+                    ]
                     if matches:
                         src = matches[0]
+                        resolved_src = src.resolve()
                     else:
                         continue
-                # Containment check: refuse anything that resolves outside the workspace
-                # (e.g. `rel == '../../../etc/passwd'`).
-                try:
-                    if not src.resolve().is_relative_to(workspace_resolved):
-                        logger.warning(
-                            f"PR #{self.pr_number}: spec sidecar rejected "
-                            f"non-contained path: {rel!r}"
-                        )
-                        continue
-                except OSError:
+                if not resolved_src.is_relative_to(workspace_root):
                     continue
-                dst = sidecar / src.name
+                # Sanitised destination: just the basename, after the
+                # prefix check above (Note 3 — never trust an attacker-
+                # controlled basename to land outside ``sidecar``).
+                dst = sidecar / Path(src.name).name
                 try:
                     shutil.copy2(src, dst)
                     captured.append(dst)

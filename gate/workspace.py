@@ -491,17 +491,16 @@ def create_auxiliary_worktree(
     branch ``branch`` from ``repo_path``. Author identity is still set
     to the bot so commits attribute correctly.
 
-    config
-        Resolved Gate config dict. If ``None``, falls back to
-        ``load_config()`` for backward compatibility, but callers
-        inside the review pipeline should always pass their own.
+    ``config`` is the resolved repo config dict; if omitted we fall back
+    to ``load_config()`` (kept only as a convenience for ad-hoc callers).
+    Pass it explicitly from orchestrator-side callers so the function is
+    testable without monkeypatching at the module level.
 
     Returns the worktree path. Callers MUST call
     :func:`remove_worktree` when done.
     """
-    if config is None:
-        config = load_config()
-    repo_cfg = config.get("repo", {})
+    cfg = config if config is not None else load_config()
+    repo_cfg = cfg.get("repo", {})
     worktree_base = repo_cfg.get("worktree_base", "/tmp/gate-worktrees")
     unique = f"{int(time.time() * 1000)}-{secrets.token_hex(3)}"
     worktree_path = Path(worktree_base) / f"{label}-{unique}"

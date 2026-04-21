@@ -248,6 +248,105 @@ class TestFinalize:
         assert "squashed 1 checkpoints" in finalize_lines[-1]
 
 
+# ── config threading through scoped_build_verify ─────────────
+#
+# The architecture review on PR #18 flagged that ``scoped_build_verify``
+# was calling ``load_config()`` inside the helper. The fix is to make
+# config required and resolve it once at the CLI entry point. These
+# tests pin that contract so nobody puts the implicit load back in.
+
+
+class TestScopedBuildVerifyConfigContract:
+    def test_scoped_build_verify_requires_config(self):
+        """``config`` is a required positional: calling without it must
+        raise ``TypeError`` from Python rather than silently triggering
+        an implicit ``load_config()``."""
+        import inspect
+        sig = inspect.signature(checkpoint.scoped_build_verify)
+        cfg_param = sig.parameters["config"]
+        # Required (no default) — a reversion to ``config=None`` would
+        # re-open the door to implicit config loading inside the helper.
+        assert cfg_param.default is inspect.Parameter.empty, (
+            "scoped_build_verify(config=) must be required — the CLI "
+            "entry point resolves config once and threads it through."
+        )
+
+    def test_cmd_save_threads_config_into_scoped_build_verify(
+        self, repo, monkeypatch,
+    ):
+        """_cmd_save should resolve config once and pass it positionally
+        to scoped_build_verify — not leave the helper to load it."""
+        from gate import config as gate_config
+        sentinel = {"repo": {"default_branch": "main"}, "fix_pipeline": {}}
+        monkeypatch.setattr(gate_config, "load_config", lambda: sentinel)
+
+        received: list[dict] = []
+
+        def _spy(_w, _touched, cfg):
+            received.append(cfg)
+            return {
+                "pass": True, "typecheck_exit": 0, "typecheck_tail": "",
+                "lint_exit": 0, "lint_tail": "", "files": [],
+            }
+
+        monkeypatch.setattr(checkpoint, "scoped_build_verify", _spy)
+
+        (repo / "a.txt").write_text("x")
+        assert checkpoint.cli_main(["save", "--name", "trivial"]) == 0
+
+        assert received, "scoped_build_verify was never called"
+        assert received[0] is sentinel, (
+            "_cmd_save must pass the resolved config through to "
+            "scoped_build_verify (got a different object)."
+        )
+
+    def test_load_config_removed_from_checkpoint_module(self):
+        """``_load_config`` was deleted once config threading moved to
+        the CLI entry point. Re-adding it is a regression."""
+        assert not hasattr(checkpoint, "_load_config"), (
+            "checkpoint._load_config should not exist — config resolution "
+            "belongs in the CLI entry point (_cmd_save)."
+        )
+
+
+# ── hopper-mode addendum is file-backed ──────────────────────
+#
+# _HOPPER_MODE_SECTION moved from a hardcoded Python constant to
+# prompts/fix-senior-hopper.md. The tests below pin the new shape so
+# a revert to the in-module string is obvious.
+
+
+class TestHopperModeSectionPromptFile:
+    def test_fix_senior_hopper_prompt_exists(self):
+        from gate import prompt as prompt_mod
+        text = prompt_mod.load("fix-senior-hopper")
+        assert "HOPPER MODE" in text
+        assert "gate checkpoint save" in text
+        assert "fix-decomposition.json" in text
+
+    def test_hopper_mode_section_loaded_from_file(self):
+        """``_build_hopper_mode_section("hopper")`` must return the
+        on-disk prompt, not a Python constant."""
+        from gate import prompt as prompt_mod
+        expected = prompt_mod.load("fix-senior-hopper")
+        assert (
+            prompt_mod._build_hopper_mode_section("hopper") == expected
+        ), "hopper-mode addendum drifted from prompts/fix-senior-hopper.md"
+
+    def test_hopper_constant_removed_from_prompt_module(self):
+        from gate import prompt as prompt_mod
+        assert not hasattr(prompt_mod, "_HOPPER_MODE_SECTION"), (
+            "_HOPPER_MODE_SECTION should live in "
+            "prompts/fix-senior-hopper.md, not as a Python constant."
+        )
+
+    def test_polish_legacy_mode_returns_empty(self):
+        """Back-compat: flipping ``fix_pipeline.mode`` off returns ''."""
+        from gate import prompt as prompt_mod
+        assert prompt_mod._build_hopper_mode_section("polish_legacy") == ""
+        assert prompt_mod._build_hopper_mode_section("") == ""
+
+
 # ── _scoped_lint extension filter ────────────────────────────
 
 

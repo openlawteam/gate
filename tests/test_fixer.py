@@ -1514,3 +1514,72 @@ class TestValidateSeniorCommitMessage:
         accepted, reason = _validate_senior_commit_message(self.SYNTH, self.SYNTH)
         assert accepted is None
         assert reason == "matches_synth"
+
+
+# ── ``.gate/`` marker writes use atomic_write ────────────────
+#
+# ``FixPipeline.run()`` publishes ``.gate/pre-fix-sha`` and
+# ``.gate/context.json`` for ``gate checkpoint`` to read. A partial
+# write (process killed mid-flight) would leave a truncated SHA on disk
+# and silently poison the baseline for every subsequent save/revert/
+# finalize — the exact shape of the PR #222 symptom. These tests pin
+# the atomic-write call sites so nobody reverts to raw ``Path.write_text``
+# without noticing.
+
+class TestGateMarkerAtomicWrite:
+    """Both ``.gate/`` marker writes in ``FixPipeline.run()`` go through
+    ``atomic_write``.
+
+    This is a source-level lint rather than a behavioural test because
+    exercising ``run()`` end-to-end would pull in tmux, Claude, GitHub,
+    and the entire review pipeline. The guarantee we need is structural:
+    any developer reverting to raw ``Path.write_text`` for these two
+    files should break a test, not rediscover the race in production.
+    """
+
+    def _marker_block(self) -> str:
+        """Return the source of the ``.gate/`` publish block in run().
+
+        We slice on the surrounding docstring anchor + the trailing
+        logger.warning line so rearranging unrelated code in ``run()``
+        does not spuriously fail this test.
+        """
+        from pathlib import Path
+
+        import gate.fixer
+        src = Path(gate.fixer.__file__).read_text()
+        # Anchor on the atomic-write rationale comment we added so the
+        # slice is robust to line-number drift.
+        start = src.index("Atomic via ``atomic_write``")
+        end = src.index(
+            ".gate/pre-fix-sha marker", start,
+        )
+        return src[start:end]
+
+    def test_pre_fix_sha_write_uses_atomic_write(self):
+        block = self._marker_block()
+        assert "atomic_write(" in block, (
+            ".gate/pre-fix-sha publish must go through atomic_write; "
+            "raw Path.write_text risks a partial-file poisoning the "
+            "baseline (PR #222 triage symptom)."
+        )
+        assert "pre-fix-sha" in block
+
+    def test_context_json_write_uses_atomic_write(self):
+        block = self._marker_block()
+        # Count atomic_write calls — both markers must be routed.
+        assert block.count("atomic_write(") >= 2, (
+            "Both .gate/pre-fix-sha and .gate/context.json must be "
+            f"routed through atomic_write; block:\n{block}"
+        )
+        assert "context.json" in block
+
+    def test_no_raw_write_text_in_marker_block(self):
+        block = self._marker_block()
+        # Allow ``write_text`` only inside atomic_write's own tmp-path
+        # implementation (which lives in gate.io, not here). In this
+        # slice of ``run()`` it must never appear.
+        assert ".write_text(" not in block, (
+            f"Found raw .write_text in .gate/ marker block — "
+            f"must be atomic_write; block:\n{block}"
+        )

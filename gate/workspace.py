@@ -59,6 +59,8 @@ fix-decomposition.json
 *.in.md
 *.out.md
 *.in.md.tmp
+*.codex.log
+gate-directions.md
 fix-build/
 """
 

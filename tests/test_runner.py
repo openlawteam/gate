@@ -241,3 +241,75 @@ class TestRunWithRetry:
         cancelled = StageResult(stage="triage", success=False, cancelled=True)
         result = run_with_retry(lambda: cancelled, "triage", sample_config)
         assert result.cancelled is True
+
+
+class TestReviewRunnerHandleSignalSweep:
+    """Fix 2d: the runner's shutdown handler must ``pkill -TERM -P``
+    its own children before exiting, so a SIGHUP on the tmux pane (or
+    a SIGTERM from the orchestrator) cannot leave codex orphaned even
+    if some link in the senior→gate-code→codex signal chain is broken.
+    """
+
+    def _make_runner(self, tmp_workspace, sample_config):
+        return ReviewRunner(
+            review_id="test-org-test-repo-pr42",
+            stage="architecture",
+            workspace=tmp_workspace,
+            config=sample_config,
+        )
+
+    def test_sigterm_invokes_pkill_with_own_pid(
+        self, tmp_workspace, sample_config
+    ):
+        import signal as _signal
+
+        runner = self._make_runner(tmp_workspace, sample_config)
+        with patch("gate.runner.subprocess.run") as mock_run, \
+             patch("gate.runner.os.getpid", return_value=4242), \
+             patch("gate.runner.sys.exit") as mock_exit:
+            runner._handle_signal(_signal.SIGTERM, None)
+
+        assert mock_run.called, "pkill sweep must run before exit"
+        args, kwargs = mock_run.call_args
+        cmd = args[0]
+        assert cmd[:3] == ["pkill", "-TERM", "-P"]
+        assert cmd[3] == "4242"
+        assert kwargs.get("timeout") == 2
+        assert kwargs.get("check") is False
+        mock_exit.assert_called_once_with(128 + _signal.SIGTERM)
+
+    def test_sigint_still_raises_after_sweep(
+        self, tmp_workspace, sample_config
+    ):
+        """SIGINT must still surface as KeyboardInterrupt (preserving
+        the pre-Fix-2d contract) — but only after we attempt to reap
+        direct children."""
+        import signal as _signal
+
+        runner = self._make_runner(tmp_workspace, sample_config)
+        import pytest
+
+        with patch("gate.runner.subprocess.run") as mock_run, \
+             pytest.raises(KeyboardInterrupt):
+            runner._handle_signal(_signal.SIGINT, None)
+
+        assert mock_run.called
+
+    def test_pkill_failures_are_swallowed(
+        self, tmp_workspace, sample_config
+    ):
+        """Missing pkill binary, timeout, or OSError must not prevent
+        the handler from exiting — this is best-effort cleanup."""
+        import signal as _signal
+        import subprocess as _subprocess
+
+        runner = self._make_runner(tmp_workspace, sample_config)
+        for exc in (
+            FileNotFoundError(),
+            _subprocess.TimeoutExpired(cmd="pkill", timeout=2),
+            OSError(),
+        ):
+            with patch("gate.runner.subprocess.run", side_effect=exc), \
+                 patch("gate.runner.sys.exit") as mock_exit:
+                runner._handle_signal(_signal.SIGTERM, None)
+                mock_exit.assert_called_once_with(128 + _signal.SIGTERM)

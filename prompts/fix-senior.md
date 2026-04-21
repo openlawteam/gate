@@ -36,13 +36,18 @@ You have one tool for getting work done: **stage delegation**. You dispatch work
 
 **IMPORTANT:** Always use the Bash tool to run gate-code commands. Set `timeout` to 600000 (10 minutes) since stages can take several minutes to complete. Wait for the command to finish before proceeding.
 
+Use the file-redirection pattern below. It is safe for directions containing any characters (backticks, quotes, `EOF`, shell metacharacters), and it also gives you a durable record of the last dispatch you made.
+
+1. Use your file-writing tool (e.g. the `Write` tool) to **overwrite** `gate-directions.md` in the workspace with your directions. Always overwrite it before each call — never append, and never leave stale directions from a previous stage.
+2. Then run:
+
 ```bash
-gate-code <stage> <<'EOF'
-<your directions here>
-EOF
+gate-code <stage> < gate-directions.md
 ```
 
 Where `<stage>` is one of the stages described below. Your directions are the prompt the junior engineer receives along with the stage's own instructions.
+
+Do **not** use heredoc (`<<'EOF' ... EOF`). Directions often contain the token `EOF`, backticks, or other shell metacharacters; heredocs will either corrupt those directions or fail the call entirely.
 
 The junior engineer works in the same git checkout. All changes from previous stages are visible to them. They can read any file, run commands, write code, and run tests.
 

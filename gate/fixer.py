@@ -48,12 +48,17 @@ GATE_ARTIFACT_FILES = {
     # Polish-loop / hopper-pipeline state files (PR #217 regression
     # guard — these must never land in PR commits).
     "fix-polish.json", "fix-decomposition.json",
+    # Scratch file senior Claude writes before each `gate-code <stage>
+    # < gate-directions.md` invocation (Fix 3: replaces the deprecated
+    # heredoc pattern). Never commit to the PR.
+    "gate-directions.md",
 }
 
 GATE_ARTIFACT_GLOBS = [
     "*-findings.json", "*-result.json",
     "*-session-id.txt", "*-raw.json",
     "*.in.md", "*.out.md", "*.in.md.tmp",
+    "*.codex.log",
 ]
 
 

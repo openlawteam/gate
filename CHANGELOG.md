@@ -52,6 +52,15 @@ plan section.
 - **`log_fix_result` status (Audit A10).** Accepts explicit `status`
   including `"no_op"`, which writes a `fix_no_op` decision to
   `reviews.jsonl` distinct from `fix_succeeded`.
+- **`scoped_build_verify` config is required (breaking, #20).**
+  `gate.checkpoint.scoped_build_verify(workspace, touched_files,
+  config)` now requires `config` positionally. Previously it accepted
+  `config=None` and fell back to an internal `load_config()` call,
+  which put config resolution deep inside an exported helper and
+  hid the actual config source at the call site. External wrappers
+  must resolve config themselves (via `gate.config.load_config`) and
+  pass it in. In-repo callers (`_cmd_save`) already do this; the
+  legacy `_load_config(workspace)` helper was removed.
 - **`git fetch` retry (Group 3A).** Exponential backoff (2/4/8/16s)
   instead of linear 5/10/15s. First transient failure also triggers
   `git fetch --prune` to evict stale refs. Missing remote branch now

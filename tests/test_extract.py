@@ -12,6 +12,8 @@ from gate.extract import (
     extract_from_transcript,
     extract_json_from_text,
     extract_stage_output,
+    parse_diff_hunks,
+    validate_introduced_by_pr,
     validate_stage_output,
 )
 
@@ -239,3 +241,184 @@ class TestBuildExtractFallback:
         raw = "x" * 5000
         fb = build_extract_fallback("security", raw)
         assert len(fb["raw_output"]) == 2000
+
+
+# ── introduced_by_pr classifier validation ───────────────────
+#
+# Regression guard for PR #19's architecture finding at
+# ``gate/fixer.py:1367`` — the agent stamped ``introduced_by_pr: true``
+# on a line that was not in the PR's diff. Prompt-only guidance
+# insufficient; we enforce the invariant in code.
+
+
+SIMPLE_DIFF = """\
+diff --git a/gate/fixer.py b/gate/fixer.py
+index abc..def 100644
+--- a/gate/fixer.py
++++ b/gate/fixer.py
+@@ -17,6 +17,7 @@ from gate import builder, github
+ from gate.codex import bootstrap_codex
+ from gate.config import build_claude_env, gate_dir
+ from gate.finding_id import compute_finding_id
++from gate.io import atomic_write
+ from gate.logger import write_live_log
+ from gate.runner import StructuredRunner, run_with_retry
+ from gate.schemas import FixResult
+@@ -1014,7 +1015,7 @@ class FixPipeline:
+         if self._pre_fix_sha:
+             try:
+                 gate_dir_marker = self.workspace / ".gate"
+-                (gate_dir_marker / "pre-fix-sha").write_text(
++                atomic_write(
+                     gate_dir_marker / "pre-fix-sha",
+                     self._pre_fix_sha + "\\n",
+                 )
+"""
+
+
+class TestParseDiffHunks:
+    def test_parses_single_file_multiple_hunks(self):
+        h = parse_diff_hunks(SIMPLE_DIFF)
+        assert "gate/fixer.py" in h
+        ranges = h["gate/fixer.py"]
+        # Two hunks: one starting at +17 (7 lines) and one starting at
+        # +1015 (7 lines).
+        starts = sorted(r[0] for r in ranges)
+        assert starts == [17, 1015]
+
+    def test_ignores_dev_null_files(self):
+        diff = (
+            "diff --git a/x b/x\n"
+            "--- a/x\n"
+            "+++ /dev/null\n"
+            "@@ -1,3 +0,0 @@\n"
+            "-a\n-b\n-c\n"
+        )
+        assert parse_diff_hunks(diff) == {}
+
+    def test_empty_diff_returns_empty(self):
+        assert parse_diff_hunks("") == {}
+
+    def test_malformed_hunk_header_ignored(self):
+        diff = (
+            "diff --git a/x b/x\n--- a/x\n+++ b/x\n"
+            "@@ not a real header @@\n"
+            "+content\n"
+        )
+        # Parser must not crash — and should report no hunks for x.
+        assert parse_diff_hunks(diff) == {"x": []}
+
+    def test_strips_b_prefix(self):
+        diff = "+++ b/path/to/foo.py\n@@ -1 +10,2 @@\n+x\n+y\n"
+        h = parse_diff_hunks(diff)
+        assert "path/to/foo.py" in h
+
+
+class TestValidateIntroducedByPr:
+    def _write_diff(self, workspace, diff_text):
+        (workspace / "diff.txt").write_text(diff_text)
+
+    def test_keeps_true_when_line_inside_hunk(self, tmp_path):
+        self._write_diff(tmp_path, SIMPLE_DIFF)
+        findings = [
+            {"file": "gate/fixer.py", "line": 1018, "introduced_by_pr": True,
+             "message": "inside second hunk"},
+        ]
+        out = validate_introduced_by_pr(findings, tmp_path, "architecture")
+        assert out[0]["introduced_by_pr"] is True
+        assert "_classifier_downgraded" not in out[0]
+
+    def test_downgrades_line_outside_hunk(self, tmp_path):
+        """The exact PR #19 regression: line 1367 cited but only lines
+        17 and 1015-1021 were actually changed."""
+        self._write_diff(tmp_path, SIMPLE_DIFF)
+        findings = [
+            {"file": "gate/fixer.py", "line": 1367, "introduced_by_pr": True,
+             "message": "write_baseline_diff should use atomic_write"},
+        ]
+        out = validate_introduced_by_pr(findings, tmp_path, "architecture")
+        assert out[0]["introduced_by_pr"] is False
+        assert out[0]["_classifier_downgraded"] == "line_not_in_diff"
+        # Substance preserved — we only fix the classification flag.
+        assert out[0]["message"].startswith("write_baseline_diff")
+
+    def test_downgrades_when_file_not_in_diff(self, tmp_path):
+        self._write_diff(tmp_path, SIMPLE_DIFF)
+        findings = [
+            {"file": "gate/other.py", "line": 5, "introduced_by_pr": True,
+             "message": "untouched file"},
+        ]
+        out = validate_introduced_by_pr(findings, tmp_path, "architecture")
+        assert out[0]["introduced_by_pr"] is False
+        assert out[0]["_classifier_downgraded"] == "file_not_in_diff"
+
+    def test_downgrades_when_no_line_number(self, tmp_path):
+        self._write_diff(tmp_path, SIMPLE_DIFF)
+        findings = [
+            {"file": "gate/fixer.py", "line": None, "introduced_by_pr": True,
+             "message": "whole-file claim"},
+        ]
+        out = validate_introduced_by_pr(findings, tmp_path, "architecture")
+        assert out[0]["introduced_by_pr"] is False
+        assert out[0]["_classifier_downgraded"] == "no_line_number"
+
+    def test_downgrades_when_no_file(self, tmp_path):
+        self._write_diff(tmp_path, SIMPLE_DIFF)
+        findings = [
+            {"file": "", "line": 5, "introduced_by_pr": True,
+             "message": "no file"},
+        ]
+        out = validate_introduced_by_pr(findings, tmp_path, "architecture")
+        assert out[0]["introduced_by_pr"] is False
+        assert out[0]["_classifier_downgraded"] == "no_file"
+
+    def test_leaves_false_findings_alone(self, tmp_path):
+        """Findings already marked false (or missing the flag) are
+        untouched — the validator only enforces the ``true → false``
+        direction."""
+        self._write_diff(tmp_path, SIMPLE_DIFF)
+        findings = [
+            {"file": "gate/other.py", "line": 5, "introduced_by_pr": False,
+             "message": "legacy debt"},
+            {"file": "gate/other.py", "line": 5,
+             "message": "flag missing entirely"},
+        ]
+        out = validate_introduced_by_pr(findings, tmp_path, "architecture")
+        assert "_classifier_downgraded" not in out[0]
+        assert "_classifier_downgraded" not in out[1]
+
+    def test_missing_diff_skips_validation(self, tmp_path):
+        """If ``diff.txt`` is missing we leave findings as-is rather
+        than mass-downgrade — a missing diff is a bigger problem than
+        a classifier nit and should surface elsewhere."""
+        findings = [
+            {"file": "x.py", "line": 5, "introduced_by_pr": True, "message": "x"},
+        ]
+        out = validate_introduced_by_pr(findings, tmp_path, "architecture")
+        assert out[0]["introduced_by_pr"] is True
+
+    def test_empty_diff_skips_validation(self, tmp_path):
+        self._write_diff(tmp_path, "")
+        findings = [
+            {"file": "x.py", "line": 5, "introduced_by_pr": True, "message": "x"},
+        ]
+        out = validate_introduced_by_pr(findings, tmp_path, "architecture")
+        assert out[0]["introduced_by_pr"] is True
+
+    def test_handles_non_dict_findings_gracefully(self, tmp_path):
+        self._write_diff(tmp_path, SIMPLE_DIFF)
+        findings = [
+            "not a dict",
+            None,
+            {"file": "gate/fixer.py", "line": 17, "introduced_by_pr": True,
+             "message": "ok"},
+        ]
+        out = validate_introduced_by_pr(findings, tmp_path, "architecture")
+        assert out[0] == "not a dict"
+        assert out[1] is None
+        assert out[2]["introduced_by_pr"] is True
+
+    def test_returns_input_when_not_a_list(self, tmp_path):
+        self._write_diff(tmp_path, SIMPLE_DIFF)
+        assert validate_introduced_by_pr({}, tmp_path, "architecture") == {}
+        assert validate_introduced_by_pr(None, tmp_path, "architecture") is None

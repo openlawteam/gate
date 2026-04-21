@@ -46,18 +46,20 @@ Review ONLY the code changed by this PR. Pre-existing violations in unchanged li
 
 ### Verifying `introduced_by_pr` (mandatory)
 
-Before you set `introduced_by_pr: true` on any finding, you MUST confirm that the *specific lines you are flagging* appear in `diff.txt`. Setting `introduced_by_pr: true` on a line that was not modified by the PR is a classification error — it misleads the fix pipeline and the reviewer into treating pre-existing debt as regression.
+Before you set `introduced_by_pr: true` on any finding, you MUST confirm that the *specific line number you are citing* falls inside a `+`-side hunk in `diff.txt`. Setting `introduced_by_pr: true` on a line that was not modified by the PR misleads the fix pipeline and the reviewer into treating pre-existing debt as regression.
 
 Mechanical checklist — apply it to every finding before emitting it:
 
 1. Open `diff.txt` and search for the file path you are about to cite.
-2. Find the block of `+` lines (additions) and `-` lines (deletions) within that file.
-3. Check whether the specific line number you are citing falls inside one of those `+` blocks.
+2. Find the hunk headers for that file. They look like `@@ -oldStart,N +newStart,M @@`. The new-side range is `[newStart, newStart + M - 1]`.
+3. Check whether the specific line number you are citing falls inside one of those new-side ranges.
    - If YES → `introduced_by_pr: true`. Safe to flag as PR-introduced.
-   - If NO (the line is part of unchanged context or does not appear in the diff) → either set `introduced_by_pr: false` and only report it if it's directly relevant to understanding the change, OR drop the finding entirely.
+   - If NO (the line is not inside any hunk range) → either set `introduced_by_pr: false` and only report if directly relevant to understanding the change, OR drop the finding entirely.
 4. "I flagged a function that the PR modifies" is NOT sufficient — large diffs often touch one function in a file while leaving dozens of pre-existing functions unchanged. The line number is what matters, not the file.
 
-If you cannot tell from `diff.txt` whether a specific line was added by this PR, default to `introduced_by_pr: false` and only report if directly relevant to the change. False negatives are preferred to false positives here.
+If you cannot tell from `diff.txt` whether a specific line is inside a hunk, default to `introduced_by_pr: false` and only report if directly relevant to the change. False negatives are preferred to false positives here.
+
+> **Enforced by code**: Gate post-processes your findings and downgrades any `introduced_by_pr: true` whose cited `(file, line)` is not inside a `diff.txt` hunk. A claim that fails this check is silently set to `false` with a `_classifier_downgraded` reason. Don't rely on the downgrade as a safety net — overclaiming `introduced_by_pr` still muddies the reviewer's mental model of the finding before the downgrade runs.
 
 For each finding, set `introduced_by_pr` to indicate whether this issue was introduced by the PR's changes:
 - `true` — the violation is in code added or modified by this PR (verified via the checklist above)

@@ -178,6 +178,124 @@ def validate_stage_output(parsed: dict, stage: str) -> dict:
     return parsed
 
 
+_HUNK_HEADER_RE = re.compile(
+    # "@@ -oldStart[,oldCount] +newStart[,newCount] @@"
+    r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@"
+)
+
+
+def parse_diff_hunks(diff_text: str) -> dict[str, list[tuple[int, int]]]:
+    """Return ``{filename: [(hunk_start, hunk_end), ...]}`` on the new side.
+
+    Used by :func:`validate_introduced_by_pr` to decide whether a finding's
+    cited line was actually changed by this PR. Hunk ranges — not just
+    ``+`` lines — are the right granularity: an agent citing the first
+    line of a function it had to re-indent should still count as
+    PR-introduced, even if the cited line itself is a context line.
+
+    Accepts standard unified-diff output (``git diff origin/main...HEAD``
+    style). Paths with a ``b/`` prefix are stripped. Binary/new-file
+    hunks are handled.
+    """
+    hunks: dict[str, list[tuple[int, int]]] = {}
+    current_file: str | None = None
+    for line in diff_text.splitlines():
+        if line.startswith("+++ "):
+            rest = line[4:].split("\t", 1)[0].strip()
+            if rest == "/dev/null":
+                current_file = None
+                continue
+            current_file = rest[2:] if rest.startswith("b/") else rest
+            hunks.setdefault(current_file, [])
+            continue
+        if line.startswith("@@") and current_file:
+            m = _HUNK_HEADER_RE.match(line)
+            if not m:
+                continue
+            start = int(m.group("start"))
+            raw_count = m.group("count")
+            count = int(raw_count) if raw_count is not None else 1
+            if count <= 0:
+                # git emits "+0,0" for pure deletions with no new-side
+                # hunk — no lines were added on the new side, skip.
+                continue
+            hunks[current_file].append((start, start + count - 1))
+    return hunks
+
+
+def validate_introduced_by_pr(
+    findings: list, workspace: Path, stage: str
+) -> list:
+    """Downgrade ``introduced_by_pr: true`` claims that are unsupported.
+
+    The architecture agent historically over-stamps ``introduced_by_pr:
+    true`` on findings whose cited line is in pre-existing code (see PR
+    #19's finding at ``gate/fixer.py:1367``). Prompt-only guidance was
+    insufficient, so we enforce the invariant in code: a finding may
+    only claim PR-introduction if the cited ``(file, line)`` falls
+    inside one of ``diff.txt``'s new-side hunk ranges.
+
+    Downgrade (not drop) so the finding's substance is preserved — it
+    just no longer presents as "this PR broke something". Findings
+    without an exact ``(file, line)`` are conservatively downgraded
+    with reason ``no_line_number`` because we can't verify them.
+
+    If ``diff.txt`` is missing or unreadable we skip validation
+    entirely rather than mass-downgrade; reviewers should notice a
+    missing diff before they trust the verdict anyway.
+    """
+    if not isinstance(findings, list):
+        return findings
+    diff_path = workspace / "diff.txt"
+    try:
+        diff_text = diff_path.read_text()
+    except (OSError, FileNotFoundError):
+        return findings
+    if not diff_text.strip():
+        return findings
+    hunks = parse_diff_hunks(diff_text)
+
+    downgraded = 0
+    for f in findings:
+        if not isinstance(f, dict):
+            continue
+        if not f.get("introduced_by_pr"):
+            continue
+        file_ = f.get("file")
+        line = f.get("line")
+        if not isinstance(file_, str) or not file_:
+            f["introduced_by_pr"] = False
+            f["_classifier_downgraded"] = "no_file"
+            downgraded += 1
+            continue
+        if not isinstance(line, int) or line <= 0:
+            # Line numbers are required for verification. Findings that
+            # cite only a file default to ``false`` because we can't
+            # prove the PR touched that specific part.
+            f["introduced_by_pr"] = False
+            f["_classifier_downgraded"] = "no_line_number"
+            downgraded += 1
+            continue
+        ranges = hunks.get(file_)
+        if not ranges:
+            f["introduced_by_pr"] = False
+            f["_classifier_downgraded"] = "file_not_in_diff"
+            downgraded += 1
+            continue
+        in_hunk = any(start <= line <= end for start, end in ranges)
+        if not in_hunk:
+            f["introduced_by_pr"] = False
+            f["_classifier_downgraded"] = "line_not_in_diff"
+            downgraded += 1
+
+    if downgraded:
+        logger.info(
+            f"[{stage}] downgraded introduced_by_pr on {downgraded} finding(s) "
+            "— cited lines not present in diff.txt hunks"
+        )
+    return findings
+
+
 def enforce_exploit_scenario(parsed: dict) -> None:
     """Downgrade critical/high findings without exploit scenarios.
 

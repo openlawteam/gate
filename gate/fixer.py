@@ -1010,36 +1010,7 @@ class FixPipeline:
             )
             self._pre_fix_sha = ""
 
-        # Publish the baseline for ``gate checkpoint`` invoked by senior
-        # Claude from inside the worktree. Hopper-mode subcommands read
-        # ``.gate/pre-fix-sha`` to know what the "clean baseline" is
-        # during save/revert/finalize and ``.gate/context.json`` to
-        # route live-log / progress lines back to the correct PR.
-        #
-        # Atomic via ``atomic_write`` (tmp sibling + os.replace) so that a
-        # crash partway through never leaves ``gate checkpoint`` staring
-        # at a truncated SHA — which would silently poison the baseline
-        # for every save/revert/finalize that followed (and would look
-        # exactly like the PR #222 symptom).
-        if self._pre_fix_sha:
-            try:
-                gate_dir_marker = self.workspace / ".gate"
-                atomic_write(
-                    gate_dir_marker / "pre-fix-sha",
-                    self._pre_fix_sha + "\n",
-                )
-                atomic_write(
-                    gate_dir_marker / "context.json",
-                    json.dumps({
-                        "pr_number": self.pr_number,
-                        "repo": self.repo,
-                    }) + "\n",
-                )
-            except OSError as exc:
-                logger.warning(
-                    f"PR #{self.pr_number}: could not write "
-                    f".gate/pre-fix-sha marker: {exc}"
-                )
+        self._publish_gate_marker()
 
         findings = self.verdict.get("findings", [])
         actionable = [f for f in findings if f.get("severity", "") != "info"]
@@ -1293,6 +1264,46 @@ class FixPipeline:
     # (PR #222). Baseline-relative queries close that gap for both
     # polish_legacy and hopper by folding committed, staged, unstaged,
     # and untracked state into a single view.
+
+    def _publish_gate_marker(self) -> None:
+        """Publish ``.gate/pre-fix-sha`` + ``.gate/context.json`` atomically.
+
+        The senior agent invokes ``gate checkpoint`` from inside the
+        worktree; those subcommands read the two markers to know what
+        the "clean baseline" is (save/revert/finalize rely on it) and
+        to route live-log / progress messages back to the correct PR.
+
+        Atomic via ``atomic_write`` (tmp sibling + ``os.replace``): a
+        crash partway through would otherwise leave ``gate checkpoint``
+        staring at a truncated SHA and silently poison every subsequent
+        checkpoint operation — the PR #222 symptom. No-ops silently if
+        ``self._pre_fix_sha`` was never captured (e.g. baseline
+        snapshot skipped in tests).
+
+        Extracted from ``run()`` so the behaviour can be unit-tested
+        without pulling the full review pipeline into the test
+        harness.
+        """
+        if not self._pre_fix_sha:
+            return
+        try:
+            gate_dir_marker = self.workspace / ".gate"
+            atomic_write(
+                gate_dir_marker / "pre-fix-sha",
+                self._pre_fix_sha + "\n",
+            )
+            atomic_write(
+                gate_dir_marker / "context.json",
+                json.dumps({
+                    "pr_number": self.pr_number,
+                    "repo": self.repo,
+                }) + "\n",
+            )
+        except OSError as exc:
+            logger.warning(
+                f"PR #{self.pr_number}: could not write "
+                f".gate/pre-fix-sha marker: {exc}"
+            )
 
     def _fix_content_present(self) -> bool:
         """Return True iff the fix session produced any content to commit.

@@ -1364,7 +1364,7 @@ class FixPipeline:
                 capture_output=True, text=True, cwd=cwd, timeout=120,
             )
             diff = result.stdout
-            (self.workspace / "fix-diff.txt").write_text(diff or "(no changes)")
+            atomic_write(self.workspace / "fix-diff.txt", diff or "(no changes)")
         except (subprocess.SubprocessError, OSError) as exc:
             logger.warning(
                 f"PR #{self.pr_number}: _write_baseline_diff failed: {exc}; "

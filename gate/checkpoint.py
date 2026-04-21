@@ -195,17 +195,6 @@ def _resolve_workspace() -> Path:
     return Path(r.stdout.strip())
 
 
-def _load_config(workspace: Path) -> dict:
-    """Load the same gate.toml the orchestrator used.
-
-    Config resolution lives in ``gate.config``; we just borrow it so
-    ``typecheck_cmd``/``lint_cmd`` match whatever the fix pipeline used.
-    """
-    from gate.config import load_config
-
-    return load_config() or {}
-
-
 def _scoped_paths(workspace: Path, touched: list[str]) -> list[str]:
     """Return the concrete file list to scope the build to.
 
@@ -327,7 +316,7 @@ def _scoped_lint(workspace: Path, config: dict, files: list[str]) -> tuple[int, 
 def scoped_build_verify(
     workspace: Path,
     touched_files: list[str],
-    config: dict | None = None,
+    config: dict,
 ) -> dict:
     """Lightweight build_verify for a single sub-scope checkpoint.
 
@@ -335,11 +324,17 @@ def scoped_build_verify(
     lint_exit, lint_tail, files: [...]}``. The ``tail`` fields are
     already truncated to ~4 KB each so the senior can echo them back into
     an ``implement`` re-prompt without blowing the context window.
+
+    ``config`` is required — callers must resolve it once at the CLI
+    entry point (``_cmd_save``) and thread it through, per the
+    "config is resolved once at the top level" convention. The prior
+    internal ``_load_config`` fallback was removed because calling
+    ``load_config()`` deep inside an exported helper froze config at
+    an unexpected call site and duplicated what the CLI already does.
     """
-    cfg = config or _load_config(workspace)
     files = _scoped_paths(workspace, touched_files)
-    tc_exit, tc_tail = _scoped_typecheck(workspace, cfg, files)
-    lint_exit, lint_tail = _scoped_lint(workspace, cfg, files)
+    tc_exit, tc_tail = _scoped_typecheck(workspace, config, files)
+    lint_exit, lint_tail = _scoped_lint(workspace, config, files)
     passed = tc_exit == 0 and lint_exit == 0
     return {
         "pass": passed,
@@ -391,7 +386,11 @@ def _cmd_save(args: argparse.Namespace) -> int:
         f"Sub-scope '{name}' checkpoint {sha[:8]} "
         f"running scoped build_verify ({len(touched) or '?'} files)",
     )
-    result = scoped_build_verify(workspace, touched)
+    # Resolve config once at the CLI entry point and thread it through,
+    # rather than having scoped_build_verify call load_config() itself.
+    from gate.config import load_config
+    config = load_config() or {}
+    result = scoped_build_verify(workspace, touched, config)
     if not result["pass"]:
         _emit_progress(
             workspace,

@@ -17,6 +17,7 @@ from gate import builder, github, notify, prompt, state
 from gate.codex import bootstrap_codex
 from gate.config import build_claude_env, gate_dir
 from gate.finding_id import compute_finding_id  # re-exported for back-compat
+from gate.io import atomic_write
 from gate.logger import write_live_log
 from gate.runner import StructuredRunner, run_with_retry
 from gate.schemas import FixResult
@@ -1014,18 +1015,25 @@ class FixPipeline:
         # ``.gate/pre-fix-sha`` to know what the "clean baseline" is
         # during save/revert/finalize and ``.gate/context.json`` to
         # route live-log / progress lines back to the correct PR.
+        #
+        # Atomic via ``atomic_write`` (tmp sibling + os.replace) so that a
+        # crash partway through never leaves ``gate checkpoint`` staring
+        # at a truncated SHA — which would silently poison the baseline
+        # for every save/revert/finalize that followed (and would look
+        # exactly like the PR #222 symptom).
         if self._pre_fix_sha:
             try:
                 gate_dir_marker = self.workspace / ".gate"
-                gate_dir_marker.mkdir(exist_ok=True)
-                (gate_dir_marker / "pre-fix-sha").write_text(
-                    self._pre_fix_sha + "\n"
+                atomic_write(
+                    gate_dir_marker / "pre-fix-sha",
+                    self._pre_fix_sha + "\n",
                 )
-                (gate_dir_marker / "context.json").write_text(
+                atomic_write(
+                    gate_dir_marker / "context.json",
                     json.dumps({
                         "pr_number": self.pr_number,
                         "repo": self.repo,
-                    }) + "\n"
+                    }) + "\n",
                 )
             except OSError as exc:
                 logger.warning(
@@ -1356,7 +1364,7 @@ class FixPipeline:
                 capture_output=True, text=True, cwd=cwd, timeout=120,
             )
             diff = result.stdout
-            (self.workspace / "fix-diff.txt").write_text(diff or "(no changes)")
+            atomic_write(self.workspace / "fix-diff.txt", diff or "(no changes)")
         except (subprocess.SubprocessError, OSError) as exc:
             logger.warning(
                 f"PR #{self.pr_number}: _write_baseline_diff failed: {exc}; "

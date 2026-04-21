@@ -25,7 +25,7 @@ from typing import Callable
 
 from gate import prompt
 from gate.config import build_claude_env
-from gate.extract import extract_stage_output
+from gate.extract import extract_stage_output, validate_introduced_by_pr
 from gate.schemas import STAGE_EFFORT, STAGE_SCHEMAS, StageResult, build_fallback
 from gate.tmux import capture_pane, get_current_pane_id, rename_window, send_keys
 
@@ -452,6 +452,19 @@ class ReviewRunner:
             raw_path = self.workspace / f"{self.stage}-raw.json"
             if raw_path.exists():
                 findings = extract_stage_output(raw_path, self.stage)
+
+        # Validate ``introduced_by_pr`` claims against ``diff.txt``.
+        # Applies regardless of whether findings came from the
+        # findings.json fast path or the raw-transcript fallback, so
+        # the classifier guarantee holds uniformly. Skipped for stages
+        # that don't emit findings in the expected shape (e.g. fix).
+        if (
+            isinstance(findings, dict)
+            and isinstance(findings.get("findings"), list)
+        ):
+            findings["findings"] = validate_introduced_by_pr(
+                findings["findings"], self.workspace, self.stage,
+            )
 
         # Write the result envelope that the orchestrator polls for
         result_path = self.workspace / f"{self.stage}-result.json"

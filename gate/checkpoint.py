@@ -35,6 +35,17 @@ fix run.
 
 See ``docs/hopper-pipeline.md`` (Part 3 of the hardening plan) for the
 end-to-end protocol.
+
+## Exported helpers
+
+``scoped_build_verify(workspace, touched_files, config)`` is the
+package-level entry point used by ``_cmd_save`` and is re-exported for
+test monkey-patching. **``config`` is required** — PR #20 removed the
+``config=None`` fallback (which silently called ``load_config()``) so
+configuration resolution lives at the CLI entry point, not inside the
+helper. External wrappers that wrapped the old optional-config
+signature will now raise ``TypeError`` at runtime; resolve config
+yourself (via ``gate.config.load_config``) and pass it positionally.
 """
 
 from __future__ import annotations

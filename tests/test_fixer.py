@@ -1518,68 +1518,113 @@ class TestValidateSeniorCommitMessage:
 
 # ── ``.gate/`` marker writes use atomic_write ────────────────
 #
-# ``FixPipeline.run()`` publishes ``.gate/pre-fix-sha`` and
-# ``.gate/context.json`` for ``gate checkpoint`` to read. A partial
+# ``FixPipeline._publish_gate_marker()`` publishes ``.gate/pre-fix-sha``
+# and ``.gate/context.json`` for ``gate checkpoint`` to read. A partial
 # write (process killed mid-flight) would leave a truncated SHA on disk
 # and silently poison the baseline for every subsequent save/revert/
-# finalize — the exact shape of the PR #222 symptom. These tests pin
-# the atomic-write call sites so nobody reverts to raw ``Path.write_text``
-# without noticing.
+# finalize — the exact shape of the PR #222 symptom.
+#
+# These tests exercise the real helper via a spy on ``atomic_write`` so
+# a revert to raw ``Path.write_text`` fails naturally (the spy would
+# observe zero calls). Follow-up to PR #19's source-slicing test, which
+# was fragile to comment rewording.
 
-class TestGateMarkerAtomicWrite:
-    """Both ``.gate/`` marker writes in ``FixPipeline.run()`` go through
-    ``atomic_write``.
 
-    This is a source-level lint rather than a behavioural test because
-    exercising ``run()`` end-to-end would pull in tmux, Claude, GitHub,
-    and the entire review pipeline. The guarantee we need is structural:
-    any developer reverting to raw ``Path.write_text`` for these two
-    files should break a test, not rediscover the race in production.
-    """
+class TestPublishGateMarker:
+    """Behavioural tests for ``FixPipeline._publish_gate_marker``."""
 
-    def _marker_block(self) -> str:
-        """Return the source of the ``.gate/`` publish block in run().
+    def test_publishes_both_markers_via_atomic_write(
+        self, tmp_path, sample_config, monkeypatch,
+    ):
+        repo, baseline = _init_tmp_repo(tmp_path)
+        pipe = _make_pipeline(repo, baseline, sample_config)
 
-        We slice on the surrounding docstring anchor + the trailing
-        logger.warning line so rearranging unrelated code in ``run()``
-        does not spuriously fail this test.
-        """
-        from pathlib import Path
+        import gate.fixer as fixer_mod
+        real = fixer_mod.atomic_write
+        calls: list[tuple[str, str]] = []
 
-        import gate.fixer
-        src = Path(gate.fixer.__file__).read_text()
-        # Anchor on the atomic-write rationale comment we added so the
-        # slice is robust to line-number drift.
-        start = src.index("Atomic via ``atomic_write``")
-        end = src.index(
-            ".gate/pre-fix-sha marker", start,
+        def spy(path, content):
+            calls.append((path.name, content))
+            return real(path, content)
+
+        monkeypatch.setattr(fixer_mod, "atomic_write", spy)
+
+        pipe._publish_gate_marker()
+
+        names = [n for n, _ in calls]
+        assert "pre-fix-sha" in names, (
+            "_publish_gate_marker must route .gate/pre-fix-sha through "
+            "atomic_write — a truncated SHA would poison every "
+            "subsequent gate checkpoint call (PR #222 symptom)."
         )
-        return src[start:end]
-
-    def test_pre_fix_sha_write_uses_atomic_write(self):
-        block = self._marker_block()
-        assert "atomic_write(" in block, (
-            ".gate/pre-fix-sha publish must go through atomic_write; "
-            "raw Path.write_text risks a partial-file poisoning the "
-            "baseline (PR #222 triage symptom)."
+        assert "context.json" in names, (
+            "_publish_gate_marker must route .gate/context.json through "
+            "atomic_write for the same reason."
         )
-        assert "pre-fix-sha" in block
+        # Contents round-trip correctly — confirms atomic_write's
+        # ``os.replace`` left the final file intact.
+        assert (repo / ".gate" / "pre-fix-sha").read_text() == baseline + "\n"
+        ctx_raw = (repo / ".gate" / "context.json").read_text()
+        assert '"pr_number": 1' in ctx_raw
+        assert '"repo": "org/repo"' in ctx_raw
 
-    def test_context_json_write_uses_atomic_write(self):
-        block = self._marker_block()
-        # Count atomic_write calls — both markers must be routed.
-        assert block.count("atomic_write(") >= 2, (
-            "Both .gate/pre-fix-sha and .gate/context.json must be "
-            f"routed through atomic_write; block:\n{block}"
-        )
-        assert "context.json" in block
+    def test_no_tmp_sibling_left_behind_after_success(
+        self, tmp_path, sample_config,
+    ):
+        """``atomic_write``'s contract: on success the ``.tmp`` sibling
+        is gone. Any leftover tmp file indicates a partial write or a
+        revert to non-atomic semantics."""
+        repo, baseline = _init_tmp_repo(tmp_path)
+        pipe = _make_pipeline(repo, baseline, sample_config)
+        pipe._publish_gate_marker()
+        gate_dir = repo / ".gate"
+        assert (gate_dir / "pre-fix-sha").exists()
+        assert (gate_dir / "context.json").exists()
+        assert not (gate_dir / "pre-fix-sha.tmp").exists()
+        assert not (gate_dir / "context.json.tmp").exists()
 
-    def test_no_raw_write_text_in_marker_block(self):
-        block = self._marker_block()
-        # Allow ``write_text`` only inside atomic_write's own tmp-path
-        # implementation (which lives in gate.io, not here). In this
-        # slice of ``run()`` it must never appear.
-        assert ".write_text(" not in block, (
-            f"Found raw .write_text in .gate/ marker block — "
-            f"must be atomic_write; block:\n{block}"
+    def test_noop_when_pre_fix_sha_unset(
+        self, tmp_path, sample_config, monkeypatch,
+    ):
+        """Baseline capture can legitimately be skipped (e.g. test
+        fixtures that don't snapshot HEAD). In that case the helper
+        must be a silent no-op — writing an empty SHA would still
+        poison downstream checkpoints."""
+        repo, _ = _init_tmp_repo(tmp_path)
+        pipe = _make_pipeline(repo, "", sample_config)
+
+        import gate.fixer as fixer_mod
+        calls: list = []
+        monkeypatch.setattr(
+            fixer_mod, "atomic_write", lambda *a, **kw: calls.append(a),
         )
+
+        pipe._publish_gate_marker()
+
+        assert calls == [], (
+            "_publish_gate_marker must not write when _pre_fix_sha is "
+            "unset — empty baseline would break gate checkpoint."
+        )
+        assert not (repo / ".gate" / "pre-fix-sha").exists()
+
+    def test_oserror_is_logged_not_raised(
+        self, tmp_path, sample_config, monkeypatch, caplog,
+    ):
+        """A filesystem failure during marker publish must not take the
+        review down — the main fix pipeline can still run; the senior
+        agent will just notice the missing marker when it tries
+        ``gate checkpoint``."""
+        repo, baseline = _init_tmp_repo(tmp_path)
+        pipe = _make_pipeline(repo, baseline, sample_config)
+
+        import gate.fixer as fixer_mod
+        def boom(*_a, **_kw):
+            raise OSError("disk full (simulated)")
+        monkeypatch.setattr(fixer_mod, "atomic_write", boom)
+
+        caplog.set_level("WARNING", logger="gate.fixer")
+        pipe._publish_gate_marker()  # must not raise
+
+        assert any(
+            ".gate/pre-fix-sha marker" in r.message for r in caplog.records
+        ), "OSError during publish must surface as a WARNING log"

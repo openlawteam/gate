@@ -1,0 +1,76 @@
+{
+  "postconditions": [
+    {
+      "function_path": "gate/codex.py:terminate_active",
+      "signature": "(sig: int = signal.SIGTERM) -> bool",
+      "prose": "Returns True and dispatches the signal to the active codex process group when a codex process is in flight; returns False without raising when no process is active or the process has already exited (ProcessLookupError is swallowed).",
+      "assertion_snippet": "result is False or result is True",
+      "confidence": "high",
+      "rationale": "This is the primary orphan-prevention mechanism called from signal handlers; it must never raise and must accurately report whether a signal was dispatched."
+    },
+    {
+      "function_path": "gate/codex.py:_kill_and_wait",
+      "signature": "(proc: subprocess.Popen) -> None",
+      "prose": "Sends SIGTERM to the codex process group and, if the process does not exit within _TERM_GRACE_S seconds, escalates to SIGKILL; always returns without raising even if the process has already exited.",
+      "assertion_snippet": "# after _kill_and_wait(proc), proc must no longer be alive\ntry:\n    os.killpg(proc.pid, 0)\n    alive = True\nexcept ProcessLookupError:\n    alive = False\nassert not alive",
+      "confidence": "high",
+      "rationale": "Called on TimeoutExpired from communicate(); if it fails to kill codex the process leaks onto the user's quota \u2014 a direct money/resource impact."
+    },
+    {
+      "function_path": "gate/codex.py:bootstrap_codex",
+      "signature": "(prompt: str, cwd: str, env: dict | None = None) -> tuple[int, str | None]",
+      "prose": "Spawns codex in its own process group (start_new_session=True), tracks the Popen in _active_proc for the duration of communicate(), clears _active_proc in a finally block, and returns (127, None) on FileNotFoundError, (1, None) on timeout, or (returncode, thread_id) on normal exit.",
+      "assertion_snippet": "from gate import codex; codex._active_proc is None  # after return, slot must be cleared",
+      "confidence": "high",
+      "rationale": "The _active_proc global is the link between the running process and terminate_active(); if it leaks a stale reference, a subsequent cancel could kill the wrong process."
+    },
+    {
+      "function_path": "gate/codex.py:run_codex",
+      "signature": "(prompt: str, cwd: str, output_file: str, thread_id: str, env: dict | None = None, stdout_log: str | None = None) -> tuple[int, list[str]]",
+      "prose": "When stdout_log is provided, opens the file in 'ab' mode and passes it as Popen's stdout so codex output is redirected away from the parent's stdout; the file handle is always closed in a finally block regardless of exit path, and _active_proc is cleared after communicate().",
+      "assertion_snippet": "# stdout_log file must exist and be closed after run_codex returns\nimport os\nassert os.path.exists(stdout_log_path)\n# and _active_proc must be cleared\nfrom gate import codex; assert codex._active_proc is None",
+      "confidence": "high",
+      "rationale": "File handle leak or stale _active_proc would cause resource exhaustion or misdirected signals; the stdout redirect is the core of Fix 1."
+    },
+    {
+      "function_path": "gate/codex.py:_set_active",
+      "signature": "(proc: subprocess.Popen | None) -> None",
+      "prose": "Sets the module-level _active_proc to the given value under _active_lock so that concurrent reads from terminate_active() always see a consistent state.",
+      "assertion_snippet": "from gate import codex\ncodex._set_active(None)\nassert codex._active_proc is None",
+      "confidence": "high",
+      "rationale": "Thread-safety of the active proc slot is critical; a race between _set_active(None) in the finally block and terminate_active() in a signal handler could send a signal to the wrong process or None."
+    },
+    {
+      "function_path": "gate/code.py:run_code_stage",
+      "signature": "(stage: str, request: str, workspace: Path, thread_id: str) -> int",
+      "prose": "Passes a stdout_log path of the form '{workspace}/{suffix}.codex.log' to run_codex, starts a daemon heartbeat thread before calling run_codex, and joins that thread (stopping it) in a finally block so no heartbeat threads survive past the function's return.",
+      "assertion_snippet": "import threading\nrun_code_stage('implement', 'fix', tmp_path, 'tid')\nleftover = [t for t in threading.enumerate() if t.name.startswith('gate-code-heartbeat-')]\nassert leftover == []",
+      "confidence": "high",
+      "rationale": "A leaked heartbeat thread would continue printing to stdout after run_code_stage returns, potentially corrupting senior Claude's context \u2014 defeating Fix 1."
+    },
+    {
+      "function_path": "gate/code.py:main",
+      "signature": "() -> int",
+      "prose": "Installs SIGTERM and SIGHUP handlers that call codex.terminate_active(SIGTERM) and exit with (128 + signum) before invoking run_code_stage; handler installation failures (ValueError, OSError) are silently swallowed so non-main-thread or unsupported-platform invocations still proceed.",
+      "assertion_snippet": "import signal\n# after main() runs, SIGTERM handler must not be SIG_DFL\nassert signal.getsignal(signal.SIGTERM) not in (signal.SIG_DFL, None)",
+      "confidence": "medium",
+      "rationale": "Signal handler registration is the gate-code side of Fix 2c; if handlers are not installed, a SIGTERM during a long junior stage leaves codex orphaned."
+    },
+    {
+      "function_path": "gate/runner.py:ReviewRunner._handle_signal",
+      "signature": "(self, signum: int, frame) -> None",
+      "prose": "Runs 'pkill -TERM -P <own-pid>' with a 2-second timeout before raising KeyboardInterrupt (SIGINT) or calling sys.exit(128 + signum); pkill failures (FileNotFoundError, TimeoutExpired, OSError) are caught and logged so the exit path is always reached.",
+      "assertion_snippet": "# pkill must be attempted and sys.exit called with correct code\nmock_run.assert_called_once()\nmock_exit.assert_called_once_with(128 + signal.SIGTERM)",
+      "confidence": "high",
+      "rationale": "This is the backstop for Fix 2d; if an exception in the pkill sweep prevents sys.exit from being called, the process hangs instead of shutting down cleanly."
+    },
+    {
+      "function_path": "gate/fixer.py:GATE_ARTIFACT_FILES / GATE_ARTIFACT_GLOBS",
+      "signature": "N/A \u2014 module-level sets",
+      "prose": "GATE_ARTIFACT_FILES contains 'gate-directions.md' and GATE_ARTIFACT_GLOBS contains '*.codex.log' so that cleanup_artifacts() removes both senior's scratch dispatch file and per-stage codex stdout logs before any git commit.",
+      "assertion_snippet": "from gate.fixer import GATE_ARTIFACT_FILES, GATE_ARTIFACT_GLOBS\nassert 'gate-directions.md' in GATE_ARTIFACT_FILES\nassert '*.codex.log' in GATE_ARTIFACT_GLOBS",
+      "confidence": "high",
+      "rationale": "If either artifact pattern is absent, senior's directions file or codex's raw stdout log could land in the PR commit \u2014 a data-leak and repo-pollution risk."
+    }
+  ]
+}

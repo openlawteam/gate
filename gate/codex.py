@@ -200,7 +200,14 @@ def run_codex(
     stdout_handle = None
     try:
         if stdout_log:
-            stdout_handle = open(stdout_log, "ab")
+            try:
+                stdout_handle = open(stdout_log, "ab")
+            except OSError as e:
+                logger.warning(
+                    f"Failed to open codex stdout_log {stdout_log!r}: {e}; "
+                    "falling back to inherited stdout"
+                )
+                stdout_handle = None
         popen_kwargs: dict = {
             "cwd": cwd,
             "env": env,

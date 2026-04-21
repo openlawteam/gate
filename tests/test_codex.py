@@ -144,6 +144,19 @@ class TestRunCodex:
         kwargs = mock_popen.call_args.kwargs
         assert "stdout" not in kwargs
 
+    @patch("gate.codex.subprocess.Popen")
+    def test_stdout_log_open_error_falls_back_to_inherited_stdout(
+        self, mock_popen, tmp_path
+    ):
+        mock_popen.return_value = _make_popen_mock(returncode=0)
+        bad_log_path = tmp_path / "missing-parent" / "implement.codex.log"
+        exit_code, cmd = run_codex(
+            "prompt", str(tmp_path), "out.md", "tid", stdout_log=str(bad_log_path)
+        )
+        assert exit_code == 0
+        kwargs = mock_popen.call_args.kwargs
+        assert "stdout" not in kwargs
+
     @patch("gate.codex._kill_and_wait")
     @patch("gate.codex.subprocess.Popen")
     def test_timeout_kills_and_returns_1(self, mock_popen, mock_kill, tmp_path):

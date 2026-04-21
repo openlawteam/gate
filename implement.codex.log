@@ -1,0 +1,20 @@
+Implemented the requested fix and added the optional regression test.
+
+**Files changed**
+- [gate/codex.py](/private/tmp/gate-worktrees/openlawteam-gate-pr14-1776778773339-5afdd4/gate/codex.py#L200)
+  - Wrapped `open(stdout_log, "ab")` in a nested `try/except OSError` inside `run_codex()`.
+  - Added `logger.warning(...)` on open failure and explicitly kept `stdout_handle = None` to fall back to inherited stdout.
+  - No other logic in `run_codex()` or the existing `finally` block was changed.
+- [tests/test_codex.py](/private/tmp/gate-worktrees/openlawteam-gate-pr14-1776778773339-5afdd4/tests/test_codex.py#L147)
+  - Added `TestRunCodex.test_stdout_log_open_error_falls_back_to_inherited_stdout`.
+  - Verifies that when `stdout_log` points to a path with a missing parent directory, `run_codex()` still succeeds and `subprocess.Popen` is called without a `stdout` kwarg.
+
+**Verification results**
+- `ruff check gate/codex.py tests/test_codex.py 2>&1 | tail -30`
+  - `All checks passed!`
+- `python -m pytest tests/test_codex.py -x -q 2>&1 | tail -30`
+  - `.....................                                                    [100%]`
+  - `21 passed in 0.08s`
+
+**Issues / followups**
+- None encountered.

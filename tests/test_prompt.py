@@ -349,3 +349,27 @@ class TestPromptAnchors:
     def test_verdict_prompt_consumes_postconditions(self, real_gate_dir):
         text = (real_gate_dir / "prompts" / "verdict.md").read_text()
         assert "postconditions_json" in text
+
+    def test_fix_senior_uses_file_redirection_not_heredoc(self, real_gate_dir):
+        """Fix 3a regression: fix-senior.md must document the
+        ``gate-code <stage> < gate-directions.md`` file-redirection
+        pattern and must NOT show a dispatch example using the
+        deprecated ``<<'EOF'`` heredoc pattern. Heredocs corrupt
+        directions containing ``EOF`` or backticks and are a
+        shell-injection vector when the terminator is user-chosen.
+
+        Note: the prompt may still *mention* ``<<'EOF'`` in a warning
+        block telling senior NOT to use it — this test therefore only
+        forbids the old dispatch example (``gate-code ... <<'EOF'``),
+        not every occurrence of the string."""
+        text = (real_gate_dir / "prompts" / "fix-senior.md").read_text()
+        assert "gate-code <stage> < gate-directions.md" in text
+        # Forbid the deprecated dispatch example on any single line.
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("gate-code") and "<<" in stripped:
+                raise AssertionError(
+                    f"fix-senior.md still shows a heredoc dispatch example: {stripped!r}"
+                )
+        # Senior must know to overwrite the file each call, not append.
+        assert "overwrite" in text.lower()

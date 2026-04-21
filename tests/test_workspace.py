@@ -187,6 +187,61 @@ class TestSetupArtifactExclusions:
         assert "diff.txt" not in result.stdout
         assert "verdict.json" not in result.stdout
 
+    def test_codex_log_excluded(self, tmp_path):
+        """Fix 1c: *.codex.log files must be covered by per-worktree git
+        excludes so they are never committed via `git add -A`."""
+        repo = self._init_repo(tmp_path)
+        wt = tmp_path / "worktree"
+        self._add_worktree(repo, wt)
+
+        _setup_artifact_exclusions(str(repo), wt)
+
+        (wt / "implement.codex.log").write_text("codex stdout")
+        (wt / "audit_2.codex.log").write_text("codex stdout")
+
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(wt), capture_output=True, text=True,
+        )
+        assert "implement.codex.log" not in result.stdout
+        assert "audit_2.codex.log" not in result.stdout
+
+    def test_gate_directions_md_excluded(self, tmp_path):
+        """Fix 3d: gate-directions.md (written by senior before each
+        `gate-code <stage> < gate-directions.md` call) must be excluded
+        from commits."""
+        repo = self._init_repo(tmp_path)
+        wt = tmp_path / "worktree"
+        self._add_worktree(repo, wt)
+
+        _setup_artifact_exclusions(str(repo), wt)
+
+        (wt / "gate-directions.md").write_text("directions")
+
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(wt), capture_output=True, text=True,
+        )
+        assert "gate-directions.md" not in result.stdout
+
+    def test_postconditions_json_excluded(self, tmp_path):
+        """PR #14 follow-up: postconditions.json must be covered by
+        per-worktree git excludes. It was leaking into scoped ruff runs
+        and crashing the fix pipeline."""
+        repo = self._init_repo(tmp_path)
+        wt = tmp_path / "worktree"
+        self._add_worktree(repo, wt)
+
+        _setup_artifact_exclusions(str(repo), wt)
+
+        (wt / "postconditions.json").write_text('{"ok": true}')
+
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(wt), capture_output=True, text=True,
+        )
+        assert "postconditions.json" not in result.stdout
+
 
 class TestCreateWorktreeDepInstall:
     @patch("gate.workspace._install_deps_with_retry")

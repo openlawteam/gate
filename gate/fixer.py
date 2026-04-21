@@ -48,12 +48,21 @@ GATE_ARTIFACT_FILES = {
     # Polish-loop / hopper-pipeline state files (PR #217 regression
     # guard — these must never land in PR commits).
     "fix-polish.json", "fix-decomposition.json",
+    # Scratch file senior Claude writes before each `gate-code <stage>
+    # < gate-directions.md` invocation (Fix 3: replaces the deprecated
+    # heredoc pattern). Never commit to the PR.
+    "gate-directions.md",
+    # Postcondition verification artifact (written by the postconditions
+    # stage). Leaked into `git add -A` on Python repos during fix cycles
+    # and crashed scoped ruff runs (PR #14 build failure).
+    "postconditions.json",
 }
 
 GATE_ARTIFACT_GLOBS = [
     "*-findings.json", "*-result.json",
     "*-session-id.txt", "*-raw.json",
     "*.in.md", "*.out.md", "*.in.md.tmp",
+    "*.codex.log",
 ]
 
 

@@ -4,21 +4,33 @@ Ported from gate-code.js. Claude senior invokes this via bash to delegate
 work to Codex junior, which resumes an existing thread.
 
 Usage pattern (from Claude's bash tool inside fix-senior session):
-    gate-code <stage> <<'EOF'
-    <directions for junior engineer>
-    EOF
+    # First, write directions to gate-directions.md using your file tool.
+    # Always overwrite the file before each call (do not append).
+    # Then redirect stdin from it:
+    gate-code <stage> < gate-directions.md
 
 Stages: prep, design, implement, audit
 """
 
 import logging
 import os
+import signal
 import sys
+import threading
+import time
 from pathlib import Path
 
+from gate import codex as _codex
 from gate.codex import run_codex
 from gate.io import atomic_write
 from gate.prompt import safe_substitute
+
+# Interval (seconds) between heartbeat prints emitted while a codex
+# junior stage is running. Exposed as a module attribute so tests can
+# reduce it, and so it can be tuned independently of runner stuck
+# timeouts (currently runner hard_timeout_s=1200 — a 30s heartbeat
+# keeps the senior pane "active" with ~40 samples before any hit).
+HEARTBEAT_INTERVAL_S = 30.0
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +130,7 @@ def run_code_stage(
     atomic_write(input_path, prompt_text)
 
     output_path = workspace / f"{suffix}.out.md"
+    stdout_log_path = workspace / f"{suffix}.codex.log"
 
     logger.info(
         f"gate-code {stage} starting (thread={thread_id[:8]}, request={len(request)} chars)"
@@ -127,13 +140,40 @@ def run_code_stage(
 
     env = build_claude_env()
 
-    exit_code, cmd = run_codex(
-        prompt_text,
-        str(workspace),
-        str(output_path),
-        thread_id,
-        env=env,
+    # Heartbeat so senior's tmux pane keeps changing now that codex's own
+    # stdout is redirected to stdout_log. Without this, the runner's
+    # stuck-detector (runner._check_activity, hard_timeout_s=1200) could
+    # fire on a long junior call whose only in-pane signal is Claude
+    # Code's spinner. gate-code's own stdout still inherits to senior's
+    # Bash tool, so prints here are visible in the pane.
+    stop_heartbeat = threading.Event()
+    start_time = time.monotonic()
+
+    def _heartbeat() -> None:
+        while not stop_heartbeat.wait(timeout=HEARTBEAT_INTERVAL_S):
+            elapsed = int(time.monotonic() - start_time)
+            print(
+                f"gate-code: {stage} still running ({elapsed}s)",
+                flush=True,
+            )
+
+    heartbeat_thread = threading.Thread(
+        target=_heartbeat, name=f"gate-code-heartbeat-{stage}", daemon=True
     )
+    heartbeat_thread.start()
+
+    try:
+        exit_code, cmd = run_codex(
+            prompt_text,
+            str(workspace),
+            str(output_path),
+            thread_id,
+            env=env,
+            stdout_log=str(stdout_log_path),
+        )
+    finally:
+        stop_heartbeat.set()
+        heartbeat_thread.join(timeout=1.0)
 
     if output_path.exists():
         content = output_path.read_text()
@@ -151,10 +191,14 @@ def run_code_stage(
 def main() -> int:
     """CLI entry point for gate-code command.
 
-    Called by Claude senior via bash:
-        gate-code <stage> <<'EOF'
-        <directions>
-        EOF
+    Called by Claude senior via bash. Directions must be piped in from a
+    file (never a heredoc — heredocs corrupt directions whose content
+    contains the terminator or other shell metacharacters, and are a
+    known shell-injection vector when the terminator is user-chosen):
+
+        # First overwrite gate-directions.md with your directions via a
+        # file-writing tool, then:
+        gate-code <stage> < gate-directions.md
     """
     if len(sys.argv) < 2 or sys.argv[1] not in ALLOWED_STAGES:
         print(f"Usage: gate-code <{'|'.join(ALLOWED_STAGES)}>", file=sys.stderr)
@@ -162,6 +206,28 @@ def main() -> int:
         return 1
 
     stage = sys.argv[1]
+
+    # Fix 2c: if we receive SIGTERM (orchestrator cancel) or SIGHUP
+    # (tmux pane died), take the currently-running codex subprocess
+    # down with us instead of orphaning it onto the user's quota.
+    # We forward the signal using exit code (128 + signum) so callers
+    # see a conventional signal-exit status.
+    def _handle_signal(signum: int, _frame) -> None:
+        logger.warning(
+            "gate-code %s received signal %s — terminating active codex",
+            stage, signum,
+        )
+        _codex.terminate_active(signal.SIGTERM)
+        sys.exit(128 + signum)
+
+    for _sig in (signal.SIGTERM, signal.SIGHUP):
+        try:
+            signal.signal(_sig, _handle_signal)
+        except (ValueError, OSError):
+            # ValueError: handler installation from a non-main thread.
+            # OSError: platform doesn't support the signal (not macOS/Linux).
+            # Either way, the runner's pkill sweep (Fix 2d) is the backstop.
+            pass
 
     thread_id = os.environ.get("GATE_CODEX_THREAD_ID", "")
     if not thread_id:

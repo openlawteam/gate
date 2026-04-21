@@ -257,6 +257,62 @@ class TestCleanupArtifacts:
         assert (src / "notes-findings.json").exists()
         assert removed == []
 
+    def test_removes_codex_stdout_logs(self, tmp_path):
+        """Fix 1c: *.codex.log artifacts from gate-code stdout redirect
+        must be cleaned up; never committed to the target repo."""
+        (tmp_path / "implement.codex.log").write_text("codex stdout")
+        (tmp_path / "audit_1.codex.log").write_text("codex stdout")
+
+        with patch("gate.fixer.subprocess.run"):
+            removed = cleanup_artifacts(tmp_path)
+
+        assert not (tmp_path / "implement.codex.log").exists()
+        assert not (tmp_path / "audit_1.codex.log").exists()
+        assert "implement.codex.log" in removed
+        assert "audit_1.codex.log" in removed
+
+    def test_codex_log_is_in_artifact_globs(self):
+        """Regression: *.codex.log must be in the declared glob list so
+        future artifact-cleanup additions don't drop it by accident."""
+        from gate.fixer import GATE_ARTIFACT_GLOBS
+        assert "*.codex.log" in GATE_ARTIFACT_GLOBS
+
+    def test_removes_gate_directions_md(self, tmp_path):
+        """Fix 3d: gate-directions.md (senior's scratch file for
+        directions passed to gate-code via file redirection) must be
+        cleaned up; never committed."""
+        (tmp_path / "gate-directions.md").write_text("directions text")
+
+        with patch("gate.fixer.subprocess.run"):
+            removed = cleanup_artifacts(tmp_path)
+
+        assert not (tmp_path / "gate-directions.md").exists()
+        assert "gate-directions.md" in removed
+
+    def test_gate_directions_md_is_in_artifact_files(self):
+        """Regression: gate-directions.md must be in the static
+        artifact-files set so future cleanup additions don't drop it."""
+        from gate.fixer import GATE_ARTIFACT_FILES
+        assert "gate-directions.md" in GATE_ARTIFACT_FILES
+
+    def test_removes_postconditions_json(self, tmp_path):
+        """PR #14 follow-up: postconditions.json leaked into `git add -A`
+        during fix cycles on Python repos and crashed scoped ruff. Must be
+        cleaned up before any commit."""
+        (tmp_path / "postconditions.json").write_text('{"ok": true}')
+
+        with patch("gate.fixer.subprocess.run"):
+            removed = cleanup_artifacts(tmp_path)
+
+        assert not (tmp_path / "postconditions.json").exists()
+        assert "postconditions.json" in removed
+
+    def test_postconditions_json_is_in_artifact_files(self):
+        """Regression guard: postconditions.json must stay in the static
+        artifact-files set."""
+        from gate.fixer import GATE_ARTIFACT_FILES
+        assert "postconditions.json" in GATE_ARTIFACT_FILES
+
 
 class TestRevertFile:
     def _init_repo(self, tmp_path):

@@ -319,8 +319,34 @@ class ReviewRunner:
             send_keys(self._pane_id, "C-c")
 
     def _handle_signal(self, signum: int, frame) -> None:
-        """Handle shutdown signals gracefully."""
+        """Handle shutdown signals gracefully.
+
+        Fix 2d: Before raising/exiting, sweep any direct children of
+        this runner process with ``pkill -TERM -P <our pid>``. This is
+        the backstop for the codex orphan-leak fix: tmux propagates
+        SIGHUP to claude, claude's own handler *should* tear down its
+        gate-code child, and gate-code's Fix 2c handler should take
+        codex down with it. But if any link in that chain breaks (e.g.
+        claude is still mid-Bash-tool when the pane dies), this sweep
+        ensures nothing we directly spawned is left orphaned on the
+        user's quota.
+
+        ``pkill -P`` only reaches direct children — grandchildren rely
+        on each link propagating the signal further. Failures here are
+        swallowed because this is best-effort cleanup on a path that is
+        already exiting.
+        """
         logger.debug(f"Received signal {signum}")
+        try:
+            subprocess.run(
+                ["pkill", "-TERM", "-P", str(os.getpid())],
+                timeout=2,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+            logger.debug("pkill sweep in _handle_signal failed: %s", exc)
         if signum == signal.SIGINT:
             raise KeyboardInterrupt
         sys.exit(128 + signum)

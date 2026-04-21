@@ -5,9 +5,14 @@ import time
 from unittest.mock import patch
 
 from gate.tui import (
+    DECISION_COLORS,
+    DECISION_ICONS,
+    STAGE_COLORS,
+    CompletedDetailScreen,
     _parse_timestamp,
     _sanitize_pane_line,
     compute_metrics,
+    format_decision,
     format_elapsed,
     format_fix_pipeline,
     format_uptime,
@@ -215,3 +220,165 @@ class TestSanitizePaneLine:
 
     def test_strips_null_byte(self):
         assert _sanitize_pane_line("foo\x00bar") == "foobar"
+
+
+class TestDecisionRegistry:
+    """Pin the decision registry so logger-emitted decisions always
+    have a TUI-side icon and color. Legacy polish_legacy entries
+    wrote ``fix_succeeded`` / ``fix_failed`` only; PR #18 added
+    ``fix_no_op`` for the graceful-no-op path (and
+    hopper-senior-declared-clean), which previously fell through to
+    the ``?`` fallback in the reviews table."""
+
+    def test_fix_no_op_has_icon(self):
+        # Must not fall through to the "?" fallback.
+        assert DECISION_ICONS["fix_no_op"] != "?"
+        assert DECISION_ICONS["fix_no_op"].strip() != ""
+
+    def test_fix_no_op_has_color(self):
+        assert DECISION_COLORS["fix_no_op"] == "dim"
+
+    def test_all_logger_decisions_present(self):
+        # Mirrors the ``status → decision`` map in
+        # ``gate.logger.log_fix_result``.
+        for key in ("fix_succeeded", "fix_failed", "fix_no_op"):
+            assert key in DECISION_ICONS
+            assert key in DECISION_COLORS
+
+    def test_format_decision_for_fix_no_op(self):
+        result = format_decision("fix_no_op")
+        assert "fix no op" in result.plain  # underscores stripped
+        assert result.plain.startswith(DECISION_ICONS["fix_no_op"])
+
+
+class TestStageColors:
+    def test_fix_polish_registered(self):
+        """``fix-polish`` is emitted by the polish self-audit
+        (``fixer_polish.py``). Previously missing from
+        ``STAGE_COLORS``, so it rendered unstyled in the log."""
+        assert "fix-polish" in STAGE_COLORS
+
+
+class TestBuildFixInfo:
+    """Behaviour of ``CompletedDetailScreen._build_fix_info`` — the
+    panel shown when the user opens a fix-followup entry from the
+    reviews table. Targets the PR #18/#19 telemetry that was being
+    written to ``reviews.jsonl`` but not surfaced in the modal."""
+
+    def _render(self, entry: dict) -> str:
+        from rich.text import Text
+        screen = CompletedDetailScreen.__new__(CompletedDetailScreen)
+        screen._entry = entry
+        return screen._build_fix_info(entry, Text()).plain
+
+    def test_legacy_entry_renders_core_fields(self):
+        out = self._render({
+            "decision": "fix_succeeded",
+            "original_decision": "approve_with_notes",
+            "review_time_seconds": 42,
+            "fix_summary": "auto-fix 1/1",
+            "is_fix_followup": True,
+        })
+        assert "fix succeeded" in out
+        assert "approve_with_notes" in out
+        assert "42s" in out
+        assert "auto-fix 1/1" in out
+        # Legacy entries don't carry these fields — they must not
+        # accidentally print placeholder text.
+        assert "Mode:" not in out
+        assert "Sub-scopes:" not in out
+        assert "Commit Message" not in out
+
+    def test_hopper_entry_renders_subscopes(self):
+        out = self._render({
+            "decision": "fix_succeeded",
+            "original_decision": "approve_with_notes",
+            "review_time_seconds": 100,
+            "fix_summary": "auto-fix 3/4",
+            "pipeline_mode": "hopper",
+            "sub_scope_total": 4,
+            "sub_scope_committed": 3,
+            "sub_scope_reverted": 1,
+            "sub_scope_empty": 0,
+            "fixed_count": 3,
+            "not_fixed_count": 1,
+            "commit_message_source": "senior",
+            "is_fix_followup": True,
+        })
+        assert "Mode:" in out
+        assert "hopper" in out
+        assert "Sub-scopes:" in out
+        assert "3/4" in out
+        assert "1 reverted" in out
+        assert "Commit Message" in out
+        assert "senior" in out
+        assert "Findings:" in out
+        assert "3 fixed" in out
+        assert "1 not fixed" in out
+
+    def test_synthesized_commit_shows_reject_reason(self):
+        out = self._render({
+            "decision": "fix_succeeded",
+            "original_decision": "approve_with_notes",
+            "review_time_seconds": 30,
+            "fix_summary": "auto-fix",
+            "commit_message_source": "synthesized",
+            "commit_message_reject_reason": "too_short",
+            "is_fix_followup": True,
+        })
+        assert "Source: synthesized" in out
+        assert "Reject: too_short" in out
+
+    def test_runaway_guard_is_prominent(self):
+        out = self._render({
+            "decision": "fix_failed",
+            "original_decision": "approve_with_notes",
+            "review_time_seconds": 600,
+            "fix_summary": "runaway",
+            "pipeline_mode": "hopper",
+            "sub_scope_total": 5,
+            "sub_scope_committed": 1,
+            "runaway_guard_hit": True,
+            "is_fix_followup": True,
+        })
+        assert "Runaway:" in out
+        assert "guard hit" in out
+
+    def test_wall_clock_hidden_when_equal_to_duration(self):
+        out = self._render({
+            "decision": "fix_succeeded",
+            "original_decision": "approve_with_notes",
+            "review_time_seconds": 50,
+            "wall_clock_seconds": 50,
+            "fix_summary": "auto-fix",
+            "pipeline_mode": "hopper",
+            "is_fix_followup": True,
+        })
+        assert "Wall clock:" not in out
+
+    def test_wall_clock_surfaced_when_different(self):
+        out = self._render({
+            "decision": "fix_succeeded",
+            "original_decision": "approve_with_notes",
+            "review_time_seconds": 50,
+            "wall_clock_seconds": 120,
+            "fix_summary": "auto-fix",
+            "pipeline_mode": "hopper",
+            "is_fix_followup": True,
+        })
+        assert "Wall clock:" in out
+        assert "120s" in out
+
+    def test_fix_no_op_entry_renders(self):
+        """The exact entry shape produced by a graceful no-op —
+        previously rendered ``?`` as its decision icon."""
+        out = self._render({
+            "decision": "fix_no_op",
+            "original_decision": "approve_with_notes",
+            "review_time_seconds": 5,
+            "fix_summary": "no mechanical work required",
+            "pipeline_mode": "hopper",
+            "is_fix_followup": True,
+        })
+        assert "fix no op" in out
+        assert "no mechanical work required" in out

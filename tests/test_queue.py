@@ -66,6 +66,37 @@ class TestCancelPr:
     def test_cancel_nonexistent_review(self, review_queue):
         assert review_queue.cancel_pr(999) is False
 
+    def test_cancel_pr_default_reason_is_manual(self, review_queue):
+        """Issue #17: ``gate cancel`` routes through ``cancel_pr`` with
+        no reason override — the default must be ``"manual"`` so the
+        GitHub check lands as ``neutral``, not ``Superseded by newer
+        push``."""
+        mock_orch = MagicMock()
+        with review_queue._lock:
+            review_queue._active[("repo", 42)] = mock_orch
+
+        assert review_queue.cancel_pr(42, "repo") is True
+        mock_orch.cancel.assert_called_once_with(reason="manual")
+
+    def test_cancel_pr_forwards_explicit_reason(self, review_queue):
+        """Callers that know the reason (e.g. a timeout watchdog) must
+        be able to override the default."""
+        mock_orch = MagicMock()
+        with review_queue._lock:
+            review_queue._active[("repo", 42)] = mock_orch
+
+        assert review_queue.cancel_pr(42, "repo", reason="timeout") is True
+        mock_orch.cancel.assert_called_once_with(reason="timeout")
+
+    def test_cancel_pr_legacy_path_uses_manual_default(self, review_queue):
+        """The no-repo legacy lookup must also default to ``manual``."""
+        mock_orch = MagicMock()
+        with review_queue._lock:
+            review_queue._active[("repo", 42)] = mock_orch
+
+        assert review_queue.cancel_pr(42) is True
+        mock_orch.cancel.assert_called_once_with(reason="manual")
+
 
 class TestGetActiveReviews:
     def test_returns_snapshot(self, review_queue):

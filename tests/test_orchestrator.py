@@ -224,6 +224,113 @@ class TestCancel:
         mock_ws.remove_worktree.assert_not_called()
 
 
+class TestCancelReasons:
+    """Issue #17: cancel() routes the GitHub payload by reason so the
+    PR/issue author doesn't see ``Superseded by newer push`` on a manual
+    cancel."""
+
+    @patch("gate.orchestrator.kill_window")
+    @patch("gate.orchestrator.github")
+    def test_superseded_default_reports_cancelled(
+        self, mock_github, _mock_kill, orchestrator,
+    ):
+        orchestrator.check_run_id = 42
+        orchestrator.cancel()  # default reason = "superseded"
+        call = mock_github.complete_check_run.call_args
+        assert call[1]["conclusion"] == "cancelled"
+        assert call[1]["output_title"] == "Superseded by newer push"
+        assert "newer commit" in call[1]["output_summary"].lower()
+
+    @patch("gate.orchestrator.kill_window")
+    @patch("gate.orchestrator.github")
+    def test_manual_reports_neutral(
+        self, mock_github, _mock_kill, orchestrator,
+    ):
+        orchestrator.check_run_id = 42
+        orchestrator.cancel(reason="manual")
+        call = mock_github.complete_check_run.call_args
+        # The whole point of Issue #17: operator cancel is NOT a failure.
+        assert call[1]["conclusion"] == "neutral"
+        assert call[1]["output_title"] == "Review cancelled by operator"
+        assert "gate cancel" in call[1]["output_summary"]
+
+    @patch("gate.orchestrator.kill_window")
+    @patch("gate.orchestrator.github")
+    def test_timeout_reports_cancelled(
+        self, mock_github, _mock_kill, orchestrator,
+    ):
+        orchestrator.check_run_id = 42
+        orchestrator.cancel(reason="timeout")
+        call = mock_github.complete_check_run.call_args
+        assert call[1]["conclusion"] == "cancelled"
+        assert call[1]["output_title"] == "Review timed out"
+
+    @patch("gate.orchestrator.kill_window")
+    @patch("gate.orchestrator.github")
+    def test_unknown_reason_raises_keyerror(
+        self, _mock_github, _mock_kill, orchestrator,
+    ):
+        """Typos in reason strings should surface loudly, not silently
+        route to a default payload (which is how we ended up with
+        Issue #17 in the first place)."""
+        orchestrator.check_run_id = 42
+        with pytest.raises(KeyError):
+            orchestrator.cancel(reason="definitely-not-a-reason")
+        # The guard still set _cancelled before the lookup — that's fine;
+        # the second cancel with a valid reason would now no-op, which
+        # is the safe failure mode. But complete_check_run must not have
+        # been invoked with a partial/default payload.
+
+    @patch("gate.orchestrator.kill_window")
+    @patch("gate.orchestrator.github")
+    def test_cancel_is_idempotent_on_concurrent_calls(
+        self, mock_github, _mock_kill, orchestrator,
+    ):
+        """Server.py echoes the orchestrator's own ``review_cancelled``
+        event back into ``queue.cancel_pr``. Without the idempotency
+        guard, the second cancel would overwrite the first payload —
+        e.g. a manual cancel followed by the echoed re-entry would flip
+        the status from ``neutral`` back to ``cancelled``."""
+        orchestrator.check_run_id = 42
+
+        orchestrator.cancel(reason="manual")
+        orchestrator.cancel(reason="superseded")  # would clobber — must no-op
+        orchestrator.cancel(reason="timeout")
+
+        assert mock_github.complete_check_run.call_count == 1
+        call = mock_github.complete_check_run.call_args
+        # First writer wins, so the neutral "manual" payload survives.
+        assert call[1]["conclusion"] == "neutral"
+        assert call[1]["output_title"] == "Review cancelled by operator"
+
+    @patch("gate.orchestrator.kill_window")
+    @patch("gate.orchestrator.github")
+    def test_cancel_concurrent_threads_single_writer(
+        self, mock_github, _mock_kill, orchestrator,
+    ):
+        """Race the lock: N threads all call ``cancel()`` simultaneously.
+        Exactly one must win the check-then-set and invoke
+        ``complete_check_run`` — the rest must observe ``_cancelled``
+        already set and return."""
+        orchestrator.check_run_id = 42
+        barrier = threading.Barrier(8)
+
+        def racer(reason: str) -> None:
+            barrier.wait()
+            orchestrator.cancel(reason=reason)
+
+        threads = [
+            threading.Thread(target=racer, args=("manual" if i % 2 else "superseded",))
+            for i in range(8)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert mock_github.complete_check_run.call_count == 1
+
+
 class TestSaveStageResult:
     """Group 2A: _save_stage_result must be a no-op when the review was
     cancelled or the workspace vanished."""

@@ -103,19 +103,33 @@ class ReviewQueue:
         with self._lock:
             return dict(self._active)
 
-    def cancel_pr(self, pr_number: int, repo: str = "") -> bool:
-        """Cancel an in-progress review for a PR."""
+    def cancel_pr(
+        self,
+        pr_number: int,
+        repo: str = "",
+        reason: str = "manual",
+    ) -> bool:
+        """Cancel an in-progress review for a PR.
+
+        ``reason`` propagates to ``ReviewOrchestrator.cancel`` so the
+        GitHub check-run status matches the origin of the cancel
+        (Issue #17). Defaults to ``"manual"`` because the current
+        callers (``gate cancel`` socket command; the ``review_cancelled``
+        echo from ``server.py``) are both operator-initiated.
+        ``_dispatch_loop`` / ``enqueue`` supersession paths continue to
+        use ``cancel()``'s own default (``"superseded"``).
+        """
         with self._lock:
             if repo:
                 key = (repo, pr_number)
                 if key in self._active:
-                    self._active[key].cancel()
+                    self._active[key].cancel(reason=reason)
                     del self._active[key]
                     return True
             else:
                 for key in list(self._active):
                     if key[1] == pr_number:
-                        self._active[key].cancel()
+                        self._active[key].cancel(reason=reason)
                         del self._active[key]
                         return True
         return False

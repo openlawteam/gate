@@ -402,6 +402,56 @@ def _revert_all(workspace: Path) -> None:
             logger.warning(f"_revert_all {' '.join(cmd)} failed: {e}")
 
 
+# Conventional-commit subject regex: ``type(scope): summary`` or ``type: summary``.
+# Any lowercase type (``fix``, ``refactor``, ``chore``, …) and any scope are
+# allowed — senior may legitimately pick a non-``fix(gate):`` type when the
+# change really is a refactor, doc, test, etc. The purpose is to keep the
+# subject grep-able, not to lock it to one scope.
+_CONVENTIONAL_COMMIT_RE = re.compile(r"^[a-z]+(\([a-zA-Z0-9_/-]+\))?: \S+")
+
+# Stripped + lowered subjects that indicate a senior who did not actually
+# author a message (placeholder defaults or template leakage).
+_COMMIT_MSG_PLACEHOLDERS = frozenset({"todo", "fixed", "fix", "wip", "commit"})
+
+
+def _validate_senior_commit_message(
+    msg: str,
+    synth_msg: str,
+) -> tuple[str | None, str | None]:
+    """Validate a senior-authored commit message for hopper-mode fix PRs.
+
+    Returns ``(accepted_msg, None)`` when the message is acceptable (caller
+    should use it verbatim), or ``(None, reason)`` when it should be rejected
+    in favor of Gate's synthesized fallback. The reason string is stable
+    telemetry emitted on ``reviews.jsonl`` so post-deploy tuning can see
+    which rule is rejecting most often.
+
+    Reasons:
+
+    - ``empty`` — message is falsy (``None`` / ``""``).
+    - ``too_short`` — stripped length < 20 chars.
+    - ``subject_too_long`` — first line > 100 chars.
+    - ``placeholder`` — subject matches a known placeholder (TODO, wip, …).
+    - ``bad_shape`` — subject does not match the conventional-commit regex.
+    - ``matches_synth`` — byte-identical to Gate's own synthesized template.
+    """
+    if not msg:
+        return None, "empty"
+    stripped = msg.strip()
+    if len(stripped) < 20:
+        return None, "too_short"
+    subject = stripped.splitlines()[0]
+    if len(subject) > 100:
+        return None, "subject_too_long"
+    if subject.strip().lower() in _COMMIT_MSG_PLACEHOLDERS:
+        return None, "placeholder"
+    if not _CONVENTIONAL_COMMIT_RE.match(subject):
+        return None, "bad_shape"
+    if synth_msg and stripped == synth_msg.strip():
+        return None, "matches_synth"
+    return stripped, None
+
+
 def _run_silent(cmd: str | list[str], cwd: str | None = None) -> tuple[str, int]:
     """Run a command silently, returning (combined output, exit_code). Never raises.
 
@@ -1128,9 +1178,7 @@ class FixPipeline:
                     if reprompt_fixed:
                         all_fixed.extend(reprompt_fixed)
                         last_fix_json = follow_up_json
-                        fix_result["has_changes"] = (
-                            len(_get_changed_files(self.workspace)) > 0
-                        )
+                        fix_result["has_changes"] = self._fix_content_present()
 
                 if not fix_result.get("has_changes"):
                     logger.info(f"Iteration {iteration}: no changes")
@@ -1176,7 +1224,7 @@ class FixPipeline:
 
                 if not build_result["pass"]:
                     logger.info(f"Build still failing after iteration {iteration}")
-                    _revert_all(self.workspace)
+                    self._revert_to_baseline()
                     if iteration >= MAX_ITERATIONS:
                         state.record_fix_attempt(self.pr_number, repo=self.repo)
                         notify.fix_failed(self.pr_number, "build failures", iteration, self.repo)
@@ -1187,7 +1235,7 @@ class FixPipeline:
                     continue
 
                 # Generate diff and run re-review
-                write_diff(self.workspace)
+                self._write_baseline_diff()
 
                 self._emit_fix_stage("fix-rereview")
                 write_live_log(self.pr_number, "Running re-review...", prefix="fix", repo=self.repo)
@@ -1199,7 +1247,7 @@ class FixPipeline:
                     )
 
                 logger.info(f"Re-review rejected iteration {iteration}")
-                _revert_all(self.workspace)
+                self._revert_to_baseline()
                 if iteration >= MAX_ITERATIONS:
                     state.record_fix_attempt(self.pr_number, repo=self.repo)
                     notify.fix_failed(self.pr_number, "re-review rejected", iteration, self.repo)
@@ -1223,6 +1271,131 @@ class FixPipeline:
             if self._connection:
                 self._connection.stop()
                 self._connection = None
+
+    # ── Baseline-relative fix-state helpers ─────────────────────
+    #
+    # These three helpers make ``self._pre_fix_sha`` the single source of
+    # truth for "did the fix session produce content?", "what is the fix
+    # diff?", and "how do we revert a failed attempt?". The worktree-only
+    # queries they replace (``_get_changed_files`` / ``write_diff`` /
+    # ``_revert_all``) miss hopper-mode finalized commits because
+    # ``gate checkpoint finalize`` leaves the worktree clean while HEAD
+    # has advanced past ``pre_fix_sha`` — the pipeline then took the
+    # ``graceful_noop`` path and silently discarded senior's commit
+    # (PR #222). Baseline-relative queries close that gap for both
+    # polish_legacy and hopper by folding committed, staged, unstaged,
+    # and untracked state into a single view.
+
+    def _fix_content_present(self) -> bool:
+        """Return True iff the fix session produced any content to commit.
+
+        Baseline-relative: considers anything between ``self._pre_fix_sha``
+        and the current repo state, whether committed (hopper-mode
+        ``gate checkpoint finalize``), staged, unstaged, or untracked.
+
+        Falls back to the module-level worktree-only
+        ``_get_changed_files`` check when ``_pre_fix_sha`` is empty
+        (baseline capture skipped, e.g. under tests that don't snapshot
+        HEAD).
+
+        Fail-safe on subprocess error: returns ``True`` so the pipeline
+        moves on to ``_commit_and_finish`` rather than discarding work.
+        The whole bug this helper exists to fix is "pipeline thinks
+        nothing changed and drops fixes on the floor" — a redundant
+        ``reset --soft`` to the baseline is strictly cheaper than losing
+        a commit.
+        """
+        if not self._pre_fix_sha:
+            return len(_get_changed_files(self.workspace)) > 0
+        cwd = str(self.workspace)
+        try:
+            tracked = subprocess.run(
+                ["git", "diff", "--name-only", self._pre_fix_sha],
+                capture_output=True, text=True, cwd=cwd, timeout=60,
+            )
+            if tracked.stdout.strip():
+                return True
+            untracked = subprocess.run(
+                ["git", "ls-files", "--others", "--exclude-standard"],
+                capture_output=True, text=True, cwd=cwd, timeout=60,
+            )
+            return bool(untracked.stdout.strip())
+        except (subprocess.SubprocessError, OSError) as exc:
+            logger.warning(
+                f"PR #{self.pr_number}: _fix_content_present git failed: "
+                f"{exc}; assuming content present to preserve any fix work"
+            )
+            return True
+
+    def _write_baseline_diff(self) -> None:
+        """Write ``git diff --cached <pre_fix_sha>`` to ``fix-diff.txt``.
+
+        Stages everything with ``git add -A`` first so the diff captures
+        committed (gate-checkpoint finalized), staged, unstaged, AND
+        untracked content in one pass. This is what the fix-rereview
+        prompt reads as ``$fix_diff`` — without the baseline comparison,
+        hopper-mode runs would show an empty diff (since ``git diff HEAD``
+        is zero after a clean finalize) and rereview would have nothing
+        to evaluate.
+
+        Falls back to module-level ``write_diff`` (``git diff HEAD``)
+        when ``_pre_fix_sha`` is empty or git errors — preserves today's
+        behavior, never worse.
+        """
+        if not self._pre_fix_sha:
+            write_diff(self.workspace)
+            return
+        cwd = str(self.workspace)
+        try:
+            subprocess.run(
+                ["git", "add", "-A"],
+                capture_output=True, cwd=cwd, timeout=60,
+            )
+            result = subprocess.run(
+                ["git", "diff", "--cached", self._pre_fix_sha],
+                capture_output=True, text=True, cwd=cwd, timeout=120,
+            )
+            diff = result.stdout
+            (self.workspace / "fix-diff.txt").write_text(diff or "(no changes)")
+        except (subprocess.SubprocessError, OSError) as exc:
+            logger.warning(
+                f"PR #{self.pr_number}: _write_baseline_diff failed: {exc}; "
+                "falling back to git diff HEAD"
+            )
+            write_diff(self.workspace)
+
+    def _revert_to_baseline(self) -> None:
+        """Rewind both HEAD and worktree to ``self._pre_fix_sha``.
+
+        ``git reset --hard <pre_fix_sha> && git clean -fd``. Unlike the
+        module-level ``_revert_all`` (which only touches the worktree),
+        this also rewinds committed hopper-mode checkpoints so a failed
+        rereview does not leave senior's commit stranded on HEAD into
+        the next iteration.
+
+        Falls back to ``_revert_all`` when ``_pre_fix_sha`` is empty or
+        on subprocess error — the worktree-level revert is still useful
+        as a safety net.
+        """
+        if not self._pre_fix_sha:
+            _revert_all(self.workspace)
+            return
+        cwd = str(self.workspace)
+        try:
+            subprocess.run(
+                ["git", "reset", "--hard", self._pre_fix_sha],
+                capture_output=True, cwd=cwd, timeout=60, check=True,
+            )
+            subprocess.run(
+                ["git", "clean", "-fd"],
+                capture_output=True, cwd=cwd, timeout=60,
+            )
+        except (subprocess.SubprocessError, OSError) as exc:
+            logger.warning(
+                f"PR #{self.pr_number}: _revert_to_baseline failed: {exc}; "
+                "falling back to _revert_all"
+            )
+            _revert_all(self.workspace)
 
     def _run_fix_session(self) -> dict:
         """Run the initial fix-senior session in tmux.
@@ -1278,7 +1451,7 @@ class FixPipeline:
         kill_window(pane_id)
 
         fix_json = self._read_json("fix.json") or self._read_json("fix-senior-findings.json")
-        has_changes = len(_get_changed_files(self.workspace)) > 0
+        has_changes = self._fix_content_present()
 
         return {"fix_json": fix_json, "has_changes": has_changes}
 
@@ -1342,7 +1515,7 @@ class FixPipeline:
             logger.warning(f"Resume session failed: {e}")
 
         fix_json = self._read_json("fix.json") or self._read_json("fix-senior-findings.json")
-        has_changes = len(_get_changed_files(self.workspace)) > 0
+        has_changes = self._fix_content_present()
 
         return {"fix_json": fix_json, "has_changes": has_changes}
 
@@ -1475,7 +1648,7 @@ class FixPipeline:
 
         all_fixed = list(aggregate.get("fixed", []))
         fixed_count = len(all_fixed)
-        has_changes = len(_get_changed_files(self.workspace)) > 0
+        has_changes = self._fix_content_present()
 
         if not has_changes:
             if self._is_graceful_noop_case():
@@ -1489,11 +1662,11 @@ class FixPipeline:
                 ),
             )
 
-        write_diff(self.workspace)
+        self._write_baseline_diff()
         self._emit_fix_stage("fix-rereview")
         rereview_pass = self._run_rereview()
         if not rereview_pass:
-            _revert_all(self.workspace)
+            self._revert_to_baseline()
             state.record_fix_attempt(self.pr_number, repo=self.repo)
             notify.fix_failed(
                 self.pr_number, "re-review rejected polish changes", 1, self.repo,
@@ -1584,23 +1757,26 @@ class FixPipeline:
         # the question even when the push ultimately fails.
         self._post_disambig_comment_if_needed(not_fixed)
 
-        commit_msg = f"fix(gate): auto-fix {fixed_count}/{finding_count} findings"
+        # Gate-authored synthesized fallback — used when senior did not
+        # produce a usable ``final_commit_message``. Also serves as the
+        # "identity template" the validator rejects senior copies of.
+        synth_msg = f"fix(gate): auto-fix {fixed_count}/{finding_count} findings"
         if synth_count:
-            commit_msg += f" (+{synth_count} file-level reconstructions)"
-        commit_msg += " from Gate review"
+            synth_msg += f" (+{synth_count} file-level reconstructions)"
+        synth_msg += " from Gate review"
 
         fixed_details = "\n".join(
             f"- {f.get('file', '?')} — {f.get('fix_description')}"
             for f in real_fixed
         )
         if fixed_details:
-            commit_msg += f"\n\nFindings fixed:\n{fixed_details}"
+            synth_msg += f"\n\nFindings fixed:\n{fixed_details}"
         if synth_fixed:
             synth_lines = "\n".join(
                 f"- {f.get('file', '?')} — {f.get('fix_description')}"
                 for f in synth_fixed
             )
-            commit_msg += (
+            synth_msg += (
                 "\n\nFile-level changes reconstructed from diff "
                 "(fix-senior did not report them):\n" + synth_lines
             )
@@ -1609,16 +1785,54 @@ class FixPipeline:
             for f in not_fixed
         )
         if not_fixed_details:
-            commit_msg += f"\n\nNot fixed (require human action):\n{not_fixed_details}"
+            synth_msg += f"\n\nNot fixed (require human action):\n{not_fixed_details}"
 
         synthesized_any = any(
             f.get("_description_synthesized") for f in real_fixed
         )
         if synthesized_any:
-            commit_msg += (
+            synth_msg += (
                 "\n\n_Some descriptions synthesized from diff; "
                 "fix-senior omitted fix_description._"
             )
+
+        # Try senior-authored ``final_commit_message`` first (hopper mode
+        # surfaces the message senior composed while grouping sub-scopes);
+        # fall back to Gate's synthesized template on any validation
+        # failure. The PR comment below always carries Gate's full
+        # audit trail regardless of which commit message we picked.
+        senior_msg_raw = ""
+        if last_fix_json:
+            _, normalized_for_msg = _validate_fix_json(
+                last_fix_json,
+                tag_findings(self.verdict.get("findings", [])),
+            )
+            senior_msg_raw = normalized_for_msg.get("final_commit_message") or ""
+        accepted_msg, reject_reason = _validate_senior_commit_message(
+            senior_msg_raw, synth_msg
+        )
+        if accepted_msg is not None:
+            commit_msg = accepted_msg
+            commit_msg_source = "senior"
+            commit_msg_reject_reason = ""
+            logger.info(
+                f"PR #{self.pr_number}: using senior-authored "
+                f"final_commit_message (subject: "
+                f"{accepted_msg.splitlines()[0][:60]!r})"
+            )
+        else:
+            commit_msg = synth_msg
+            commit_msg_source = "synth"
+            commit_msg_reject_reason = reject_reason or ""
+            # Only WARN (loud) when senior produced a message and it got
+            # rejected; stay INFO-quiet when senior simply omitted the
+            # field (polish_legacy always hits this path).
+            if senior_msg_raw:
+                logger.warning(
+                    f"PR #{self.pr_number}: senior_commit_msg_rejected "
+                    f"reason={reject_reason!r} subject_preview="
+                    f"{senior_msg_raw.splitlines()[0][:60]!r}"
+                )
 
         cleanup_artifacts(self.workspace)
 
@@ -1762,6 +1976,8 @@ class FixPipeline:
             sub_scope_empty=sub_scope_empty,
             wall_clock_seconds=wall_clock,
             runaway_guard_hit=self._runaway_guard_hit,
+            commit_message_source=commit_msg_source,
+            commit_message_reject_reason=commit_msg_reject_reason,
         )
 
     def _read_json(self, filename: str) -> dict | None:

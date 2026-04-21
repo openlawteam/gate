@@ -395,6 +395,80 @@ class TestReviewLifecycle:
         time.sleep(0.15)
         assert len(server.reviews) == 0
 
+    def test_cancel_review_socket_forwards_to_queue_as_manual(
+        self, running_server, client_socket
+    ):
+        """Issue #17 echo roundtrip: a ``cancel_review`` socket request
+        (the path a ``gate cancel`` invocation takes) must reach the
+        queue. The queue-layer test verifies the default ``reason`` is
+        ``"manual"``, so together they guarantee the socket cancel
+        produces a neutral GitHub check instead of ``Superseded by
+        newer push``."""
+        server, sock_path = running_server
+        recorded: list[tuple] = []
+
+        def fake_cancel(pr_number, repo="", reason="manual"):
+            recorded.append((pr_number, repo, reason))
+            return True
+
+        server._review_queue.cancel_pr = fake_cancel  # type: ignore[method-assign]
+
+        conn = client_socket(sock_path)
+        conn.sendall(
+            json.dumps({
+                "type": "cancel_review",
+                "pr_number": 42,
+                "repo": "org/repo",
+            }).encode("utf-8") + b"\n",
+        )
+        data = conn.recv(4096)
+        response = json.loads(data.decode("utf-8").strip())
+
+        assert response["type"] == "cancel_accepted"
+        assert response["pr_number"] == 42
+        assert response["cancelled"] is True
+        assert len(recorded) == 1
+        pr_number, repo, _reason = recorded[0]
+        assert pr_number == 42
+        assert repo == "org/repo"
+
+    def test_review_cancelled_echo_forwards_to_queue(
+        self, running_server,
+    ):
+        """The server's ``review_cancelled`` mutation handler echoes
+        back into ``cancel_pr`` as a defensive cleanup. The orchestrator
+        idempotency guard (TestCancelReasons) absorbs the double-call,
+        but we still assert the echo fires so ``_active`` entries don't
+        leak when the orchestrator dies before cleaning up."""
+        server, _ = running_server
+        recorded: list[tuple] = []
+
+        def fake_cancel(pr_number, repo="", reason="manual"):
+            recorded.append((pr_number, repo, reason))
+            return True
+
+        server._review_queue.cancel_pr = fake_cancel  # type: ignore[method-assign]
+
+        server.enqueue({
+            "type": "review_started",
+            "review": {
+                "id": "echo-pr7", "pr_number": 7,
+                "repo": "org/repo", "status": "running",
+                "head_sha": "abc123",
+            },
+        })
+        time.sleep(0.1)
+        server.enqueue({
+            "type": "review_cancelled",
+            "review_id": "echo-pr7",
+            "head_sha": "abc123",
+        })
+        time.sleep(0.15)
+
+        assert len(recorded) == 1
+        assert recorded[0][0] == 7
+        assert recorded[0][1] == "org/repo"
+
     def test_queue_update_broadcasts(self, running_server):
         server, _ = running_server
         server.enqueue({

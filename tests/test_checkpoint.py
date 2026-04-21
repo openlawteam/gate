@@ -190,6 +190,63 @@ class TestFinalize:
         assert len(log) == 1
         assert log[0].endswith("fix(gate): done")
 
+    def test_finalize_reports_correct_checkpoint_count(
+        self, repo, stub_build_ok, monkeypatch,
+    ):
+        """Regression guard for PR #222 triage confusion.
+
+        The old implementation called ``list_checkpoints`` AFTER the
+        soft-reset, which left zero checkpoints reachable from HEAD —
+        the progress line always read ``"squashed 0 checkpoints"``.
+        We snapshot the count before the reset so operators see the
+        real number of sub-scopes that went into the final commit.
+        """
+        (repo / "a.txt").write_text("1")
+        assert checkpoint.cli_main(["save", "--name", "s1"]) == 0
+        (repo / "b.txt").write_text("2")
+        assert checkpoint.cli_main(["save", "--name", "s2"]) == 0
+        (repo / "c.txt").write_text("3")
+        assert checkpoint.cli_main(["save", "--name", "s3"]) == 0
+
+        progress: list[str] = []
+        monkeypatch.setattr(
+            checkpoint,
+            "_emit_progress",
+            lambda _ws, msg: progress.append(msg),
+        )
+
+        assert (
+            checkpoint.cli_main(["finalize", "--message", "fix(gate): done"])
+            == 0
+        )
+
+        finalize_lines = [m for m in progress if "finalized" in m]
+        assert finalize_lines, f"no finalize progress message seen in {progress}"
+        assert "squashed 3 checkpoints" in finalize_lines[-1]
+
+    def test_finalize_reports_single_checkpoint(
+        self, repo, stub_build_ok, monkeypatch,
+    ):
+        """Count stays accurate for the edge case of exactly one sub-scope."""
+        (repo / "a.txt").write_text("1")
+        assert checkpoint.cli_main(["save", "--name", "only"]) == 0
+
+        progress: list[str] = []
+        monkeypatch.setattr(
+            checkpoint,
+            "_emit_progress",
+            lambda _ws, msg: progress.append(msg),
+        )
+
+        assert (
+            checkpoint.cli_main(["finalize", "--message", "fix(gate): once"])
+            == 0
+        )
+
+        finalize_lines = [m for m in progress if "finalized" in m]
+        assert finalize_lines
+        assert "squashed 1 checkpoints" in finalize_lines[-1]
+
 
 # ── _scoped_lint extension filter ────────────────────────────
 

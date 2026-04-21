@@ -26,6 +26,38 @@ from gate.tmux import kill_window
 logger = logging.getLogger(__name__)
 
 
+# Reason → (conclusion, output_title, output_summary) lookup for ReviewOrchestrator.cancel().
+#
+# - ``"superseded"`` — default/back-compat: a newer enqueue displaced this
+#   review. Reports ``failure`` (via ``_CONCLUSION_TO_STATE``) because the
+#   branch really did get abandoned.
+# - ``"manual"`` — operator-initiated (``gate cancel`` or socket call).
+#   Reports ``neutral`` (green checkmark) — nothing failed, the operator
+#   chose to stop the review.
+# - ``"timeout"`` — internal watchdog tripped. Reports ``failure`` since
+#   the SHA's review didn't complete.
+#
+# Reasons are looked up in this dict so typos surface immediately as
+# ``KeyError`` rather than silently routing to the default.
+_CANCEL_REASON_PAYLOADS: dict[str, tuple[str, str, str]] = {
+    "superseded": (
+        "cancelled",
+        "Superseded by newer push",
+        "A newer commit was pushed. This review was cancelled.",
+    ),
+    "manual": (
+        "neutral",
+        "Review cancelled by operator",
+        "Cancelled via `gate cancel`.",
+    ),
+    "timeout": (
+        "cancelled",
+        "Review timed out",
+        "Internal timeout reached.",
+    ),
+}
+
+
 class ReviewOrchestrator:
     """Orchestrates a complete PR review lifecycle.
 
@@ -67,6 +99,13 @@ class ReviewOrchestrator:
         self.pr_body: str = ""
         self.pr_author: str = ""
         self._cancelled = threading.Event()
+        # Dedicated lock that guards the cancel(check-then-set) race so
+        # that concurrent cancel callers (e.g. the socket path AND the
+        # server.py:299 echo of our own ``review_cancelled`` event) can
+        # never each flip ``_cancelled`` from unset → set. Without this,
+        # a second cancel with a different ``reason`` would overwrite
+        # the first ``complete_check_run`` payload (see Issue #17).
+        self._cancel_lock = threading.Lock()
         self._active_panes: dict[str, str] = {}
         self._panes_lock = threading.Lock()
         self._teardown_lock = threading.Lock()
@@ -102,20 +141,40 @@ class ReviewOrchestrator:
             fields.setdefault("head_sha", self.head_sha)
             self._connection.emit(msg_type, **fields)
 
-    def cancel(self) -> None:
-        """Cancel this review. Called by queue when a re-push arrives.
+    def cancel(self, reason: str = "superseded") -> None:
+        """Cancel this review. Called by queue/socket callers.
 
         This is a **signal-only** operation: we set ``_cancelled``, tear
-        down tmux panes, and write the final ``cancelled`` status for the
-        old check run. We deliberately **do not** remove the worktree
-        here — that would race the still-running ``run()`` thread, which
-        may be mid-stage (``_save_stage_result`` writing ``triage.json``
-        etc.) and would crash with ``FileNotFoundError``. Worktree
-        removal is owned by ``run()``'s ``finally``, which runs after
-        the stages have observed the cancellation flag and exited
-        cleanly (Group 2B).
+        down tmux panes, and write the final status for the old check
+        run. We deliberately **do not** remove the worktree here — that
+        would race the still-running ``run()`` thread, which may be
+        mid-stage (``_save_stage_result`` writing ``triage.json`` etc.)
+        and would crash with ``FileNotFoundError``. Worktree removal is
+        owned by ``run()``'s ``finally``, which runs after the stages
+        have observed the cancellation flag and exited cleanly (Group 2B).
+
+        ``reason`` routes the GitHub check payload via
+        ``_CANCEL_REASON_PAYLOADS`` so the issue/PR author sees an
+        accurate status (Issue #17):
+
+        - ``"superseded"`` (default) — new commit displaced this review.
+        - ``"manual"`` — operator ran ``gate cancel``; renders neutral.
+        - ``"timeout"`` — internal timeout reached.
+
+        Idempotent and concurrency-safe: ``_cancel_lock`` prevents a
+        check-then-set race when the socket path AND the
+        ``review_cancelled`` echo in ``gate/server.py`` both invoke a
+        cancel. Second entries no-op, so the first caller's ``reason``
+        wins and ``complete_check_run`` is called at most once per
+        review.
         """
-        self._cancelled.set()
+        with self._cancel_lock:
+            if self._cancelled.is_set():
+                return
+            self._cancelled.set()
+
+        conclusion, output_title, output_summary = _CANCEL_REASON_PAYLOADS[reason]
+
         self._emit(
             "review_cancelled",
             review_id=self._review_id(),
@@ -125,15 +184,15 @@ class ReviewOrchestrator:
         for stage, pane_id in panes.items():
             kill_window(pane_id)
         if self.check_run_id:
-            # This ``cancelled`` write is the marker for the OLD review;
+            # This write is the marker for the OLD review;
             # Group 2C prevents the continuing ``run()`` thread from
             # clobbering it with a post-cancel ``error`` write.
             github.complete_check_run(
                 self.repo,
                 self.check_run_id,
-                conclusion="cancelled",
-                output_title="Superseded by newer push",
-                output_summary="A newer commit was pushed. This review was cancelled.",
+                conclusion=conclusion,
+                output_title=output_title,
+                output_summary=output_summary,
                 sha=self.head_sha,
             )
         # NOTE: remove_worktree intentionally not called here — see
@@ -697,6 +756,12 @@ class ReviewOrchestrator:
                             fix_result.not_fixed_count
                             if fix_result.fixed_count or fix_result.not_fixed_count
                             else None
+                        ),
+                        commit_message_source=(
+                            fix_result.commit_message_source or None
+                        ),
+                        commit_message_reject_reason=(
+                            fix_result.commit_message_reject_reason or None
                         ),
                     )
                 except Exception as fix_err:

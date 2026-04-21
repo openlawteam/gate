@@ -295,6 +295,24 @@ class TestCleanupArtifacts:
         from gate.fixer import GATE_ARTIFACT_FILES
         assert "gate-directions.md" in GATE_ARTIFACT_FILES
 
+    def test_removes_postconditions_json(self, tmp_path):
+        """PR #14 follow-up: postconditions.json leaked into `git add -A`
+        during fix cycles on Python repos and crashed scoped ruff. Must be
+        cleaned up before any commit."""
+        (tmp_path / "postconditions.json").write_text('{"ok": true}')
+
+        with patch("gate.fixer.subprocess.run"):
+            removed = cleanup_artifacts(tmp_path)
+
+        assert not (tmp_path / "postconditions.json").exists()
+        assert "postconditions.json" in removed
+
+    def test_postconditions_json_is_in_artifact_files(self):
+        """Regression guard: postconditions.json must stay in the static
+        artifact-files set."""
+        from gate.fixer import GATE_ARTIFACT_FILES
+        assert "postconditions.json" in GATE_ARTIFACT_FILES
+
 
 class TestRevertFile:
     def _init_repo(self, tmp_path):

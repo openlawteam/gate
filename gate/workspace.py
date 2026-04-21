@@ -61,6 +61,7 @@ fix-decomposition.json
 *.in.md.tmp
 *.codex.log
 gate-directions.md
+postconditions.json
 fix-build/
 """
 

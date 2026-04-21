@@ -52,6 +52,10 @@ GATE_ARTIFACT_FILES = {
     # < gate-directions.md` invocation (Fix 3: replaces the deprecated
     # heredoc pattern). Never commit to the PR.
     "gate-directions.md",
+    # Postcondition verification artifact (written by the postconditions
+    # stage). Leaked into `git add -A` on Python repos during fix cycles
+    # and crashed scoped ruff runs (PR #14 build failure).
+    "postconditions.json",
 }
 
 GATE_ARTIFACT_GLOBS = [

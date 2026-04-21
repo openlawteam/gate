@@ -263,6 +263,28 @@ def _scoped_typecheck(workspace: Path, config: dict, files: list[str]) -> tuple[
     return exit_code, out[-4000:]
 
 
+# Extension allow-list per linter family. Used to drop non-source files
+# (artifacts, JSON, logs) before handing them to a tool that would otherwise
+# try to lint them as source code — e.g. ruff reading an unexcluded
+# ``postconditions.json`` and reporting 200+ line-length errors (PR #14
+# build-verify regression).
+_LINT_EXTS: dict[str, tuple[str, ...]] = {
+    "ruff": (".py", ".pyi"),
+    "flake8": (".py", ".pyi"),
+    "eslint": (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"),
+    "biome": (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".json", ".jsonc"),
+    "tsc": (".ts", ".tsx"),
+}
+
+
+def _lint_family(tool: str) -> str | None:
+    """Map a linter executable token to its extension family, if known."""
+    for family in _LINT_EXTS:
+        if tool == family or family in tool:
+            return family
+    return None
+
+
 def _scoped_lint(workspace: Path, config: dict, files: list[str]) -> tuple[int, str]:
     """Run lint scoped to ``files`` where the linter supports it.
 
@@ -270,6 +292,10 @@ def _scoped_lint(workspace: Path, config: dict, files: list[str]) -> tuple[int, 
     tools (ruff, flake8) also do. For exotic linters we simply don't
     scope; the performance cost is bounded because the senior only calls
     ``gate checkpoint save`` a handful of times per fix run.
+
+    Before forwarding ``files`` to a known linter we filter by extension
+    so stray artifacts (e.g. ``postconditions.json``, ``*.codex.log``) that
+    slipped past ``git add -A`` excludes can't poison the scoped run.
     """
     from gate import profiles
     from gate.fixer import _run_silent
@@ -282,15 +308,18 @@ def _scoped_lint(workspace: Path, config: dict, files: list[str]) -> tuple[int, 
 
     tokens = shlex.split(lint_cmd)
     tool = tokens[0] if tokens else ""
-    known_scopable = {"eslint", "biome", "ruff", "flake8", "tsc"}
-    if tool not in known_scopable and not any(
-        t in tool for t in ("eslint", "biome", "ruff")
-    ):
+    family = _lint_family(tool)
+    if family is None:
         # Unknown linter — just run the full command.
         out, exit_code = _run_silent(lint_cmd, cwd=str(workspace))
         return exit_code, out[-4000:]
 
-    scoped = tokens + files
+    allowed = _LINT_EXTS[family]
+    filtered = [f for f in files if f.endswith(allowed)]
+    if not filtered:
+        return 0, ""
+
+    scoped = tokens + filtered
     out, exit_code = _run_silent(scoped, cwd=str(workspace))
     return exit_code, out[-4000:]
 

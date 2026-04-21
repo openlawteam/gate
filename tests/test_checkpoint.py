@@ -189,3 +189,75 @@ class TestFinalize:
         ).stdout.strip().splitlines()
         assert len(log) == 1
         assert log[0].endswith("fix(gate): done")
+
+
+# ── _scoped_lint extension filter ────────────────────────────
+
+
+class TestScopedLintExtensionFilter:
+    """Regression guard for PR #14: scoped lint must not feed non-source
+    artifacts (``*.codex.log``, ``postconditions.json`` …) to ruff/eslint.
+    """
+
+    def _fake_profile(
+        self, monkeypatch: pytest.MonkeyPatch, lint_cmd: str
+    ) -> list[list[str]]:
+        """Stub ``profiles.resolve_profile`` and capture what the runner saw."""
+        from gate import profiles
+
+        monkeypatch.setattr(
+            profiles, "resolve_profile",
+            lambda _cfg, _ws: {"lint_cmd": lint_cmd, "project_type": "python"},
+        )
+        calls: list[list[str]] = []
+
+        def _fake_run(cmd, cwd=None):
+            calls.append(cmd if isinstance(cmd, list) else [cmd])
+            return "", 0
+
+        monkeypatch.setattr("gate.fixer._run_silent", _fake_run)
+        return calls
+
+    def test_ruff_drops_non_python_files(self, tmp_path, monkeypatch):
+        calls = self._fake_profile(monkeypatch, "ruff check")
+        files = [
+            "gate/codex.py",
+            "postconditions.json",
+            "audit.codex.log",
+            "tests/test_codex.py",
+        ]
+        exit_code, _ = checkpoint._scoped_lint(tmp_path, {}, files)
+        assert exit_code == 0
+        assert len(calls) == 1
+        assert calls[0] == ["ruff", "check", "gate/codex.py", "tests/test_codex.py"]
+
+    def test_ruff_skips_run_when_no_python_files(self, tmp_path, monkeypatch):
+        calls = self._fake_profile(monkeypatch, "ruff check")
+        files = ["postconditions.json", "audit.codex.log"]
+        exit_code, tail = checkpoint._scoped_lint(tmp_path, {}, files)
+        assert exit_code == 0
+        assert tail == ""
+        assert calls == []
+
+    def test_eslint_drops_non_js_files(self, tmp_path, monkeypatch):
+        calls = self._fake_profile(monkeypatch, "eslint .")
+        files = ["src/a.ts", "build.json", "src/b.tsx", "junk.log"]
+        exit_code, _ = checkpoint._scoped_lint(tmp_path, {}, files)
+        assert exit_code == 0
+        assert calls[0] == ["eslint", ".", "src/a.ts", "src/b.tsx"]
+
+    def test_unknown_linter_falls_back_to_full_command(self, tmp_path, monkeypatch):
+        calls = self._fake_profile(monkeypatch, "mylint --fix")
+        exit_code, _ = checkpoint._scoped_lint(
+            tmp_path, {}, ["postconditions.json", "a.py"]
+        )
+        assert exit_code == 0
+        # Unknown linter path: full command string passed through, no files appended.
+        assert calls[0] == ["mylint --fix"]
+
+    def test_lint_family_recognizes_prefixed_tools(self):
+        # Accept things like `./node_modules/.bin/eslint` or `poetry run ruff`.
+        assert checkpoint._lint_family("./node_modules/.bin/eslint") == "eslint"
+        assert checkpoint._lint_family("ruff") == "ruff"
+        assert checkpoint._lint_family("custom-biome-wrapper") == "biome"
+        assert checkpoint._lint_family("mylint") is None

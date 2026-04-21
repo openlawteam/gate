@@ -224,6 +224,24 @@ class TestSetupArtifactExclusions:
         )
         assert "gate-directions.md" not in result.stdout
 
+    def test_postconditions_json_excluded(self, tmp_path):
+        """PR #14 follow-up: postconditions.json must be covered by
+        per-worktree git excludes. It was leaking into scoped ruff runs
+        and crashing the fix pipeline."""
+        repo = self._init_repo(tmp_path)
+        wt = tmp_path / "worktree"
+        self._add_worktree(repo, wt)
+
+        _setup_artifact_exclusions(str(repo), wt)
+
+        (wt / "postconditions.json").write_text('{"ok": true}')
+
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(wt), capture_output=True, text=True,
+        )
+        assert "postconditions.json" not in result.stdout
+
 
 class TestCreateWorktreeDepInstall:
     @patch("gate.workspace._install_deps_with_retry")

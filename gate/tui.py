@@ -110,6 +110,12 @@ DECISION_ICONS = {
     "skip": "—",
     "fix_succeeded": "⚒✓",
     "fix_failed": "⚒✗",
+    # ``fix_no_op`` lands in ``reviews.jsonl`` when the pipeline
+    # intentionally did nothing (graceful no-op on approve_with_notes
+    # with no mechanical work, or hopper senior declaring the diff
+    # clean). Without an explicit entry it fell through to the "?"
+    # fallback, which looked like an error in the reviews table.
+    "fix_no_op": "⚒—",
 }
 
 DECISION_COLORS = {
@@ -120,6 +126,7 @@ DECISION_COLORS = {
     "skip": "dim",
     "fix_succeeded": "bright_green",
     "fix_failed": "bright_yellow",
+    "fix_no_op": "dim",
 }
 
 STAGE_COLORS = {
@@ -136,6 +143,7 @@ STAGE_COLORS = {
     "fix-rereview": "bright_yellow",
     "fix-commit": "bright_yellow",
     "fix-senior": "bright_yellow",
+    "fix-polish": "bright_yellow",
 }
 
 LOG_PREFIX_COLORS = {
@@ -722,20 +730,94 @@ class CompletedDetailScreen(ModalScreen):
         return t
 
     def _build_fix_info(self, e: dict, t: Text) -> Text:
-        """Render fix-specific fields for CompletedDetailScreen."""
+        """Render fix-specific fields for CompletedDetailScreen.
+
+        Includes hopper-mode telemetry (``sub_scope_*``,
+        ``pipeline_mode``, ``runaway_guard_hit``) and
+        commit-message provenance (``commit_message_source``,
+        ``commit_message_reject_reason``) written by
+        :func:`gate.logger.log_fix_result` — these fields let an
+        operator tell a graceful no-op apart from a runaway guard
+        trip without cracking open ``reviews.jsonl``. Each block
+        is conditional so legacy polish_legacy entries render
+        byte-identically to before.
+        """
         decision = e.get("decision", "?")
         t.append("Decision:   ", style="dim")
         t.append(format_decision(decision))
         t.append("\n")
         t.append("Original:   ", style="dim")
         t.append(f"{e.get('original_decision', '?')}\n")
+
+        mode = e.get("pipeline_mode")
+        if mode:
+            t.append("Mode:       ", style="dim")
+            t.append(f"{mode}\n")
+
         dur = e.get("review_time_seconds", "?")
         t.append("Duration:   ", style="dim")
         t.append(f"{dur}s\n" if isinstance(dur, (int, float)) else "?\n")
 
+        wall = e.get("wall_clock_seconds")
+        if isinstance(wall, (int, float)) and wall != dur:
+            # Only surface wall-clock when it disagrees with the
+            # stage-sum duration — avoids a redundant row on the
+            # common polish_legacy path where they're equal.
+            t.append("Wall clock: ", style="dim")
+            t.append(f"{wall}s\n")
+
+        # Hopper sub-scope bookkeeping (PR #18/#19). Sensible to show
+        # as a single "committed / total (reverted, empty)" line so
+        # folks can eyeball "did any sub-scope land?" at a glance.
+        total = e.get("sub_scope_total")
+        if isinstance(total, int):
+            committed = e.get("sub_scope_committed", 0) or 0
+            reverted = e.get("sub_scope_reverted", 0) or 0
+            empty = e.get("sub_scope_empty", 0) or 0
+            t.append("Sub-scopes: ", style="dim")
+            t.append(f"{committed}/{total}")
+            extras = []
+            if reverted:
+                extras.append(f"{reverted} reverted")
+            if empty:
+                extras.append(f"{empty} empty")
+            if extras:
+                t.append(f" ({', '.join(extras)})")
+            t.append("\n")
+
+        if e.get("runaway_guard_hit"):
+            # Bright so a tripped guard jumps out of the modal —
+            # this is the "we stopped the pipeline early" signal.
+            t.append("Runaway:    ", style="dim")
+            t.append("guard hit\n", style="bright_red bold")
+
+        fixed = e.get("fixed_count")
+        not_fixed = e.get("not_fixed_count")
+        if isinstance(fixed, int) or isinstance(not_fixed, int):
+            t.append("Findings:   ", style="dim")
+            t.append(f"{fixed or 0} fixed")
+            if not_fixed:
+                t.append(f", {not_fixed} not fixed", style="bright_yellow")
+            t.append("\n")
+
         t.append("\n")
         t.append("Fix Summary\n", style="bold underline")
         t.append(f"  {e.get('fix_summary', 'No summary')}\n")
+
+        # Commit-message provenance (PR #18). ``senior`` means the
+        # agent-authored message passed validation; ``synthesized``
+        # means we fell back to the canned "fix(gate): auto-fix ..."
+        # form — show the reject reason so the reviewer knows why.
+        src = e.get("commit_message_source")
+        if src:
+            t.append("\n")
+            t.append("Commit Message\n", style="bold underline")
+            t.append("  Source: ", style="dim")
+            t.append(f"{src}\n")
+            reject = e.get("commit_message_reject_reason")
+            if reject:
+                t.append("  Reject: ", style="dim")
+                t.append(f"{reject}\n", style="bright_yellow")
 
         ts = e.get("timestamp", "")
         if ts:

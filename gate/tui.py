@@ -981,6 +981,12 @@ class GateTUI(App):
         self._log_visible = True
         self._log_panes: dict[str, dict] = {}
         self._active_row_keys: dict[str, object] = {}
+        # Row key for the "No active reviews" placeholder row. Tracked
+        # separately from ``_active_row_keys`` so the incremental
+        # diffing in ``_refresh_reviews_table`` stays simple — real
+        # reviews come and go via that dict; the placeholder is a
+        # purely cosmetic sentinel.
+        self._active_empty_row_key: object | None = None
         self._recent_entries: list[dict] = []
         self._window_title = "gate"
         self._last_jsonl_mtime: float = 0.0
@@ -1072,6 +1078,44 @@ class GateTUI(App):
     def _refresh_reviews_table(self) -> None:
         table = self.query_one("#reviews-table", DataTable)
         reviews = self.server.reviews if self.server else []
+
+        # Empty-state placeholder. Mirrors the Queue's "Queue empty"
+        # row so a resting TUI has two symmetric "nothing here"
+        # affordances instead of one empty header + one labelled
+        # header. Managed here rather than in ``on_mount`` so a
+        # review finishing (reviews → []) re-adds the row and an
+        # incoming review (reviews gains an entry) removes it.
+        if not reviews:
+            # Clean up any stale review rows (defensive — a review
+            # going directly from present → absent without an
+            # update should already be handled below, but during
+            # a crash-recovery restart the server reviews list can
+            # start empty with stale keys still tracked).
+            if self._active_row_keys:
+                for rid, row_key in list(self._active_row_keys.items()):
+                    try:
+                        table.remove_row(row_key)
+                    except Exception:
+                        pass
+                    self._active_row_keys.pop(rid, None)
+            if self._active_empty_row_key is None:
+                self._active_empty_row_key = table.add_row(
+                    "",
+                    Text("No active reviews", style="dim"),
+                    "", "", "", "", "",
+                )
+            table.show_cursor = False
+            return
+
+        # Reviews present — drop the placeholder so the real rows
+        # aren't rendered alongside a ghost entry.
+        if self._active_empty_row_key is not None:
+            try:
+                table.remove_row(self._active_empty_row_key)
+            except Exception:
+                pass
+            self._active_empty_row_key = None
+
         current_ids = {r.get("id", "") for r in reviews}
         tracked_ids = set(self._active_row_keys.keys())
 

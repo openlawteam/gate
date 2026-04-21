@@ -230,7 +230,118 @@ class TestDynamicUpdates:
             server.reviews.clear()
             app._refresh_reviews_table()
             await pilot.pause()
-            assert table.row_count == 0
+            # The real row is gone, but the table now holds a
+            # "No active reviews" placeholder row (parallel to the
+            # Queue's "Queue empty" row) — so row_count stays at 1
+            # rather than dropping to 0.
+            assert table.row_count == 1
+            assert app._active_empty_row_key is not None
+            assert not app._active_row_keys
+
+
+# ── Active Reviews empty-state placeholder ───────────────────
+
+
+class TestActiveReviewsEmptyPlaceholder:
+    """Parallel to the Queue's "Queue empty" row — when no reviews
+    are active the table holds a single dim placeholder row so the
+    section doesn't render as a bare header. Added after #18–#20
+    on an explicit request to make a resting TUI symmetric."""
+
+    async def test_empty_reviews_shows_placeholder(self):
+        server = MockServer()  # no reviews
+        app = GateTUI(server=server)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._refresh_reviews_table()
+            await pilot.pause()
+            from textual.widgets import DataTable
+            table = app.query_one("#reviews-table", DataTable)
+            assert table.row_count == 1
+            assert app._active_empty_row_key is not None
+            # Cursor must stay hidden so Textual doesn't paint its
+            # accent band across the placeholder (regression guard
+            # for the phantom-row-0 bug mentioned in the existing
+            # ``show_cursor`` comment).
+            assert table.show_cursor is False
+
+    async def test_placeholder_idempotent_across_refreshes(self):
+        """Repeated polls on an empty state must not stack multiple
+        placeholder rows — the sentinel key is the idempotency
+        guard."""
+        server = MockServer()
+        app = GateTUI(server=server)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            for _ in range(5):
+                app._refresh_reviews_table()
+                await pilot.pause()
+            from textual.widgets import DataTable
+            table = app.query_one("#reviews-table", DataTable)
+            assert table.row_count == 1
+
+    async def test_placeholder_removed_when_review_arrives(self):
+        server = MockServer()
+        app = GateTUI(server=server)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._refresh_reviews_table()
+            await pilot.pause()
+            from textual.widgets import DataTable
+            table = app.query_one("#reviews-table", DataTable)
+            assert app._active_empty_row_key is not None
+            server.reviews.append({
+                "id": "fresh", "repo": "a/b", "pr_number": 77,
+                "stage": "triage", "status": "running",
+                "started_at": 0, "updated_at": 0,
+            })
+            app._refresh_reviews_table()
+            await pilot.pause()
+            # Placeholder gone, single real row in its place.
+            assert app._active_empty_row_key is None
+            assert table.row_count == 1
+            assert "fresh" in app._active_row_keys
+
+    async def test_placeholder_re_added_after_last_review_finishes(self):
+        """The empty-state handling must be symmetric — a review
+        completing should put the placeholder back, not leave the
+        section blank."""
+        server = MockServer(reviews=[
+            {"id": "done-soon", "repo": "a/b", "pr_number": 3,
+             "stage": "triage", "status": "running",
+             "started_at": 0, "updated_at": 0},
+        ])
+        app = GateTUI(server=server)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._refresh_reviews_table()
+            await pilot.pause()
+            from textual.widgets import DataTable
+            table = app.query_one("#reviews-table", DataTable)
+            assert table.row_count == 1
+            assert app._active_empty_row_key is None
+            server.reviews.clear()
+            app._refresh_reviews_table()
+            await pilot.pause()
+            assert table.row_count == 1
+            assert app._active_empty_row_key is not None
+            assert not app._active_row_keys
+
+    async def test_cancel_action_safe_on_placeholder_row(self):
+        """Placeholder is cosmetic — pressing ``c`` with the cursor
+        on it must hit the "No active reviews to cancel" warning
+        path, not attempt to look up a row key."""
+        server = MockServer()
+        app = GateTUI(server=server)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._refresh_reviews_table()
+            await pilot.pause()
+            # Invoke the same action path the 'c' keybinding uses.
+            app.action_cancel_review()
+            await pilot.pause()
+            # Nothing should have been sent to the server.
+            assert server.enqueued == []
 
 
 # ── Keyboard bindings ────────────────────────────────────────

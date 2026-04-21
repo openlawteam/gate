@@ -477,6 +477,13 @@ def _cmd_finalize(args: argparse.Namespace) -> int:
         print("no changes to finalize", file=sys.stderr)
         return 3
 
+    # Snapshot the number of gate-checkpoint commits reachable from HEAD
+    # *before* the soft-reset rewinds past them. Post-reset the count is
+    # always 0 (the checkpoints aren't reachable from the new HEAD), so
+    # the previous "squashed 0 checkpoints" progress line was misleading
+    # when triaging PRs (see PR #222 forensics).
+    checkpoints_before = len(list_checkpoints(workspace))
+
     # Squash all commits between baseline and HEAD into a single commit.
     # ``reset --soft`` preserves the working-tree + index state so the
     # follow-up ``git commit`` captures the aggregate diff.
@@ -509,7 +516,7 @@ def _cmd_finalize(args: argparse.Namespace) -> int:
     final_sha = _head_sha(workspace)
     _emit_progress(
         workspace,
-        f"Hopper pipeline finalized — squashed {len(list_checkpoints(workspace)) + 0} "
+        f"Hopper pipeline finalized — squashed {checkpoints_before} "
         f"checkpoints into {final_sha[:8]}",
     )
     print(final_sha)

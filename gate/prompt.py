@@ -213,10 +213,9 @@ def build_diff_or_summary(
 _POLISH_MODE_SECTION = """## Mode: polish (approve_with_notes)
 
 The reviewer already approved this PR. These findings are polish items: \
-missing comments, naming inconsistencies, small typing gaps, eslint-disable \
-lines without justification, barrel re-exports, new nanostores without \
-justification comments. They are *expected* to be fixable with one-to-few \
-line additions.
+missing comments, naming inconsistencies, small typing gaps, barrel \
+re-exports, new nanostores without justification comments. They are \
+*expected* to be fixable with one-to-few line additions.
 
 Finding breakdown: $fixability_summary_inline
 
@@ -228,10 +227,24 @@ have recorded every finding in `not_fixed` with a specific `reason` and a \
 non-placeholder `detail` (at least 20 chars explaining the concrete blocker).
 - `deferred` is NOT a valid reason in polish mode. Choose `blocked_file`, \
 `would_break_build`, `too_broad` (with a file count), or `requires_architecture_change`.
-- Prefer one-line additions (explanatory comments on eslint-disable, JSDoc \
-on new exports, justification comments on new stores) over larger rewrites.
+- Prefer small, surgical edits (JSDoc on new exports, justification \
+comments on new stores) over larger rewrites — EXCEPT for \
+`eslint-disable` / `ts-ignore` / `ts-expect-error` findings: see the \
+disable-directives rule below.
 - A clean build still matters — but the bar is "leave 5 trivial fixes \
 landed", not "attempt zero fixes to guarantee zero regressions".
+
+### Disable-directives (`eslint-disable`, `ts-ignore`, `ts-expect-error`)
+
+The default fix for a finding about an unjustified disable line is to \
+**remove the disable directive and fix the underlying rule violation**. \
+Adding a justification comment is a fallback, not a shortcut: use it only \
+when the disable is genuinely required (third-party API shape, a \
+narrow known-safe exception, a platform limitation) and the comment must \
+cite the specific technical reason on the same line or the line above.
+
+`// eslint-disable-next-line` without a follow-on `// because …` \
+citation is NOT a valid fix for a finding about an unjustified disable.
 
 Every entry in `fixed[]` and `not_fixed[]` MUST include a `finding_id` field \
 copied verbatim from the `Findings to Fix` payload above. Do not invent ids.
@@ -242,6 +255,17 @@ _STRICT_MODE_SECTION = """## Mode: strict (request_changes)
 These findings are blocking issues. Your job is to fix every finding with \
 real code changes. Skipping is only acceptable when the fix would break the \
 build, touch a blocked file, or require more than 8 files of churn.
+
+### Disable-directives (`eslint-disable`, `ts-ignore`, `ts-expect-error`)
+
+The default fix for a finding about an unjustified disable line is to \
+**remove the disable directive and fix the underlying rule violation**. \
+Adding a justification comment is a fallback, not a shortcut: use it only \
+when the disable is genuinely required (third-party API shape, a \
+narrow known-safe exception, a platform limitation) and the comment must \
+cite the specific technical reason. A bare \
+`// eslint-disable-next-line` with no technical reason is never an \
+acceptable fix for an unjustified-disable finding in strict mode.
 
 Every entry in `fixed[]` and `not_fixed[]` MUST include a `finding_id` field \
 copied verbatim from the `Findings to Fix` payload above. Do not invent ids.

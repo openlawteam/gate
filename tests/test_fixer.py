@@ -1224,3 +1224,293 @@ class TestDedupFixed:
         assert ids == ["a", "b"]
         a = next(e for e in out if e["finding_id"] == "a")
         assert a["iter"] == 2
+
+
+# ── Baseline-relative fix-state helpers ──────────────────────
+#
+# These tests exercise the three ``FixPipeline`` helpers introduced to
+# fix PR #222: ``_fix_content_present``, ``_write_baseline_diff``, and
+# ``_revert_to_baseline``. Together they make ``self._pre_fix_sha`` the
+# single source of truth for "did the fix session produce content?" so
+# hopper-mode finalized commits are no longer silently discarded by the
+# worktree-only ``_get_changed_files`` / ``write_diff`` checks that came
+# before.
+
+
+def _init_tmp_repo(tmp_path):
+    """Create a fresh git repo under ``tmp_path/repo`` with one commit.
+
+    The ``isolate_paths`` conftest fixture drops ``install/`` and
+    ``data/`` directories directly into ``tmp_path``; using a nested
+    ``repo/`` subdir keeps those outside the git tree so untracked-file
+    detection is not polluted by the test harness.
+
+    Returns ``(repo_path, baseline_sha)``.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=repo, check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=repo, check=True,
+    )
+    subprocess.run(
+        ["git", "config", "commit.gpgsign", "false"],
+        cwd=repo, check=True,
+    )
+    (repo / "README.md").write_text("baseline\n")
+    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "--no-verify", "-m", "baseline"],
+        cwd=repo, check=True,
+    )
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    return repo, sha
+
+
+def _make_pipeline(workspace, pre_fix_sha, sample_config):
+    """Build a minimal FixPipeline instance targeting ``workspace``."""
+    verdict = {"decision": "request_changes", "findings": []}
+    pipe = FixPipeline(
+        pr_number=1, repo="org/repo", workspace=workspace,
+        verdict=verdict, build={}, config=sample_config,
+    )
+    pipe._pre_fix_sha = pre_fix_sha
+    return pipe
+
+
+class TestFixContentPresent:
+    def test_detects_committed_diff_above_baseline(self, tmp_path, sample_config):
+        repo, baseline = _init_tmp_repo(tmp_path)
+        (repo / "new.txt").write_text("hopper-commit\n")
+        subprocess.run(["git", "add", "new.txt"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "--no-verify", "-m", "senior commit"],
+            cwd=repo, check=True,
+        )
+        pipe = _make_pipeline(repo, baseline, sample_config)
+        assert pipe._fix_content_present() is True
+
+    def test_detects_worktree_modification(self, tmp_path, sample_config):
+        repo, baseline = _init_tmp_repo(tmp_path)
+        (repo / "README.md").write_text("dirty\n")
+        pipe = _make_pipeline(repo, baseline, sample_config)
+        assert pipe._fix_content_present() is True
+
+    def test_detects_untracked_file(self, tmp_path, sample_config):
+        repo, baseline = _init_tmp_repo(tmp_path)
+        (repo / "brand-new.ts").write_text("export {}\n")
+        pipe = _make_pipeline(repo, baseline, sample_config)
+        assert pipe._fix_content_present() is True
+
+    def test_returns_false_when_baseline_unchanged_and_clean(
+        self, tmp_path, sample_config,
+    ):
+        repo, baseline = _init_tmp_repo(tmp_path)
+        pipe = _make_pipeline(repo, baseline, sample_config)
+        assert pipe._fix_content_present() is False
+
+    def test_falls_back_when_pre_fix_sha_empty(self, tmp_path, sample_config):
+        """Without a baseline the helper matches legacy worktree-only behavior."""
+        repo, _ = _init_tmp_repo(tmp_path)
+        pipe = _make_pipeline(repo, "", sample_config)
+        assert pipe._fix_content_present() is False
+        (repo / "x.txt").write_text("new\n")
+        assert pipe._fix_content_present() is True
+
+    def test_conservative_on_subprocess_error(self, tmp_path, sample_config):
+        """Fail-closed: unknown state → assume content present (preserve work)."""
+        repo, baseline = _init_tmp_repo(tmp_path)
+        pipe = _make_pipeline(repo, baseline, sample_config)
+        with patch("gate.fixer.subprocess.run") as mock_run:
+            mock_run.side_effect = OSError("git missing")
+            assert pipe._fix_content_present() is True
+
+
+class TestWriteBaselineDiff:
+    def test_captures_committed_content_above_baseline(
+        self, tmp_path, sample_config,
+    ):
+        repo, baseline = _init_tmp_repo(tmp_path)
+        (repo / "payload.txt").write_text("hopper payload\n")
+        subprocess.run(["git", "add", "payload.txt"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "--no-verify", "-m", "senior finalize"],
+            cwd=repo, check=True,
+        )
+        pipe = _make_pipeline(repo, baseline, sample_config)
+        pipe._write_baseline_diff()
+        diff = (repo / "fix-diff.txt").read_text()
+        assert "payload.txt" in diff
+        assert "hopper payload" in diff
+
+    def test_captures_untracked_files(self, tmp_path, sample_config):
+        repo, baseline = _init_tmp_repo(tmp_path)
+        (repo / "brand-new.ts").write_text("export const x = 1;\n")
+        pipe = _make_pipeline(repo, baseline, sample_config)
+        pipe._write_baseline_diff()
+        diff = (repo / "fix-diff.txt").read_text()
+        assert "brand-new.ts" in diff
+
+    def test_falls_back_to_head_when_pre_fix_sha_empty(
+        self, tmp_path, sample_config,
+    ):
+        repo, _ = _init_tmp_repo(tmp_path)
+        pipe = _make_pipeline(repo, "", sample_config)
+        (repo / "README.md").write_text("dirty\n")
+        pipe._write_baseline_diff()
+        diff = (repo / "fix-diff.txt").read_text()
+        assert "dirty" in diff
+
+    def test_empty_when_no_content(self, tmp_path, sample_config):
+        repo, baseline = _init_tmp_repo(tmp_path)
+        pipe = _make_pipeline(repo, baseline, sample_config)
+        pipe._write_baseline_diff()
+        assert (repo / "fix-diff.txt").read_text() == "(no changes)"
+
+    def test_falls_back_on_subprocess_error(self, tmp_path, sample_config):
+        repo, baseline = _init_tmp_repo(tmp_path)
+        pipe = _make_pipeline(repo, baseline, sample_config)
+        with patch("gate.fixer.subprocess.run") as mock_run:
+            mock_run.side_effect = OSError("git missing")
+            with patch("gate.fixer._run_silent", return_value=("", 1)):
+                pipe._write_baseline_diff()
+        assert (repo / "fix-diff.txt").exists()
+
+
+class TestRevertToBaseline:
+    def test_rewinds_committed_checkpoints(self, tmp_path, sample_config):
+        repo, baseline = _init_tmp_repo(tmp_path)
+        (repo / "hopper.txt").write_text("oops\n")
+        subprocess.run(["git", "add", "hopper.txt"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "--no-verify", "-m", "senior"],
+            cwd=repo, check=True,
+        )
+        pipe = _make_pipeline(repo, baseline, sample_config)
+        pipe._revert_to_baseline()
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        assert head == baseline
+        assert not (repo / "hopper.txt").exists()
+
+    def test_clears_untracked_files(self, tmp_path, sample_config):
+        repo, baseline = _init_tmp_repo(tmp_path)
+        (repo / "scratch.txt").write_text("x\n")
+        pipe = _make_pipeline(repo, baseline, sample_config)
+        pipe._revert_to_baseline()
+        assert not (repo / "scratch.txt").exists()
+
+    def test_falls_back_when_pre_fix_sha_empty(
+        self, tmp_path, sample_config, monkeypatch,
+    ):
+        repo, _ = _init_tmp_repo(tmp_path)
+        pipe = _make_pipeline(repo, "", sample_config)
+        called = {"revert_all": 0}
+
+        def _fake_revert_all(_workspace):
+            called["revert_all"] += 1
+
+        monkeypatch.setattr("gate.fixer._revert_all", _fake_revert_all)
+        pipe._revert_to_baseline()
+        assert called["revert_all"] == 1
+
+    def test_falls_back_on_subprocess_error(
+        self, tmp_path, sample_config, monkeypatch,
+    ):
+        repo, baseline = _init_tmp_repo(tmp_path)
+        pipe = _make_pipeline(repo, baseline, sample_config)
+        called = {"revert_all": 0}
+
+        def _fake_revert_all(_workspace):
+            called["revert_all"] += 1
+
+        monkeypatch.setattr("gate.fixer._revert_all", _fake_revert_all)
+        with patch("gate.fixer.subprocess.run") as mock_run:
+            mock_run.side_effect = OSError("git missing")
+            pipe._revert_to_baseline()
+        assert called["revert_all"] == 1
+
+
+# ── Senior-authored commit message validation ────────────────
+
+
+class TestValidateSeniorCommitMessage:
+    """Table-driven coverage for ``_validate_senior_commit_message``.
+
+    Valid subjects are accepted verbatim; rejections return a stable
+    reason string the ``reviews.jsonl`` telemetry depends on.
+    """
+
+    SYNTH = "fix(gate): auto-fix 2/3 findings from Gate review"
+
+    def test_valid_fix_scope_accepted(self):
+        from gate.fixer import _validate_senior_commit_message
+        msg = (
+            "fix(weather): remove unjustified eslint-disable\n\n"
+            "Dropped the disable line and handled the nullish case directly."
+        )
+        accepted, reason = _validate_senior_commit_message(msg, self.SYNTH)
+        assert reason is None
+        assert accepted is not None
+        assert accepted.splitlines()[0].startswith("fix(weather):")
+
+    def test_valid_refactor_scope_accepted(self):
+        from gate.fixer import _validate_senior_commit_message
+        msg = "refactor(api): inline nested try/catch blocks"
+        accepted, reason = _validate_senior_commit_message(msg, self.SYNTH)
+        assert reason is None
+        assert accepted == msg
+
+    def test_empty_rejected(self):
+        from gate.fixer import _validate_senior_commit_message
+        accepted, reason = _validate_senior_commit_message("", self.SYNTH)
+        assert accepted is None
+        assert reason == "empty"
+
+    def test_too_short_rejected(self):
+        from gate.fixer import _validate_senior_commit_message
+        accepted, reason = _validate_senior_commit_message("fix: oops", self.SYNTH)
+        assert accepted is None
+        assert reason == "too_short"
+
+    def test_subject_too_long_rejected(self):
+        from gate.fixer import _validate_senior_commit_message
+        subject = "fix(weather): " + ("x" * 120)
+        accepted, reason = _validate_senior_commit_message(subject, self.SYNTH)
+        assert accepted is None
+        assert reason == "subject_too_long"
+
+    def test_bad_shape_rejected(self):
+        from gate.fixer import _validate_senior_commit_message
+        accepted, reason = _validate_senior_commit_message(
+            "just fix the thing please kthx", self.SYNTH
+        )
+        assert accepted is None
+        assert reason == "bad_shape"
+
+    def test_placeholder_subject_rejected(self):
+        from gate.fixer import _validate_senior_commit_message
+        # Placeholder check runs against the stripped subject, so pad the
+        # body to clear the min-length gate first.
+        accepted, reason = _validate_senior_commit_message(
+            "TODO\n\nfilled out by padding the body long enough",
+            self.SYNTH,
+        )
+        assert accepted is None
+        assert reason == "placeholder"
+
+    def test_byte_identical_to_synth_rejected(self):
+        from gate.fixer import _validate_senior_commit_message
+        accepted, reason = _validate_senior_commit_message(self.SYNTH, self.SYNTH)
+        assert accepted is None
+        assert reason == "matches_synth"

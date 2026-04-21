@@ -157,6 +157,8 @@ def log_fix_result(
     runaway_guard_hit: bool | None = None,
     fixed_count: int | None = None,
     not_fixed_count: int | None = None,
+    commit_message_source: str | None = None,
+    commit_message_reject_reason: str | None = None,
 ) -> None:
     """Append a fix result entry to reviews.jsonl.
 
@@ -201,8 +203,10 @@ def log_fix_result(
         ("runaway_guard_hit", runaway_guard_hit),
         ("fixed_count", fixed_count),
         ("not_fixed_count", not_fixed_count),
+        ("commit_message_source", commit_message_source),
+        ("commit_message_reject_reason", commit_message_reject_reason),
     ):
-        if value is not None:
+        if value is not None and value != "":
             entry[key] = value
     logs = logs_dir()
     logs.mkdir(parents=True, exist_ok=True)

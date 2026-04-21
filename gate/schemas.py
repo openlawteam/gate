@@ -319,3 +319,12 @@ class FixResult:
     sub_scope_empty: int = 0
     wall_clock_seconds: int = 0
     runaway_guard_hit: bool = False
+    # Senior-authored commit message telemetry. ``"senior"`` when Gate
+    # accepted the hopper-mode ``final_commit_message``, ``"synth"`` when
+    # validation rejected it and Gate's template was used instead. Empty
+    # string for polish_legacy / no-op / failed runs where no commit was
+    # produced. ``commit_message_reject_reason`` is populated only when
+    # source == "synth" AND a senior message was present but rejected
+    # (empty when senior simply did not author one).
+    commit_message_source: str = ""
+    commit_message_reject_reason: str = ""

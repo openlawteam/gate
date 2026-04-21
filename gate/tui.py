@@ -10,6 +10,7 @@ Full-featured monitoring dashboard with:
 """
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -30,6 +31,8 @@ from gate.config import get_all_repos, load_config, repo_slug
 from gate.logger import live_dir, logs_dir, reviews_jsonl
 
 # ── Tokyo Night Theme ────────────────────────────────────────
+
+logger = logging.getLogger(__name__)
 
 GATE_THEME = Theme(
     name="gate",
@@ -730,18 +733,7 @@ class CompletedDetailScreen(ModalScreen):
         return t
 
     def _build_fix_info(self, e: dict, t: Text) -> Text:
-        """Render fix-specific fields for CompletedDetailScreen.
-
-        Includes hopper-mode telemetry (``sub_scope_*``,
-        ``pipeline_mode``, ``runaway_guard_hit``) and
-        commit-message provenance (``commit_message_source``,
-        ``commit_message_reject_reason``) written by
-        :func:`gate.logger.log_fix_result` — these fields let an
-        operator tell a graceful no-op apart from a runaway guard
-        trip without cracking open ``reviews.jsonl``. Each block
-        is conditional so legacy polish_legacy entries render
-        byte-identically to before.
-        """
+        """Render fix-specific fields for a fix-followup entry in CompletedDetailScreen."""
         decision = e.get("decision", "?")
         t.append("Decision:   ", style="dim")
         t.append(format_decision(decision))
@@ -766,7 +758,7 @@ class CompletedDetailScreen(ModalScreen):
             t.append("Wall clock: ", style="dim")
             t.append(f"{wall}s\n")
 
-        # Hopper sub-scope bookkeeping (PR #18/#19). Sensible to show
+        # Hopper sub-scope bookkeeping. Sensible to show
         # as a single "committed / total (reverted, empty)" line so
         # folks can eyeball "did any sub-scope land?" at a glance.
         total = e.get("sub_scope_total")
@@ -804,7 +796,7 @@ class CompletedDetailScreen(ModalScreen):
         t.append("Fix Summary\n", style="bold underline")
         t.append(f"  {e.get('fix_summary', 'No summary')}\n")
 
-        # Commit-message provenance (PR #18). ``senior`` means the
+        # Commit-message provenance. ``senior`` means the
         # agent-authored message passed validation; ``synthesized``
         # means we fell back to the canned "fix(gate): auto-fix ..."
         # form — show the reject reason so the reviewer knows why.
@@ -1095,8 +1087,8 @@ class GateTUI(App):
                 for rid, row_key in list(self._active_row_keys.items()):
                     try:
                         table.remove_row(row_key)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("Failed to remove stale active review row %s: %s", rid, e)
                     self._active_row_keys.pop(rid, None)
             if self._active_empty_row_key is None:
                 self._active_empty_row_key = table.add_row(
@@ -1112,8 +1104,8 @@ class GateTUI(App):
         if self._active_empty_row_key is not None:
             try:
                 table.remove_row(self._active_empty_row_key)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to remove active reviews placeholder row: %s", e)
             self._active_empty_row_key = None
 
         current_ids = {r.get("id", "") for r in reviews}

@@ -200,6 +200,53 @@ def _git_fetch_with_retry(
         raise last_err
 
 
+def _refresh_default_branch_ref(
+    repo_path: str,
+    default_branch: str,
+    pr_branch: str,
+    pr_number: int,
+) -> None:
+    """Refresh ``origin/<default_branch>`` so the review diff is computed
+    against an up-to-date merge-base.
+
+    ``prepare_context_files()`` builds the PR diff with
+    ``git diff origin/<default_branch>...HEAD``. If ``origin/<default_branch>``
+    has not been fetched recently, the triple-dot merge-base lags the remote
+    and the diff pulls in every file that moved on the default branch between
+    the stale cached ref and the real current merge-base. Small PRs end up
+    with 30–50 phantom files in the review scope.
+
+    This helper is a best-effort refresh called from :func:`create_worktree`.
+    It **never raises** — the review can still proceed with whatever ref
+    exists locally (that is today's behaviour), so widening the blast radius
+    on a default-branch fetch failure would be a regression.
+
+    Noop cases (fast path):
+    - ``default_branch`` is falsy (misconfigured repo config).
+    - ``default_branch`` equals ``pr_branch`` (rare: fork→base main→main PR).
+
+    Retry budget is reduced to ``max_retries=2`` (default is 4) so the soft-
+    fail worst case stays bounded at ~3 minutes rather than ~6.
+
+    See openlawteam/gate Issue #15 (adin-chat PRs #217 and #220 repros).
+    """
+    if not default_branch or default_branch == pr_branch:
+        return
+    try:
+        _git_fetch_with_retry(repo_path, default_branch, max_retries=2)
+    except BranchNotFoundError as e:
+        logger.warning(
+            f"PR #{pr_number}: default branch {default_branch!r} not found "
+            f"on origin; diff will be computed against whatever ref "
+            f"exists locally ({e})"
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        logger.warning(
+            f"PR #{pr_number}: failed to refresh origin/{default_branch}; "
+            f"diff may be computed against a stale ref: {e}"
+        )
+
+
 def _install_deps_with_retry(
     worktree_path: Path, cmd: str, max_retries: int = 2,
 ) -> None:
@@ -293,6 +340,17 @@ def create_worktree(
     # Fetch the PR branch with explicit auth and retry
     logger.info(f"Fetching branch {branch} for PR #{pr_number}")
     _git_fetch_with_retry(resolved_repo, branch)
+
+    # Issue #15: keep origin/<default_branch> fresh so prepare_context_files()
+    # below does not build the PR diff against a stale merge-base. Best-effort
+    # refresh — never raises, so a transient default-branch fetch failure
+    # does not block the review.
+    _refresh_default_branch_ref(
+        resolved_repo,
+        repo_cfg.get("default_branch", "main"),
+        branch,
+        pr_number,
+    )
 
     # Create worktree at the specific SHA (also needs auth env for private repos)
     logger.info(f"Creating worktree at {worktree_path}")

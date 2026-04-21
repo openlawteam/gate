@@ -66,6 +66,16 @@ plan section.
 
 ### Fixed
 
+- **Stale `origin/<default_branch>` poisoning review diff scope (#15).**
+  `create_worktree` now refreshes `origin/<default_branch>` alongside the
+  PR branch via a new `_refresh_default_branch_ref` helper. Previously the
+  triple-dot diff in `prepare_context_files` could be computed against a
+  stale cached ref, pulling ~10s of unrelated files into the review scope.
+  Observed on adin-chat PR #217 (6 real → 39 Gate-reported) and PR #220
+  (1 real → 48 Gate-reported; ~8 min of speculative fix-pipeline cycles
+  before the senior correctly resolved to `no_op`). The helper uses a
+  bounded retry budget (`max_retries=2`) and soft-fails with a structured
+  warning so transient fetch errors never block a review.
 - **Cancellation races (Group 2A, 2B, 2C).** `_save_stage_result`
   no-ops when the review was cancelled or the worktree vanished;
   `remove_worktree` is no longer called from `cancel()` (lived in

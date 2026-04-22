@@ -621,8 +621,8 @@ def cmd_inspect_pr(args: list[str]) -> int:
 
     from gate.state import get_pr_state_dir
 
-    state_path = get_pr_state_dir(parsed.pr, parsed.repo)
-    if not state_path.exists():
+    state_path = get_pr_state_dir(parsed.pr, parsed.repo, create=False)
+    if not state_path.exists() or not (state_path / "verdict.json").exists():
         suffix = f" in {parsed.repo}" if parsed.repo else ""
         print(f"No persisted state for PR #{parsed.pr}{suffix}")
         return 1

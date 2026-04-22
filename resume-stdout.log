@@ -1,0 +1,51 @@
+Re-review fixes landed and finalized at `3aec623c`.
+
+### What changed vs the previous attempt
+
+- **`gate/state.py:27`** — `get_pr_state_dir` now takes `create: bool = True`. mkdir is gated behind the flag; all existing callers keep default behavior.
+- **`gate/cli.py:624`** — `cmd_inspect_pr` calls `get_pr_state_dir(parsed.pr, parsed.repo, create=False)` (restores the accessor as single source of truth; no inline path construction) and still guards on `verdict.json` existence.
+- **`tests/test_cli.py`** — unchanged from the prior iteration; tightened assertions still hold.
+
+### Addressed review issues
+
+- **Issue 1 (layer violation)** — `state_dir()` / `repo_slug()` are no longer imported or used inside `cmd_inspect_pr`. The accessor is the single source of truth.
+- **Issue 2 (duplicated branching)** — path branching lives exclusively in `get_pr_state_dir`; any future change flows to all callers.
+
+### Verification
+
+- `ruff check .` → clean
+- `pytest tests/test_cli.py tests/test_state.py` → 71 passed
+- `grep -n "state_dir\|repo_slug" gate/cli.py` inside `cmd_inspect_pr` → no matches
+
+```json
+{
+  "fixed": [
+    {
+      "finding_id": "fdc4f13fb3",
+      "file": "gate/cli.py",
+      "line": 624,
+      "finding_message": "cmd_inspect_pr's 'No persisted state' guard is unreachable because get_pr_state_dir() always mkdirs the path.",
+      "fix_description": "Extended gate.state.get_pr_state_dir with an optional create: bool = True parameter (mkdir is now gated on that flag). cmd_inspect_pr calls get_pr_state_dir(parsed.pr, parsed.repo, create=False) and guards on both directory existence and verdict.json presence, so inspecting an unknown PR prints 'No persisted state' and returns 1 without leaving a ghost state/<slug>/prN/ behind. The accessor remains the single source of truth for PR state paths (no layer bypass, no duplicated branching). tests/test_cli.py::test_missing_pr_returns_1 stays tightened to assert result == 1 and the output message.",
+      "files_created": []
+    }
+  ],
+  "not_fixed": [],
+  "sub_scope_log": [
+    {
+      "name": "inspect-pr ghost-dir guard",
+      "finding_ids": ["fdc4f13fb3"],
+      "iterations": 2,
+      "outcome": "committed",
+      "checkpoint_sha": "f8219bb5"
+    }
+  ],
+  "final_commit_message": "fix(gate): auto-fix 1/1 finding — inspect-pr ghost-dir guard\n\ncmd_inspect_pr previously called get_pr_state_dir(), which mkdirs the\nper-PR state directory before returning. That made the `No persisted\nstate` guard unreachable and silently created a ghost state/prN/ on\nevery `gate inspect-pr` for a PR Gate never processed.\n\nExtend get_pr_state_dir with an optional `create: bool = True`\nparameter (mkdir is now gated on the flag) so read-only callers like\ninspect-pr can obtain the path without side-effects. All existing\ncallers keep the default and are unchanged. cmd_inspect_pr now calls\nget_pr_state_dir(pr, repo, create=False) and requires verdict.json to\nexist before rendering — so the guard actually fires for unknown PRs\nwithout touching disk, while state.get_pr_state_dir remains the single\nsource of truth for PR state paths (no layer bypass).\n\nAlso tighten test_missing_pr_returns_1 from `result in (0, 1)` to\n`result == 1` plus a `No persisted state` output assertion, now that\nthe behavior is deterministic.",
+  "stats": {
+    "total_findings": 1,
+    "fixed": 1,
+    "not_fixed": 0,
+    "files_modified": 3,
+    "files_created": 0
+  }
+}
+```

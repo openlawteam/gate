@@ -146,6 +146,10 @@ def _render_single_finding_prompt(finding: dict, context_findings: list[dict]) -
     the senior can see the broader review picture without being tempted
     to batch fixes. The polish_mode_section is forced on because this
     loop only runs when ``is_polish`` is true.
+
+    Deduped findings (PR A.2) carry a ``locations`` array; we surface
+    it verbatim so the senior fixes every reported site in one pass
+    instead of polish re-entering once per site.
     """
     other_summaries = [
         {
@@ -158,9 +162,27 @@ def _render_single_finding_prompt(finding: dict, context_findings: list[dict]) -
         if f.get("finding_id") != finding.get("finding_id")
     ]
     others_json = json.dumps(other_summaries, indent=2)
+
+    locations = finding.get("locations") or []
+    if isinstance(locations, list) and len(locations) > 1:
+        loc_hint = (
+            "\nThis finding applies at multiple sites. Fix every site "
+            "in a single pass — do not skip any:\n"
+            + "\n".join(
+                f"- `{loc.get('file', '?')}`"
+                + (f":{loc.get('line')}" if loc.get("line") else "")
+                for loc in locations
+                if isinstance(loc, dict)
+            )
+            + "\n"
+        )
+    else:
+        loc_hint = ""
+
     return (
         "CURRENT FOCUS (single finding):\n\n"
-        f"```json\n{json.dumps([finding], indent=2)}\n```\n\n"
+        f"```json\n{json.dumps([finding], indent=2)}\n```\n"
+        f"{loc_hint}\n"
         "Other findings in this PR (for awareness — do NOT attempt them "
         "in this call, they will be dispatched separately):\n\n"
         f"```json\n{others_json}\n```\n"

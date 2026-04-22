@@ -454,9 +454,23 @@ def cmd_up(args: list[str]) -> int:
 
 @command("status", "Print current state")
 def cmd_status(args: list[str]) -> int:
-    """Print current gate state to stdout."""
-    from gate.client import get_health, list_queue, list_reviews, ping
+    """Print current gate state to stdout.
+
+    Health comes from an in-process ``run_health_check()`` call (same
+    path as ``gate health``) rather than the server-side cache — the
+    cache is never populated because no code ever sends the server a
+    ``health_update`` message. Doing it in-process costs ~50ms per
+    invocation and guarantees ``gate status`` reflects the current
+    reality rather than a stale dict.
+
+    A latched ``quota_auth`` drift is surfaced as a dedicated top-line
+    alert because it's the one degradation users most commonly miss:
+    Codex starts erroring under the covers, reviews silently degrade,
+    and ``gate status`` would otherwise say nothing.
+    """
+    from gate.client import list_queue, list_reviews, ping
     from gate.config import socket_path as _socket_path
+    from gate.health import run_health_check
 
     socket_path = _socket_path()
     if not ping(socket_path):
@@ -465,9 +479,22 @@ def cmd_status(args: list[str]) -> int:
 
     reviews = list_reviews(socket_path)
     queue_items = list_queue(socket_path)
-    health = get_health(socket_path)
+    health = run_health_check()
 
     print(f"gate v{__version__}")
+
+    # Quota-auth drift: dedicated top-line alert. Printed BEFORE the
+    # normal reviews/queue lines so it can't be lost in a long
+    # active-reviews list.
+    quota_auth = health.get("quota_auth") if isinstance(health, dict) else None
+    if isinstance(quota_auth, dict) and not quota_auth.get("ok", True):
+        detail = quota_auth.get("detail", "auth drift latched")
+        print()
+        print(
+            "⛔  quota_auth: " + detail
+            + "  — refresh OAuth token; reviews will degrade as Codex requests fail."
+        )
+
     print()
     if reviews:
         print(f"Active reviews ({len(reviews)}):")
@@ -481,12 +508,22 @@ def cmd_status(args: list[str]) -> int:
         for item in queue_items:
             print(f"  PR #{item.get('pr_number', '?')}")
 
-    if health:
-        errors = [k for k, v in health.items() if isinstance(v, dict) and not v.get("ok", True)]
-        if errors:
-            print(f"\nHealth issues: {', '.join(errors)}")
+    # Always print a Health: section — empty-check was hiding
+    # everything including degradations that silently affect review
+    # quality.
+    if isinstance(health, dict) and health:
+        failing = [
+            (k, v) for k, v in health.items()
+            if isinstance(v, dict) and not v.get("ok", True)
+        ]
+        if failing:
+            print(f"\n⚠  Health issues ({len(failing)}):")
+            for k, v in failing:
+                print(f"  - {k}: {v.get('detail', '')}")
         else:
-            print("\nHealth: all OK")
+            print("\nHealth: OK")
+    else:
+        print("\nHealth: unavailable")
 
     return 0
 
@@ -550,23 +587,242 @@ def cmd_cleanup_pr(args: list[str]) -> int:
     return 0
 
 
+@command("inspect-pr", "Inspect persisted review state for a PR")
+def cmd_inspect_pr(args: list[str]) -> int:
+    """Pretty-print findings and stage results from a PR's persisted state.
+
+    Reads from ``state_dir()/<repo>/pr<N>/`` — the same location
+    ``persist_review_state`` writes to. Useful for post-mortem /
+    operator inspection without hand-parsing verdict.json.
+    """
+    import json as _json
+
+    parser = make_parser("inspect-pr", "Inspect persisted review state for a PR.")
+    parser.add_argument("pr", type=int, help="PR number")
+    parser.add_argument("--repo", default="", help="Repository (owner/name)")
+    parser.add_argument(
+        "--stage",
+        default="all",
+        choices=["all", "verdict", "build", "architecture", "security", "logic", "triage"],
+        help="Only show one stage's output (default: all)",
+    )
+    parser.add_argument(
+        "--raw", action="store_true",
+        help="Dump raw JSON instead of the rich-table view.",
+    )
+    try:
+        parsed = parse_args(parser, args)
+    except SystemExit:
+        return 0
+    except ArgumentError as e:
+        print(f"error: {e}")
+        parser.print_usage()
+        return 1
+
+    from gate.state import get_pr_state_dir
+
+    state_path = get_pr_state_dir(parsed.pr, parsed.repo)
+    if not state_path.exists():
+        suffix = f" in {parsed.repo}" if parsed.repo else ""
+        print(f"No persisted state for PR #{parsed.pr}{suffix}")
+        return 1
+
+    stage_map = {
+        "verdict": state_path / "verdict.json",
+        "triage": state_path / "triage.json",
+        "build": state_path / "build.json",
+        "architecture": state_path / "architecture.json",
+        "security": state_path / "security.json",
+        "logic": state_path / "logic.json",
+    }
+    if parsed.stage != "all":
+        stage_map = {parsed.stage: stage_map[parsed.stage]}
+
+    if parsed.raw:
+        out: dict = {}
+        for name, path in stage_map.items():
+            if path.exists():
+                try:
+                    out[name] = _json.loads(path.read_text())
+                except (OSError, _json.JSONDecodeError) as e:
+                    out[name] = {"_error": str(e)}
+        print(_json.dumps(out, indent=2))
+        return 0
+
+    try:
+        from rich.console import Console
+        from rich.table import Table
+    except ImportError:
+        print("rich not installed — install with: pip install -e '.[dev]'")
+        return 1
+
+    from gate.schemas import Finding
+
+    console = Console()
+    console.print(
+        f"[bold]PR #{parsed.pr}[/bold]"
+        + (f" in [cyan]{parsed.repo}[/cyan]" if parsed.repo else "")
+        + f"  [dim]state: {state_path}[/dim]"
+    )
+
+    verdict_path = stage_map.get("verdict") or state_path / "verdict.json"
+    if verdict_path and verdict_path.exists():
+        try:
+            verdict = _json.loads(verdict_path.read_text())
+        except (OSError, _json.JSONDecodeError) as e:
+            console.print(f"[red]verdict.json could not be read: {e}[/red]")
+            verdict = None
+        if verdict:
+            console.print(
+                f"\n[bold]Verdict:[/bold] {verdict.get('decision', '?')} "
+                f"([dim]confidence={verdict.get('confidence', '?')}[/dim])"
+            )
+            if verdict.get("summary"):
+                console.print(f"  {verdict['summary']}")
+
+            findings = verdict.get("findings") or []
+            if findings:
+                table = Table(
+                    title=f"Findings ({len(findings)})",
+                    show_header=True, header_style="bold",
+                )
+                table.add_column("Sev")
+                table.add_column("Stage")
+                table.add_column("Location")
+                table.add_column("Rule")
+                table.add_column("Message")
+                table.add_column("Suggestion")
+                for raw in findings:
+                    try:
+                        f = Finding.from_dict(raw)
+                    except (ValueError, TypeError):
+                        table.add_row(
+                            "?", "?", "?", "?",
+                            f"[red]malformed:[/red] {str(raw)[:80]}",
+                            "",
+                        )
+                        continue
+                    primary = f.primary_location()
+                    loc = primary.file or "?"
+                    if primary.line:
+                        loc += f":{primary.line}"
+                    if len(f.locations) > 1:
+                        loc += f" [dim](+{len(f.locations) - 1})[/dim]"
+                    table.add_row(
+                        f.severity,
+                        f.source_stage or "?",
+                        loc,
+                        f.rule_source or "-",
+                        (f.message or "")[:120],
+                        (f.suggestion or "")[:120],
+                    )
+                console.print(table)
+            else:
+                console.print("  [dim]No findings.[/dim]")
+
+    if parsed.stage == "all":
+        # Summarise other stages — exact rendering depends on stage, so
+        # keep it compact: stage name, top-level keys, a preview.
+        for name, path in stage_map.items():
+            if name == "verdict" or not path.exists():
+                continue
+            try:
+                doc = _json.loads(path.read_text())
+            except (OSError, _json.JSONDecodeError) as e:
+                console.print(f"\n[bold]{name}:[/bold] [red]{e}[/red]")
+                continue
+            if not isinstance(doc, dict):
+                console.print(f"\n[bold]{name}:[/bold] {str(doc)[:200]}")
+                continue
+            console.print(f"\n[bold]{name}:[/bold]")
+            keys = sorted(doc.keys())
+            for k in keys:
+                v = doc[k]
+                if isinstance(v, list):
+                    console.print(f"  {k}: [dim]list({len(v)})[/dim]")
+                elif isinstance(v, dict):
+                    console.print(f"  {k}: [dim]dict({len(v)})[/dim]")
+                else:
+                    preview = str(v)
+                    if len(preview) > 100:
+                        preview = preview[:100] + "…"
+                    console.print(f"  {k}: {preview}")
+
+    return 0
+
+
 @command("health", "Run health checks")
 def cmd_health(args: list[str]) -> int:
     """Run all health checks and report results."""
 
     from gate.health import run_health_check
 
+    parser = make_parser("health", "Run health checks.")
+    parser.add_argument(
+        "--since-restart",
+        action="store_true",
+        help="Also report how long any latched quota/auth alert has been unresolved.",
+    )
+    try:
+        parsed = parse_args(parser, args)
+    except SystemExit:
+        return 0
+    except ArgumentError as e:
+        print(f"error: {e}")
+        parser.print_usage()
+        return 1
+
     results = run_health_check()
     errors = {k: v for k, v in results.items() if isinstance(v, dict) and not v.get("ok", True)}
+
+    since_line = ""
+    if parsed.since_restart:
+        since_line = _render_latched_since()
 
     if errors:
         print(f"HEALTH CHECK: {len(errors)} issue(s)")
         for key, val in errors.items():
             print(f"  ❌ {key}: {val.get('detail', '')}")
+        if since_line:
+            print(since_line)
         return 1
     else:
         print("HEALTH CHECK: all OK")
+        if since_line:
+            print(since_line)
         return 0
+
+
+def _render_latched_since() -> str:
+    """Render how long any latched auth-drift alert has been unresolved.
+
+    Reads the marker file ``gate.quota._maybe_alert_auth_drift`` writes
+    when it fires a quota-auth-drift alert. Empty string when no latch
+    is present so the caller can simply concatenate.
+    """
+    from gate.quota import _auth_drift_marker_path
+
+    marker = _auth_drift_marker_path()
+    if not marker.exists():
+        return ""
+    try:
+        ts = float(marker.read_text().strip() or "0")
+    except (OSError, ValueError):
+        return ""
+    import time as _t
+
+    age_s = int(_t.time() - ts)
+    if age_s <= 0:
+        return ""
+    if age_s < 60:
+        age = f"{age_s}s"
+    elif age_s < 3600:
+        age = f"{age_s // 60}m"
+    elif age_s < 86400:
+        age = f"{age_s // 3600}h {age_s % 3600 // 60}m"
+    else:
+        age = f"{age_s // 86400}d {age_s % 86400 // 3600}h"
+    return f"  ⏱  quota_auth latched for {age} (since unresolved)"
 
 
 @command("cleanup", "Run log rotation and worktree pruning")

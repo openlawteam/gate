@@ -7,6 +7,8 @@ enforcement, fix stage normalization.
 import json
 
 from gate.extract import (
+    _dedupe_findings,
+    _normalise_dedup_message,
     build_extract_fallback,
     enforce_exploit_scenario,
     extract_from_transcript,
@@ -422,3 +424,187 @@ class TestValidateIntroducedByPr:
         self._write_diff(tmp_path, SIMPLE_DIFF)
         assert validate_introduced_by_pr({}, tmp_path, "architecture") == {}
         assert validate_introduced_by_pr(None, tmp_path, "architecture") is None
+
+
+class TestNormaliseDedupMessage:
+    def test_strips_embedded_line_coords(self):
+        a = _normalise_dedup_message("Use of X at line 10")
+        b = _normalise_dedup_message("Use of X at line 22")
+        assert a == b
+
+    def test_preserves_meaningful_suffix(self):
+        a = _normalise_dedup_message("Missing null check on user")
+        b = _normalise_dedup_message("Missing null check on order")
+        assert a != b
+
+    def test_truncates_to_80_chars(self):
+        s = "a" * 200
+        assert len(_normalise_dedup_message(s)) == 80
+
+    def test_empty_string_is_empty(self):
+        assert _normalise_dedup_message("") == ""
+
+
+class TestDedupeFindings:
+    def _sample(self, **overrides):
+        base = {
+            "severity": "warning",
+            "file": "a.py",
+            "line": 10,
+            "message": "Multi-line comment block",
+            "rule_source": "style §8",
+            "source_stage": "architecture",
+        }
+        base.update(overrides)
+        return base
+
+    def test_same_rule_same_message_different_files_collapses(self):
+        f = [
+            self._sample(file="a.py", line=10),
+            self._sample(file="a.py", line=50),
+            self._sample(file="b.py", line=5),
+        ]
+        out = _dedupe_findings(f)
+        assert len(out) == 1
+        merged = out[0]
+        assert len(merged["locations"]) == 3
+        # Sorted by (file, line): a.py:10, a.py:50, b.py:5
+        assert merged["locations"][0] == {"file": "a.py", "line": 10}
+        assert merged["locations"][1] == {"file": "a.py", "line": 50}
+        assert merged["locations"][2] == {"file": "b.py", "line": 5}
+        # Top-level file/line reflect primary (locations[0]).
+        assert merged["file"] == "a.py"
+        assert merged["line"] == 10
+        assert merged["_deduped_from"] == 3
+
+    def test_different_rule_same_message_stays_distinct(self):
+        f = [
+            self._sample(rule_source="rule-A"),
+            self._sample(rule_source="rule-B"),
+        ]
+        out = _dedupe_findings(f)
+        assert len(out) == 2
+
+    def test_different_stage_same_message_stays_distinct(self):
+        f = [
+            self._sample(source_stage="architecture"),
+            self._sample(source_stage="security"),
+        ]
+        out = _dedupe_findings(f)
+        assert len(out) == 2
+
+    def test_same_prefix_different_suffix_stays_distinct(self):
+        f = [
+            self._sample(message="Missing null check on user"),
+            self._sample(message="Missing null check on order"),
+        ]
+        out = _dedupe_findings(f)
+        assert len(out) == 2
+
+    def test_coord_normalization_collapses(self):
+        # Same message shape with different embedded line numbers.
+        f = [
+            self._sample(line=10, message="Bad thing at line 10"),
+            self._sample(line=22, message="Bad thing at line 22"),
+        ]
+        out = _dedupe_findings(f)
+        assert len(out) == 1
+        assert len(out[0]["locations"]) == 2
+
+    def test_duplicate_coords_deduped_within_group(self):
+        f = [
+            self._sample(file="a.py", line=10),
+            self._sample(file="a.py", line=10),  # exact dup
+            self._sample(file="a.py", line=10),
+        ]
+        out = _dedupe_findings(f)
+        assert len(out) == 1
+        assert len(out[0]["locations"]) == 1
+
+    def test_worst_severity_wins(self):
+        f = [
+            self._sample(severity="warning"),
+            self._sample(file="b.py", severity="error"),
+            self._sample(file="c.py", severity="info"),
+        ]
+        out = _dedupe_findings(f)
+        assert out[0]["severity"] == "error"
+
+    def test_single_occurrence_gets_locations_array(self):
+        f = [self._sample()]
+        out = _dedupe_findings(f)
+        assert len(out) == 1
+        assert out[0]["locations"] == [{"file": "a.py", "line": 10}]
+
+    def test_noop_on_empty_input(self):
+        assert _dedupe_findings([]) == []
+        assert _dedupe_findings(None) is None
+        # Singletons are processed so they gain a `locations` array
+        # for uniform downstream iteration (see
+        # test_single_occurrence_gets_locations_array).
+
+    def test_empty_message_passes_through_without_merging(self):
+        # Findings with no message can't be keyed for dedup — they
+        # must still be surfaced, not dropped.
+        f = [
+            {"severity": "info", "file": "a.py", "line": 1, "message": ""},
+            {"severity": "info", "file": "a.py", "line": 2, "message": ""},
+        ]
+        out = _dedupe_findings(f)
+        assert len(out) == 2
+
+    def test_category_fallback_when_no_rule_source(self):
+        # Same (stage, category, message) should collapse even when
+        # rule_source is unset.
+        f = [
+            {"severity": "warning", "file": "a.py", "line": 1,
+             "message": "x", "category": "style", "source_stage": "arch"},
+            {"severity": "warning", "file": "a.py", "line": 2,
+             "message": "x", "category": "style", "source_stage": "arch"},
+        ]
+        out = _dedupe_findings(f)
+        assert len(out) == 1
+
+    def test_preserves_finding_id_hash_when_stamped_after(self):
+        # Dedup runs BEFORE finding_id stamping in the orchestrator —
+        # verify that no stable hash gets blown away by a second dedup
+        # pass on already-stamped findings.
+        from gate.finding_id import compute_finding_id
+        f = [
+            self._sample(file="a.py", line=10, finding_id="abc123"),
+            self._sample(file="a.py", line=50, finding_id="def456"),
+        ]
+        out = _dedupe_findings(f)
+        # The merged finding keeps the first group entry's finding_id.
+        # (The orchestrator only stamps ids AFTER dedup, so in practice
+        # this field is absent when dedup runs. Pre-stamped inputs are
+        # an edge case we preserve rather than rehash.)
+        assert out[0].get("finding_id") == "abc123"
+        # A fresh hash on the deduped finding would match the primary
+        # location's original hash input.
+        primary_hash = compute_finding_id({
+            "file": out[0]["file"], "line": out[0]["line"],
+            "source_stage": out[0]["source_stage"],
+            "message": out[0]["message"],
+        })
+        first_original_hash = compute_finding_id({
+            "file": f[0]["file"], "line": f[0]["line"],
+            "source_stage": f[0]["source_stage"],
+            "message": f[0]["message"],
+        })
+        # Identical — stable hash scheme across dedup.
+        assert primary_hash == first_original_hash
+
+    def test_non_dict_entries_passed_through(self):
+        f = [
+            self._sample(file="a.py"),
+            None,
+            "junk",
+            self._sample(file="b.py"),
+        ]
+        out = _dedupe_findings(f)
+        # Non-dict entries stay; dict entries collapsed.
+        # The two dicts merge into one; the two non-dict pass through.
+        assert sum(1 for x in out if isinstance(x, dict)) == 1
+        assert None in out
+        assert "junk" in out

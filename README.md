@@ -75,6 +75,30 @@ gate add-repo
 | `gate update` | Pull latest code and reinstall |
 | `gate cleanup-pr --pr N` | Clean up state for a closed PR |
 | `gate process <id> <stage>` | Run a review stage in tmux (internal) |
+| `gate inspect-pr N [--repo ...]` | Pretty-print persisted review state for a PR |
+
+## Development
+
+Gate's test suite needs the dev extras — most importantly
+`pytest-asyncio` for the async TUI tests. Install with:
+
+```bash
+pip install -e '.[dev]'
+```
+
+A bare `pip install -e .` is **not enough**: it installs the runtime
+deps only, and `pytest -q` will fail at collection time via the guard
+in `tests/conftest.py` asking you to re-install with the extra. Use
+the one-line command above and you're good.
+
+Common developer workflows:
+
+```bash
+pytest -q                 # full test suite (~110s on my box)
+ruff check .              # lint
+mypy gate                 # type-check (baseline; see pyproject for overrides)
+gate inspect-pr 123       # inspect persisted findings for a PR
+```
 
 ## Supported Languages
 

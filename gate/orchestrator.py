@@ -11,6 +11,7 @@ import shutil
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 from gate import builder, github, notify, prompt, state
 from gate import quota as quota_mod
@@ -551,6 +552,19 @@ class ReviewOrchestrator:
 
             self._save_stage_result("verdict", verdict)
 
+            # === EXTERNAL CHECKS (PR B.2) ===
+            # Consult external CI / deploy-preview check-runs (Vercel,
+            # GitHub Actions, etc.) between verdict rendering and
+            # posting. Opt-in per repo via ``required_external_checks``;
+            # the helper is a no-op when unconfigured. May mutate
+            # verdict.data (append findings, flip decision to
+            # request_changes) — if it does, re-persist the verdict so
+            # downstream consumers (post_review, state.persist_review_state)
+            # read the mutated version.
+            verdict_mutated = self._consult_external_checks(verdict.data)
+            if verdict_mutated:
+                self._save_stage_result("verdict", verdict)
+
             # If a re-push landed while we were rendering the verdict,
             # posting it now would confuse users (PR review/check for a
             # superseded SHA) and stomp on the ``cancelled`` check run
@@ -615,6 +629,7 @@ class ReviewOrchestrator:
             state.persist_review_state(
                 self.pr_number, self.head_sha, self.workspace,
                 decision, clone_path=clone_path, repo=self.repo,
+                is_post_fix_rereview=self.is_post_fix_rereview,
             )
 
             write_live_log(
@@ -632,6 +647,15 @@ class ReviewOrchestrator:
             if decision in ("approve", "approve_with_notes"):
                 self._promote_spec_tests(verdict)
                 self._cleanup_underscore_gate_tests()
+                # === POST-HOC RECHECK (PR B.2) ===
+                # Best-effort thread that re-polls the external checks
+                # after approval to catch late flips (advisory failure
+                # that turned red post-verdict, or a blocking check
+                # that reported green at verdict time but failed
+                # afterwards). Writes a contradiction record + fires
+                # ntfy on a confirmed flip. Skipped when nothing is
+                # configured so unconfigured repos pay no extra cost.
+                self._schedule_post_hoc_recheck(verdict.data)
 
             # === FIX PIPELINE (if warranted) ===
             fix_completed = False
@@ -1079,6 +1103,321 @@ class ReviewOrchestrator:
                     f.unlink()
                 except OSError:
                     pass
+
+    def _consult_external_checks(self, verdict_data: dict) -> bool:
+        """Merge external CI signal into the verdict (PR B.2).
+
+        Returns True if verdict_data was mutated (caller re-persists).
+        Fail-open on any unexpected error — the existing review is
+        already trustworthy; we only add signal, we don't degrade.
+        """
+        from gate import external_checks
+        from gate.finding_id import compute_finding_id
+
+        if not external_checks.external_checks_enabled(self.config):
+            return False
+        repo_config = (self.config.get("repo") or {})
+        required = external_checks.required_from_config(repo_config)
+        if not required:
+            return False
+
+        wait_s = external_checks.get_wait_seconds(self.config, repo_config)
+
+        try:
+            classification = external_checks.classify(
+                external_checks.fetch_check_state(self.head_sha, self.repo),
+                required,
+            )
+        except Exception as e:  # noqa: BLE001 — fail-open
+            logger.warning(
+                f"PR #{self.pr_number}: external-check fetch failed "
+                f"({e}); skipping external-check gate."
+            )
+            return False
+
+        # Wait on blocking pending/unknown before concluding.
+        if classification.has_blocking_pending or classification.unknown:
+            logger.info(
+                f"PR #{self.pr_number}: "
+                f"{len(classification.blocking_pending)} pending, "
+                f"{len(classification.unknown)} unknown external check(s); "
+                f"waiting up to {wait_s}s."
+            )
+            try:
+                classification = external_checks.wait_for_pending(
+                    self.head_sha, self.repo, required,
+                    self._cancelled, timeout_s=wait_s,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    f"PR #{self.pr_number}: external-check wait failed "
+                    f"({e}); treating remaining pending as failure."
+                )
+
+        if self._cancelled.is_set():
+            return False
+
+        new_findings: list[dict] = []
+        for failing in classification.blocking_failures:
+            new_findings.append({
+                "severity": "error",
+                "file": "<external>",
+                "message": f"External blocking check failed: {failing.name}",
+                "category": "external_check",
+                "rule_source": f"external:{failing.name}",
+                "suggestion": (
+                    f"Review the failing check and fix before approval: "
+                    f"{failing.url}" if failing.url else
+                    f"Review the failing check and fix before approval: {failing.name}"
+                ),
+                "source_stage": "external_checks",
+            })
+        for pending in classification.blocking_pending:
+            new_findings.append({
+                "severity": "error",
+                "file": "<external>",
+                "message": (
+                    f"External blocking check still pending after "
+                    f"{wait_s}s: {pending.name}"
+                ),
+                "category": "external_check",
+                "rule_source": f"external:{pending.name}",
+                "suggestion": (
+                    f"Check took longer than external_check_wait_seconds; "
+                    f"fail-closed. See {pending.url}" if pending.url else
+                    "Check took longer than external_check_wait_seconds; "
+                    "fail-closed."
+                ),
+                "source_stage": "external_checks",
+            })
+        for missing in classification.unknown:
+            # Only blocking-policy missing checks translate to findings.
+            if missing.policy != "blocking":
+                continue
+            new_findings.append({
+                "severity": "error",
+                "file": "<external>",
+                "message": (
+                    f"Required external check never reported: {missing.name} "
+                    f"(wait exhausted after {wait_s}s)"
+                ),
+                "category": "external_check",
+                "rule_source": f"external:{missing.name}",
+                "suggestion": (
+                    "The configured CI provider did not report this check "
+                    "within the wait window; fail-closed."
+                ),
+                "source_stage": "external_checks",
+            })
+
+        if not new_findings:
+            return False
+
+        for f in new_findings:
+            f["finding_id"] = compute_finding_id(f)
+
+        findings = verdict_data.get("findings")
+        if not isinstance(findings, list):
+            findings = []
+        findings.extend(new_findings)
+        verdict_data["findings"] = findings
+        verdict_data["decision"] = "request_changes"
+        summary = verdict_data.get("summary") or ""
+        suffix = (
+            f"External checks blocked approval: "
+            f"{len(new_findings)} finding(s) injected from "
+            f"external_checks stage."
+        )
+        verdict_data["summary"] = f"{summary}\n\n{suffix}".strip() if summary else suffix
+        logger.warning(
+            f"PR #{self.pr_number}: external-check gate flipped verdict to "
+            f"request_changes ({len(new_findings)} new finding(s))."
+        )
+        return True
+
+    def _schedule_post_hoc_recheck(self, verdict_data: dict) -> None:
+        """Spawn a best-effort post-hoc recheck thread (PR B.2).
+
+        No-op unless the repo has ``required_external_checks`` and the
+        master kill-switch is on. Uses a daemon thread so interpreter
+        shutdown isn't blocked; the post-hoc phase is strictly
+        best-effort — we can never un-approve on GitHub anyway, the
+        value is alerting, not retroactive correction.
+        """
+        from gate import external_checks
+
+        if not external_checks.external_checks_enabled(self.config):
+            return
+        repo_config = (self.config.get("repo") or {})
+        required = external_checks.required_from_config(repo_config)
+        if not required:
+            return
+        recheck_minutes = external_checks.get_recheck_minutes(
+            self.config, repo_config,
+        )
+        if recheck_minutes <= 0:
+            return
+
+        t = threading.Thread(
+            target=self._run_post_hoc_recheck,
+            kwargs={
+                "required": required,
+                "recheck_minutes": recheck_minutes,
+                "verdict_snapshot": {
+                    "decision": verdict_data.get("decision"),
+                    "findings_count": len(verdict_data.get("findings") or []),
+                    "sha": self.head_sha,
+                },
+            },
+            name=f"gate-posthoc-recheck-pr{self.pr_number}",
+            daemon=True,
+        )
+        t.start()
+
+    def _run_post_hoc_recheck(
+        self,
+        required: list,
+        recheck_minutes: int,
+        verdict_snapshot: dict,
+    ) -> None:
+        """Poll external checks post-approval; record + alert on flips.
+
+        Runs for ``recheck_minutes`` or until cancelled. On a confirmed
+        flip-to-failure for any required check (even advisory), writes
+        a ``contradictions/<ISO>-<name>.json`` record + appends to
+        ``logs/alerts.jsonl`` + fires ntfy. Best-effort: every per-
+        iteration failure is logged and swallowed so one transient
+        gh failure doesn't silently kill the thread.
+        """
+        from gate import external_checks, notify
+        from gate.config import logs_dir
+
+        deadline = time.monotonic() + (recheck_minutes * 60)
+        # Matches external_checks.DEFAULT_POLL_INTERVAL_S * 4: post-hoc is a
+        # background observer, not latency-critical, so we poll 4× slower than
+        # the pre-commit wait loop to conserve the GitHub API budget.
+        poll_interval = float(external_checks.DEFAULT_POLL_INTERVAL_S) * 4
+        baseline_failures: set[str] = set()
+
+        try:
+            initial = external_checks.classify(
+                external_checks.fetch_check_state(self.head_sha, self.repo),
+                required,
+            )
+            baseline_failures = {
+                cs.name for cs in initial.blocking_failures + initial.advisory_failures
+            }
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                f"PR #{self.pr_number}: post-hoc baseline fetch failed "
+                f"({e}); defaulting to empty baseline."
+            )
+
+        reported: set[str] = set()
+        while time.monotonic() < deadline and not self._cancelled.is_set():
+            if self._cancelled.wait(timeout=poll_interval):
+                return
+            try:
+                classification = external_checks.classify(
+                    external_checks.fetch_check_state(self.head_sha, self.repo),
+                    required,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    f"PR #{self.pr_number}: post-hoc poll failed "
+                    f"({e}); continuing."
+                )
+                continue
+
+            new_failures = (
+                [cs for cs in classification.blocking_failures
+                 if cs.name not in baseline_failures and cs.name not in reported]
+                + [cs for cs in classification.advisory_failures
+                   if cs.name not in baseline_failures and cs.name not in reported]
+            )
+            for failure in new_failures:
+                reported.add(failure.name)
+                self._record_contradiction(
+                    failure, verdict_snapshot,
+                    seconds_to_flip=int(
+                        recheck_minutes * 60 - max(0.0, deadline - time.monotonic())
+                    ),
+                )
+                try:
+                    safe_name = failure.name.replace("/", "-")
+                    notify.notify(
+                        title=f"Gate contradiction: PR #{self.pr_number}",
+                        message=(
+                            f"{safe_name} flipped to {failure.conclusion} "
+                            f"after Gate approved {self.head_sha[:8]}."
+                        ),
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        f"PR #{self.pr_number}: ntfy for contradiction failed "
+                        f"({e})"
+                    )
+                try:
+                    alerts_path = logs_dir() / "alerts.jsonl"
+                    alerts_path.parent.mkdir(parents=True, exist_ok=True)
+                    with alerts_path.open("a", encoding="utf-8") as fp:
+                        fp.write(json.dumps({
+                            "kind": "external_check_contradiction",
+                            "pr": self.pr_number,
+                            "repo": self.repo,
+                            "sha": self.head_sha,
+                            "check": failure.name,
+                            "conclusion": failure.conclusion,
+                            "at": time.time(),
+                        }) + "\n")
+                except OSError as e:
+                    logger.warning(
+                        f"PR #{self.pr_number}: alerts.jsonl append failed ({e})"
+                    )
+
+        if reported:
+            logger.info(
+                f"PR #{self.pr_number}: post-hoc recheck recorded "
+                f"{len(reported)} contradiction(s) over {recheck_minutes}m."
+            )
+
+    def _record_contradiction(
+        self,
+        failure: Any,  # external_checks.CheckState — avoids import cycle
+        verdict_snapshot: dict,
+        seconds_to_flip: int,
+    ) -> None:
+        """Atomically persist a contradiction record for one failing check."""
+        from gate.io import atomic_write
+        from gate.state import get_pr_state_dir
+
+        try:
+            pr_dir = get_pr_state_dir(self.pr_number, self.repo)
+            contradictions_dir = pr_dir / "contradictions"
+            contradictions_dir.mkdir(parents=True, exist_ok=True)
+            safe_name = failure.name.replace("/", "-").replace(" ", "_")
+            ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+            fname = contradictions_dir / f"{ts}-{safe_name}.json"
+            payload = {
+                "pr": self.pr_number,
+                "repo": self.repo,
+                "sha": self.head_sha,
+                "check": {
+                    "name": failure.name,
+                    "conclusion": failure.conclusion,
+                    "status": failure.status,
+                    "url": failure.url,
+                    "source": failure.source,
+                },
+                "verdict_snapshot": verdict_snapshot,
+                "seconds_to_flip": seconds_to_flip,
+                "recorded_at": time.time(),
+            }
+            atomic_write(fname, json.dumps(payload, indent=2))
+        except OSError as e:
+            logger.warning(
+                f"PR #{self.pr_number}: contradiction record write failed ({e})"
+            )
 
     def _cleanup_underscore_gate_tests(self) -> None:
         """Phase 5: narrower cleanup for ``__gate_test_*`` /

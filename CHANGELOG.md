@@ -4,6 +4,73 @@ All notable changes to Gate are recorded here. The system follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) conventions
 and [Semantic Versioning](https://semver.org/).
 
+## [Unreleased] — gate-a-plus-polish-b
+
+State-history + external-check integration (second half of the A+
+polish plan; lands on top of `gate-a-plus-polish`).
+
+### Added
+
+- **Per-review state snapshots (PR B.1).** Every review now writes a
+  full archive to `state/<repo>/pr<N>/reviews/<ISO>-<sha>-<suffix>/`
+  (suffix = `pre-fix` or `post-fix`) in addition to the current-state
+  pointers. Each archive contains `verdict.json`, all per-stage JSON
+  (`build.json`, `triage.json`, `postconditions.json`,
+  `architecture.json`, `security.json`, `logic.json`), and a
+  `stage_log.json` summary capturing per-stage decisions, findings
+  counts, and metadata. Best-effort; a per-review archive failure
+  does not block the main state update.
+- **`gate inspect-pr --history` (PR B.1).** Lists the archived review
+  snapshots for a PR with `rich.Table`; `--raw` dumps JSON. Replaces
+  the previous limitation where only the most recent review was
+  inspectable.
+- **`gate prune --reviews older-than=<N>d|<N>h` (PR B.1).** Prune old
+  per-review archives without touching current-state pointers or
+  worktrees. Default recommendation: `30d` retention; longer for
+  compliance.
+- **`gate audit` command family (PR B.1 + B.2).**
+  - `gate audit retro-scan` — detects silent approvals (approved
+    verdicts whose archived `build.json` shows lint / test / typecheck
+    failure). Promoted from the ad-hoc `retro_scan()` helper so it's
+    discoverable from the CLI.
+  - `gate audit contradictions [--since 7d]` — lists post-hoc
+    external-check flips recorded by PR B.2's recheck thread. Filter
+    by age with `--since <N>d|<N>h`.
+- **`gate/external_checks.py` (PR B.2).** Platform-neutral integration
+  with GitHub's check-runs and statuses APIs. Queries both endpoints
+  and merges them (modern wins on name collision), normalises
+  conclusions, classifies required checks into
+  blocking / advisory / pending / failure buckets, and supports
+  cancel-aware `wait_for_pending()` with a bounded timeout.
+- **External-check pre-commit gate (PR B.2).** Between verdict and the
+  GitHub post, Gate consults `required_external_checks` from the repo
+  config. Blocking failures override `approve` with
+  `request_changes`; blocking pending waits up to
+  `external_check_wait_seconds` (default 600 s) then fail-closes.
+  Advisory failures do not block the verdict; the post-hoc recheck
+  thread is the mechanism that surfaces them (and any post-approval
+  flips of blocking checks).
+- **Post-hoc recheck thread (PR B.2).** On `approve` verdicts, a
+  daemon thread polls external checks every minute for
+  `external_check_recheck_minutes` (default 30 min). Any required
+  check (blocking or advisory) that flips to failure writes
+  `state/<repo>/pr<N>/contradictions/<ISO>-<check-name>.json`,
+  appends to `logs/alerts.jsonl`, and fires `notify.notify()`. We
+  cannot un-approve on GitHub, so the value is alerting and audit,
+  not retroactive correction.
+- **`docs/external-checks.md` (PR B.2).** How to configure required
+  checks for any GitHub-integrated CI provider, with example
+  `gate.toml` snippets for Vercel, Netlify, Render, GitHub Actions,
+  CircleCI, and Cloudflare Pages.
+
+### Changed
+
+- **`state.persist_review_state` signature (PR B.1).** Now takes an
+  optional `is_post_fix_rereview: bool` kwarg to tag archives
+  correctly. Callers that don't pass it default to `False`; the field
+  is only used for the archive suffix, so existing behaviour is
+  preserved.
+
 ## [Unreleased] — gate-a-plus-polish
 
 Four ergonomics + UX fixes pushing Gate from A- to A (first half of the

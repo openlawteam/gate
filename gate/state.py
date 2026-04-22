@@ -8,20 +8,42 @@ runs inside ``ReviewQueue``'s ``ThreadPoolExecutor``. The queue serialises
 work per PR, so a single PR's counters are never written concurrently. We
 therefore use atomic tmp+replace writes (safe against crashes) without
 file-locking coordination.
+
+Archive layout (PR B.1):
+
+``persist_review_state`` keeps writing the current-state pointers
+(``verdict.json``, ``build.json``, …) for backwards compatibility, and
+additionally snapshots each review into ``reviews/<ISO>-<short_sha>-<suffix>/``
+where ``suffix`` is ``pre-fix`` or ``post-fix``. This gives forensic
+immutability — post-fix re-reviews no longer clobber the pre-fix
+evidence. Consumers that need history iterate ``pr<N>/reviews/``;
+consumers that just want "the latest" keep reading the pointers.
 """
 
+import datetime as _dt
 import json
 import logging
 import shutil
 import subprocess
 import time
 from pathlib import Path
+from typing import Any
 
 from gate.config import repo_slug, state_dir
 from gate.finding_id import compute_finding_id
 from gate.io import atomic_write
 
 logger = logging.getLogger(__name__)
+
+# Stage files that get pointer-written + archived alongside verdict.json.
+_ARCHIVED_STAGE_FILES: tuple[str, ...] = (
+    "build.json",
+    "triage.json",
+    "postconditions.json",
+    "architecture.json",
+    "security.json",
+    "logic.json",
+)
 
 
 def get_pr_state_dir(pr_number: int, repo: str = "", create: bool = True) -> Path:
@@ -115,6 +137,69 @@ def load_prior_review(pr_number: int, workspace: Path, repo: str = "") -> dict:
     return result
 
 
+def _archive_dir_name(sha: str, is_post_fix_rereview: bool) -> str:
+    """Compose the per-review archive folder name.
+
+    ISO-8601 UTC timestamp (compact, sortable lexicographically) + a
+    short sha prefix + a pre-fix/post-fix suffix. Lexical sort over
+    the review archive is therefore chronological, which is what
+    ``gate inspect-pr --history`` and the retro-scan walk rely on.
+    """
+    ts = _dt.datetime.now(tz=_dt.UTC).strftime("%Y%m%dT%H%M%SZ")
+    short_sha = (sha or "0" * 8)[:8] or "unknown"
+    suffix = "post-fix" if is_post_fix_rereview else "pre-fix"
+    return f"{ts}-{short_sha}-{suffix}"
+
+
+def _write_stage_log(
+    archive_path: Path,
+    workspace: Path,
+    verdict: dict[str, Any],
+    sha: str,
+    decision: str | None,
+    is_post_fix_rereview: bool,
+) -> None:
+    """Write a stage_log.json summary for the archived review.
+
+    Captures which stages ran, their summary verdicts, elapsed time
+    (if the stage file carries one), and whether the stage was cached
+    / skipped. This gives ``gate audit retro-scan`` enough metadata to
+    detect silent approvals without re-reading every stage blob.
+    """
+    stages: dict[str, Any] = {}
+    for filename in _ARCHIVED_STAGE_FILES + ("verdict.json",):
+        src = workspace / filename
+        if not src.exists():
+            continue
+        try:
+            stage_doc = json.loads(src.read_text())
+        except (OSError, json.JSONDecodeError):
+            stages[filename] = {"error": "unreadable"}
+            continue
+        if not isinstance(stage_doc, dict):
+            stages[filename] = {"type": type(stage_doc).__name__}
+            continue
+        stages[filename] = {
+            "decision": stage_doc.get("decision"),
+            "verdict": stage_doc.get("verdict"),
+            "findings_count": len(stage_doc.get("findings") or []) or None,
+            "elapsed_s": stage_doc.get("elapsed_s") or stage_doc.get("elapsed"),
+            "cached": stage_doc.get("cached"),
+            "skipped": stage_doc.get("skipped"),
+            "pass": stage_doc.get("pass"),
+            "exit_code": stage_doc.get("exit_code"),
+        }
+    summary = {
+        "written_at": _dt.datetime.now(tz=_dt.UTC).isoformat(),
+        "sha": sha,
+        "decision": decision or verdict.get("decision"),
+        "is_post_fix_rereview": is_post_fix_rereview,
+        "findings_count": len(verdict.get("findings") or []),
+        "stages": stages,
+    }
+    atomic_write(archive_path / "stage_log.json", json.dumps(summary, indent=2))
+
+
 def persist_review_state(
     pr_number: int,
     sha: str,
@@ -122,11 +207,16 @@ def persist_review_state(
     decision: str | None = None,
     clone_path: str | Path | None = None,
     repo: str = "",
+    is_post_fix_rereview: bool = False,
 ) -> None:
     """Save review state after completion.
 
-    Ported from persist-review-state.js. Copies verdict/build/triage
-    to state dir and manages review_count with force-push detection.
+    Ported from persist-review-state.js. Writes current-state pointers
+    (``verdict.json``, ``build.json``, …) and — new in PR B.1 — also
+    archives the full review into
+    ``pr<N>/reviews/<ISO>-<short_sha>-<suffix>/`` so post-fix
+    re-reviews no longer clobber the pre-fix evidence. Manages
+    ``review_count`` with force-push detection.
     """
     pr_state_dir = get_pr_state_dir(pr_number, repo)
     verdict_path = workspace / "verdict.json"
@@ -139,17 +229,39 @@ def persist_review_state(
 
     atomic_write(pr_state_dir / "verdict.json", json.dumps(verdict, indent=2))
 
-    ancillary = (
-        "build.json", "triage.json", "postconditions.json",
-        "architecture.json", "security.json", "logic.json",
-    )
-    for filename in ancillary:
+    for filename in _ARCHIVED_STAGE_FILES:
         src = workspace / filename
         if src.exists():
             try:
                 atomic_write(pr_state_dir / filename, src.read_text())
             except OSError:
                 pass
+
+    # Per-review archive (PR B.1). Best-effort — a failure here must
+    # never block the current-state pointer writes above, because those
+    # pointers are what live consumers (fixer, github renderer) read.
+    try:
+        reviews_root = pr_state_dir / "reviews"
+        reviews_root.mkdir(parents=True, exist_ok=True)
+        archive_name = _archive_dir_name(sha, is_post_fix_rereview)
+        archive_path = reviews_root / archive_name
+        archive_path.mkdir(parents=True, exist_ok=True)
+        atomic_write(archive_path / "verdict.json", json.dumps(verdict, indent=2))
+        for filename in _ARCHIVED_STAGE_FILES:
+            src = workspace / filename
+            if src.exists():
+                try:
+                    atomic_write(archive_path / filename, src.read_text())
+                except OSError:
+                    pass
+        _write_stage_log(
+            archive_path, workspace, verdict, sha, decision, is_post_fix_rereview,
+        )
+    except OSError as e:
+        logger.warning(
+            f"PR #{pr_number}: per-review archive failed ({e}); "
+            "current-state pointers still written."
+        )
 
     last_sha = ""
     sha_path = pr_state_dir / "last_sha.txt"
@@ -211,6 +323,88 @@ def cleanup_pr_state(pr_number: int, repo: str = "") -> None:
     if pr_dir.exists():
         shutil.rmtree(pr_dir, ignore_errors=True)
         logger.info(f"Cleaned up state for PR #{pr_number}")
+
+
+# ── Review archive helpers (PR B.1) ──────────────────────────
+
+
+def list_review_archives(pr_number: int, repo: str = "") -> list[dict[str, Any]]:
+    """Return archived-review metadata for a PR, oldest first.
+
+    Each entry carries ``path`` (the archive dir), ``name`` (its basename
+    — an ISO-ish sortable string so simple lexical ordering matches
+    chronology), ``timestamp`` / ``sha`` / ``suffix`` parsed out of the
+    name, and — when readable — the ``stage_log.json`` summary.
+    """
+    pr_state_dir = get_pr_state_dir(pr_number, repo, create=False)
+    reviews_root = pr_state_dir / "reviews"
+    if not reviews_root.exists():
+        return []
+    archives: list[dict[str, Any]] = []
+    for child in sorted(reviews_root.iterdir()):
+        if not child.is_dir():
+            continue
+        parts = child.name.split("-", 2)
+        timestamp = parts[0] if parts else ""
+        sha = parts[1] if len(parts) > 1 else ""
+        suffix = parts[2] if len(parts) > 2 else ""
+        summary: dict[str, Any] | None = None
+        stage_log = child / "stage_log.json"
+        if stage_log.exists():
+            try:
+                summary = json.loads(stage_log.read_text())
+            except (OSError, json.JSONDecodeError):
+                summary = None
+        archives.append({
+            "name": child.name,
+            "path": child,
+            "timestamp": timestamp,
+            "sha": sha,
+            "suffix": suffix,
+            "summary": summary,
+        })
+    return archives
+
+
+def prune_review_archives(
+    older_than_seconds: float,
+    pr_number: int | None = None,
+    repo: str = "",
+) -> int:
+    """Delete per-review archive directories older than ``older_than_seconds``.
+
+    When ``pr_number`` is given (and ``repo`` if applicable) only that
+    PR's archives are scanned; otherwise the entire state tree is
+    walked under the configured state root. Returns the number of
+    archive directories removed. Used by ``gate prune --reviews``.
+    """
+    cutoff = time.time() - older_than_seconds
+    removed = 0
+    targets: list[Path] = []
+    root = state_dir()
+    if pr_number is not None:
+        targets.append(get_pr_state_dir(pr_number, repo, create=False) / "reviews")
+    else:
+        for pr_dir in root.rglob("pr*/reviews"):
+            targets.append(pr_dir)
+
+    for reviews_root in targets:
+        if not reviews_root.exists():
+            continue
+        for child in reviews_root.iterdir():
+            if not child.is_dir():
+                continue
+            try:
+                mtime = child.stat().st_mtime
+            except OSError:
+                continue
+            if mtime < cutoff:
+                try:
+                    shutil.rmtree(child, ignore_errors=True)
+                    removed += 1
+                except OSError:
+                    pass
+    return removed
 
 
 # ── Fix Attempt Tracking ─────────────────────────────────────

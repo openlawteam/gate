@@ -211,3 +211,90 @@ class TestPersistReviewStateRobustness:
                                  clone_path="/pruned/path")
         # Force-push branch fires because is_ancestor stays False
         assert (tmp_path / "pr42" / "review_count.txt").read_text() == "1"
+
+
+class TestReviewArchive:
+    """PR B.1: per-review archive under reviews/<ISO>-<sha>-<suffix>/."""
+
+    def test_archive_written_alongside_pointers(self, tmp_path, tmp_workspace):
+        import time as _time
+
+        from gate.state import list_review_archives
+
+        verdict = {"decision": "approve", "findings": []}
+        (tmp_workspace / "verdict.json").write_text(json.dumps(verdict))
+        (tmp_workspace / "build.json").write_text(json.dumps({"lint": {"pass": True}}))
+
+        with patch("gate.state.state_dir", lambda: tmp_path):
+            persist_review_state(42, "abc12345deadbeef", tmp_workspace)
+
+            # Current-state pointers still present (backwards-compat).
+            assert (tmp_path / "pr42" / "verdict.json").exists()
+            assert (tmp_path / "pr42" / "build.json").exists()
+
+            archives = list_review_archives(42)
+            assert len(archives) == 1
+            first = archives[0]
+            assert first["suffix"] == "pre-fix"
+            assert first["sha"] == "abc12345"
+            assert first["path"].exists()
+            # Archive copy of verdict.json + stage_log.json are there.
+            assert (first["path"] / "verdict.json").exists()
+            stage_log = json.loads((first["path"] / "stage_log.json").read_text())
+            assert stage_log["decision"] == "approve"
+            assert stage_log["is_post_fix_rereview"] is False
+
+        # Two persists in quick succession still produce two archives
+        # (name collision avoided even if timestamp resolution is low).
+        _time.sleep(1.1)  # ensure distinct second in the ISO stamp
+        with patch("gate.state.state_dir", lambda: tmp_path):
+            persist_review_state(42, "abc12345deadbeef", tmp_workspace,
+                                 is_post_fix_rereview=True)
+            archives = list_review_archives(42)
+            assert len(archives) == 2
+            # Sorted oldest-first by archive name.
+            assert archives[0]["suffix"] == "pre-fix"
+            assert archives[1]["suffix"] == "post-fix"
+
+    def test_archive_survives_when_pointer_layout_old(self, tmp_path, tmp_workspace):
+        """``reviews/`` is created lazily on first persist; repos that
+        predate PR B.1 should not show phantom archives."""
+        from gate.state import list_review_archives
+
+        with patch("gate.state.state_dir", lambda: tmp_path):
+            (tmp_path / "pr77").mkdir(parents=True)
+            (tmp_path / "pr77" / "verdict.json").write_text("{}")
+            archives = list_review_archives(77)
+            assert archives == []
+
+    def test_prune_review_archives(self, tmp_path, tmp_workspace):
+        import os as _os
+
+        from gate.state import list_review_archives, prune_review_archives
+
+        verdict = {"decision": "approve_with_notes", "findings": []}
+        (tmp_workspace / "verdict.json").write_text(json.dumps(verdict))
+
+        with patch("gate.state.state_dir", lambda: tmp_path):
+            persist_review_state(42, "shafreshy1", tmp_workspace)
+            archives = list_review_archives(42)
+            assert len(archives) == 1
+            # Backdate the archive 40 days.
+            old_time = archives[0]["path"].stat().st_mtime - 40 * 86400
+            _os.utime(archives[0]["path"], (old_time, old_time))
+
+            removed = prune_review_archives(older_than_seconds=30 * 86400)
+            assert removed == 1
+            assert list_review_archives(42) == []
+
+    def test_prune_keeps_recent(self, tmp_path, tmp_workspace):
+        from gate.state import list_review_archives, prune_review_archives
+
+        verdict = {"decision": "approve", "findings": []}
+        (tmp_workspace / "verdict.json").write_text(json.dumps(verdict))
+
+        with patch("gate.state.state_dir", lambda: tmp_path):
+            persist_review_state(42, "recentsha", tmp_workspace)
+            removed = prune_review_archives(older_than_seconds=30 * 86400)
+            assert removed == 0
+            assert len(list_review_archives(42)) == 1

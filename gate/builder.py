@@ -156,14 +156,7 @@ def compile_build(
         lint = _parse_generic(lint_log, lint_exit)
         test = _parse_generic_test(test_log, test_exit)
 
-    # Uniform parse-failure detection.
-    #
-    # PR #223 post-mortem: a non-zero exit with zero parsed findings is
-    # ambiguous (could be tooling crash, timeout, parser gap, unknown output
-    # format) and the verdict agent was observed to rationalise it as a
-    # "tooling anomaly" and approve. Flag these cases explicitly here — for
-    # every stage uniformly — so downstream consumers (blocking_issues,
-    # verdict prompt, future parsers) can't silently dismiss them.
+    # Flag non-zero exit with zero parsed findings as an opaque build failure.
     for name, result, count_keys in [
         ("typecheck", tc, ["error_count"]),
         ("lint", lint, ["error_count", "warning_count"]),
@@ -232,9 +225,7 @@ def compile_build(
             "tool": typecheck_tool,
             "exit_code": tc.get("exit_code"),
             "parse_failure": tc.get("parse_failure", False),
-            # Truncated raw log so post-hoc audits (e.g. "why did the parser
-            # miss these?") are possible without re-running the build. Bounded
-            # to 2000 chars per stage by each parser's `output` slice.
+            # Last 2000 chars of raw output, bounded per parser, for forensic audits.
             "raw_output_tail": tc.get("output", ""),
         },
         "lint": {
@@ -290,25 +281,14 @@ def _parse_tsc(log: str, exit_code: int) -> dict:
 
 
 def _parse_lint(log: str, exit_code: int) -> dict:
-    """Parse ESLint output. Ported from parseLint().
-
-    Handles both:
-    - Stylish ESLint format (``eslint .``): file path on its own line,
-      followed by indented ``LINE:COL  severity  message  rule-id`` lines.
-    - Next.js wrapped format (``next lint``): file paths may be prefixed
-      with ``./`` and severities may appear as ``Error:`` / ``Warning:``
-      (capitalised with trailing colon).
-
-    Severity matching is case-insensitive so ``ERROR``, ``Error`` and
-    ``error`` all parse to ``severity="error"``.
-    """
+    """Parse ESLint output (stylish and next-lint formats, case-insensitive severity)."""
     warnings = []
     errors = []
     current_file = None
     for line in log.split("\n"):
         # Accept optional ./ prefix (next lint) and mjs/cjs extensions.
         file_match = re.match(
-            r"^\.?/?([^\s].*\.(?:ts|tsx|js|jsx|mjs|cjs))$", line
+            r"^(?:\./)?([^\s].*\.(?:ts|tsx|js|jsx|mjs|cjs))$", line
         )
         if file_match:
             current_file = file_match.group(1)

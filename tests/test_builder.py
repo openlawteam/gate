@@ -405,6 +405,15 @@ class TestParseLintDefenseInDepth:
         assert result["errors"][0]["severity"] == "error"
         assert result["errors"][0]["file"] == "src/app/page.tsx"
 
+    def test_absolute_path_preserved(self):
+        log = (
+            "/private/tmp/proj/src/foo.tsx\n"
+            "  3:1  error  boom  no-boom\n"
+        )
+        result = _parse_lint(log, 1)
+        assert result["error_count"] == 1
+        assert result["errors"][0]["file"] == "/private/tmp/proj/src/foo.tsx"
+
     def test_capitalised_warning_with_colon(self):
         log = (
             "./pkg/util.ts\n"

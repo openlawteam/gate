@@ -296,6 +296,186 @@ def validate_introduced_by_pr(
     return findings
 
 
+_DEDUP_COORD_RE = re.compile(r"[:\s]*(line\s*)?\d+[:\s]*", re.IGNORECASE)
+_DEDUP_KEY_MESSAGE_CHARS = 80
+_SEVERITY_RANK_FOR_DEDUP = {"info": 0, "warning": 1, "error": 2, "critical": 3}
+
+
+def _normalise_dedup_message(message: str) -> str:
+    """Normalise a finding message for dedup keying.
+
+    Strips embedded line-number coordinates so the same rule violation
+    at `file:159` and `file:235` produces the same key. First
+    ``_DEDUP_KEY_MESSAGE_CHARS`` characters after coord-strip become
+    the key so findings with identical prefixes but different suffixes
+    (e.g. "Missing null check on user" vs "Missing null check on order")
+    stay distinct.
+    """
+    if not message:
+        return ""
+    stripped = _DEDUP_COORD_RE.sub(" ", message.lower())
+    collapsed = re.sub(r"\s+", " ", stripped).strip()
+    return collapsed[:_DEDUP_KEY_MESSAGE_CHARS]
+
+
+def _dedupe_findings(findings: list) -> list:
+    """Collapse findings that describe one logical issue at multiple sites.
+
+    Key: ``(source_stage, rule_source-or-category, normalised_message)``.
+    Merge result: a single finding dict with
+
+    - ``locations`` — list of ``{file, line, column}`` sorted by
+      ``(file, line, column)`` ascending, deduped-by-coord so identical
+      sites don't appear twice.
+    - top-level ``file``/``line``/``column`` set from ``locations[0]``
+      so every existing consumer (``_format_findings``,
+      ``compute_finding_id``, ``fixer.py`` classifiers) keeps working
+      without a branch.
+    - highest severity across the merged inputs.
+    - first-seen (post-sort) ``message`` / ``suggestion`` / ``rule_source``
+      so renderers see a stable representative string.
+
+    No-op for inputs that aren't lists, or lists shorter than 2, or
+    when no two findings share a key.
+
+    Runs BEFORE ``compute_finding_id`` stamping in the orchestrator so
+    finding_ids are computed on the canonical representative — the hash
+    scheme stays unchanged and cross-review matching continues to work.
+    """
+    if not isinstance(findings, list) or not findings:
+        return findings
+
+    # Group by dedup key while preserving first-encounter ordering so
+    # the output list is deterministic.
+    buckets: dict[tuple[str, str, str], list[dict]] = {}
+    bucket_order: list[tuple[str, str, str]] = []
+    passthrough: list[dict] = []  # non-dict entries stay where they are
+
+    for f in findings:
+        if not isinstance(f, dict):
+            passthrough.append(f)
+            continue
+        stage = str(f.get("source_stage") or "")
+        rule = str(f.get("rule_source") or f.get("category") or "")
+        msg = _normalise_dedup_message(str(f.get("message") or ""))
+        if not msg:
+            # Findings without a message can't be meaningfully deduped;
+            # pass them through unchanged so they're still surfaced.
+            passthrough.append(f)
+            continue
+        key = (stage, rule, msg)
+        if key not in buckets:
+            buckets[key] = []
+            bucket_order.append(key)
+        buckets[key].append(f)
+
+    out: list = []
+    for key in bucket_order:
+        group = buckets[key]
+        if len(group) == 1:
+            # Single-occurrence findings get a ``locations`` array too
+            # so downstream consumers can iterate uniformly. Skip when
+            # the finding already carries one (pre-deduped upstream).
+            f = dict(group[0])
+            if "locations" not in f or not isinstance(f.get("locations"), list):
+                loc: dict = {}
+                if f.get("file"):
+                    loc["file"] = f.get("file")
+                if f.get("line") is not None:
+                    loc["line"] = f.get("line")
+                if f.get("column") is not None:
+                    loc["column"] = f.get("column")
+                if loc:
+                    f["locations"] = [loc]
+            out.append(f)
+            continue
+
+        # Merge.
+        merged: dict = dict(group[0])
+        # Gather all locations across the group, deduped by coord.
+        seen_coords: set = set()
+        locations: list[dict] = []
+        for src in group:
+            # A finding may carry a pre-existing ``locations`` array; if
+            # so, expand it (important for upstream-already-deduped
+            # inputs coming through a re-review).
+            pre = src.get("locations") if isinstance(src.get("locations"), list) else None
+            if pre:
+                candidates = [
+                    loc for loc in pre if isinstance(loc, dict) and loc.get("file")
+                ]
+            else:
+                loc = {}
+                if src.get("file"):
+                    loc["file"] = src.get("file")
+                if src.get("line") is not None:
+                    loc["line"] = src.get("line")
+                if src.get("column") is not None:
+                    loc["column"] = src.get("column")
+                candidates = [loc] if loc else []
+            for loc in candidates:
+                coord = (
+                    str(loc.get("file") or ""),
+                    int(loc["line"]) if isinstance(loc.get("line"), int) else -1,
+                    int(loc["column"]) if isinstance(loc.get("column"), int) else -1,
+                )
+                if coord in seen_coords:
+                    continue
+                seen_coords.add(coord)
+                # Normalise: coerce stringy ints where possible.
+                normalised = {"file": str(loc.get("file") or "")}
+                if isinstance(loc.get("line"), int):
+                    normalised["line"] = loc["line"]
+                if isinstance(loc.get("column"), int):
+                    normalised["column"] = loc["column"]
+                locations.append(normalised)
+
+        # Stable sort: (file, line, column) ascending. ``None`` sort key
+        # stabilised by substituting -1.
+        locations.sort(
+            key=lambda loc: (
+                loc.get("file", ""),
+                loc.get("line") if isinstance(loc.get("line"), int) else -1,
+                loc.get("column") if isinstance(loc.get("column"), int) else -1,
+            )
+        )
+
+        # Pick worst severity across the group.
+        worst_sev = merged.get("severity") or "info"
+        worst_rank = _SEVERITY_RANK_FOR_DEDUP.get(str(worst_sev).lower(), 0)
+        for src in group[1:]:
+            sev = str(src.get("severity") or "info").lower()
+            rank = _SEVERITY_RANK_FOR_DEDUP.get(sev, 0)
+            if rank > worst_rank:
+                worst_rank = rank
+                worst_sev = src.get("severity")
+        merged["severity"] = worst_sev
+
+        # Set top-level file/line/column from primary_location (first
+        # sorted entry) so legacy consumers keep working.
+        if locations:
+            primary = locations[0]
+            merged["file"] = primary.get("file", merged.get("file"))
+            if primary.get("line") is not None:
+                merged["line"] = primary["line"]
+            elif "line" in merged:
+                # Explicit top-level line no longer meaningful after
+                # coord dedup — clear it so renderers don't claim a
+                # single line for a multi-site finding.
+                merged.pop("line", None)
+            if primary.get("column") is not None:
+                merged["column"] = primary["column"]
+            elif "column" in merged:
+                merged.pop("column", None)
+
+        merged["locations"] = locations
+        # Annotate for forensic / debug visibility.
+        merged["_deduped_from"] = len(group)
+        out.append(merged)
+
+    return out + passthrough
+
+
 def enforce_exploit_scenario(parsed: dict) -> None:
     """Downgrade critical/high findings without exploit scenarios.
 

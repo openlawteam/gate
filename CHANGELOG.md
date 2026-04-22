@@ -4,6 +4,60 @@ All notable changes to Gate are recorded here. The system follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) conventions
 and [Semantic Versioning](https://semver.org/).
 
+## [Unreleased] — gate-a-plus-polish
+
+Four ergonomics + UX fixes pushing Gate from A- to A (first half of the
+A+ polish plan; state-history + external-check integration land in a
+follow-up PR).
+
+### Added
+
+- **`Finding` dataclass (PR A.1).** `gate.schemas.Finding` +
+  `FindingLocation` formalise the canonical review-finding shape with
+  `severity` / `file` / `message` required and everything else
+  optional. `Finding.from_dict(raw)` validates and preserves unknown
+  keys in an `extra` bucket so future stage additions round-trip
+  without being dropped. Non-breaking: emitters are unchanged;
+  renderers (`github._format_findings`, `fixer_polish`, `gate
+  inspect-pr`) route through the dataclass.
+- **`gate inspect-pr <N>` CLI (PR A.1).** Pretty-prints persisted
+  review state for a PR using `rich.Table`; `--raw` dumps JSON;
+  `--stage` filters to one stage. This is the command to reach for
+  during post-mortems instead of ad-hoc `python -c 'json.load(...)'`.
+- **`docs/finding-schema.md` (PR A.1).** Documents the canonical
+  finding shape and the per-stage emitter contract.
+- **Finding deduplication (PR A.2).** `extract._dedupe_findings`
+  collapses findings with the same
+  `(source_stage, rule_source-or-category, normalised_message)` into a
+  single finding with a `locations` array. Polish loop runs once per
+  finding class instead of once per site. Dedup runs BEFORE
+  `compute_finding_id` stamping so the existing hash scheme stays
+  stable across reviews.
+- **`gate health --since-restart` (PR A.4).** Shows how long any
+  latched `quota_auth` auth-drift alert has been unresolved.
+
+### Changed
+
+- **`gate status` always prints a Health section (PR A.4).** Previously
+  the empty-dict guard hid silent degradations. Now health is computed
+  in-process via `run_health_check()` (same path as `gate health`) and
+  a latched `quota_auth` drift surfaces as a dedicated top-line `⛔`
+  alert. Root cause was the server-side health cache never being
+  populated; switching `cmd_status` to the in-process call bypasses
+  the dead cache entirely.
+- **`_format_findings` (github comments) renders multi-location
+  findings with an "Also at:" list (PR A.2)** and surfaces malformed
+  findings (missing required fields) in a dedicated "Malformed
+  findings" section instead of silently dropping them.
+
+### Fixed
+
+- **Dev-install flow (PR A.3).** `pip install -e .` (no `[dev]` extra)
+  now raises a loud, actionable error at test-collection time via
+  `tests/conftest.py` instead of producing 25 opaque async-test
+  failures. README Development section documents the correct install
+  command.
+
 ## [Unreleased] — gate-system-hardening
 
 Comprehensive hardening pass addressing failure modes observed on a

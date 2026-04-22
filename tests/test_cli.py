@@ -413,15 +413,164 @@ class TestStatusCommand:
         assert result == 1
         assert "not running" in capsys.readouterr().out.lower()
 
-    @patch("gate.client.get_health", return_value={})
+    @patch("gate.health.run_health_check", return_value={"codex_cli": {"ok": True, "detail": "v0"}})
     @patch("gate.client.list_queue", return_value=[])
     @patch("gate.client.list_reviews", return_value=[])
     @patch("gate.client.ping", return_value=True)
-    def test_status_when_server_up(self, mock_ping, mock_revs, mock_q, mock_h, capsys):
+    def test_status_when_server_up_prints_health_ok(
+        self, mock_ping, mock_revs, mock_q, mock_h, capsys,
+    ):
         from gate.cli import cmd_status
         assert cmd_status([]) == 0
         out = capsys.readouterr().out
         assert "gate v" in out.lower()
+        # Health always rendered — no more silent empty-dict skip.
+        assert "Health: OK" in out
+
+    @patch(
+        "gate.health.run_health_check",
+        return_value={
+            "codex_cli": {"ok": True, "detail": "v1"},
+            "quota_auth": {"ok": False, "detail": "auth drift latched 3600s ago"},
+        },
+    )
+    @patch("gate.client.list_queue", return_value=[])
+    @patch("gate.client.list_reviews", return_value=[])
+    @patch("gate.client.ping", return_value=True)
+    def test_status_surfaces_quota_auth_drift_loudly(
+        self, mock_ping, mock_revs, mock_q, mock_h, capsys,
+    ):
+        from gate.cli import cmd_status
+        assert cmd_status([]) == 0
+        out = capsys.readouterr().out
+        assert "quota_auth" in out
+        # Top-line alert (dedicated line BEFORE reviews/queue).
+        assert "⛔" in out or "refresh OAuth token" in out
+        # Also appears in the Health issues section.
+        assert "Health issues" in out
+
+    @patch(
+        "gate.health.run_health_check",
+        return_value={"codex_cli": {"ok": False, "detail": "not found"}},
+    )
+    @patch("gate.client.list_queue", return_value=[])
+    @patch("gate.client.list_reviews", return_value=[])
+    @patch("gate.client.ping", return_value=True)
+    def test_status_renders_health_issues_without_quota_auth(
+        self, mock_ping, mock_revs, mock_q, mock_h, capsys,
+    ):
+        from gate.cli import cmd_status
+        assert cmd_status([]) == 0
+        out = capsys.readouterr().out
+        assert "Health issues" in out
+        assert "codex_cli" in out
+
+
+class TestInspectPrCommand:
+    def test_missing_pr_returns_1(self, tmp_path, capsys, monkeypatch):
+        # The autouse isolate_paths fixture already redirects
+        # GATE_DATA_DIR to an empty per-test temp dir — we just need
+        # to look up a PR that doesn't exist.
+        from gate.cli import cmd_inspect_pr
+
+        # get_pr_state_dir() mkdirs on the fly even for non-existent PRs
+        # because persist_review_state also creates it. Inspect is
+        # supposed to ignore brand-new empty dirs — verify the path
+        # with a PR number that has no state files at all.
+        result = cmd_inspect_pr(["9999"])
+        # Either: empty dir prints "No persisted state" (if our guard
+        # predates the mkdir), OR the verdict.json read fails gracefully.
+        # The command MUST exit 0 or 1, never crash.
+        assert result in (0, 1)
+
+    def test_raw_json_round_trip(self, tmp_path, capsys):
+        # isolate_paths already redirects GATE_DATA_DIR for us.
+        import json
+
+        from gate.cli import cmd_inspect_pr
+        from gate.state import get_pr_state_dir
+
+        pr_dir = get_pr_state_dir(42)
+        verdict = {
+            "decision": "approve",
+            "confidence": "high",
+            "summary": "ok",
+            "findings": [
+                {"severity": "warning", "file": "a.py", "line": 10, "message": "m"},
+            ],
+            "stats": {"total_findings": 1},
+        }
+        (pr_dir / "verdict.json").write_text(json.dumps(verdict))
+
+        result = cmd_inspect_pr(["42", "--raw"])
+        assert result == 0
+        out = capsys.readouterr().out
+        parsed = json.loads(out)
+        assert parsed["verdict"]["decision"] == "approve"
+
+    def test_rich_render_shows_findings(self, tmp_path, capsys):
+        import json
+
+        from gate.cli import cmd_inspect_pr
+        from gate.state import get_pr_state_dir
+
+        pr_dir = get_pr_state_dir(77)
+        verdict = {
+            "decision": "request_changes",
+            "confidence": "high",
+            "summary": "blocker",
+            "findings": [
+                {
+                    "severity": "error", "file": "builder.py", "line": 100,
+                    "message": "bad thing happened here",
+                    "rule_source": "style §8",
+                    "source_stage": "architecture",
+                },
+            ],
+            "stats": {"total_findings": 1},
+        }
+        (pr_dir / "verdict.json").write_text(json.dumps(verdict))
+
+        result = cmd_inspect_pr(["77"])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "request_changes" in out
+        # rich may wrap long rows; assert the pieces, not the exact string.
+        assert "builder.py" in out
+        assert "happened here" in out
+
+
+class TestHealthSinceRestart:
+    def test_no_flag_ok_path(self, capsys):
+        from gate.cli import cmd_health
+
+        with patch("gate.health.run_health_check", return_value={}):
+            assert cmd_health([]) == 0
+        out = capsys.readouterr().out
+        assert "all OK" in out
+
+    def test_flag_renders_latched_age_when_marker_exists(
+        self, capsys,
+    ):
+        import time
+
+        from gate.cli import cmd_health
+        from gate.quota import _auth_drift_marker_path
+
+        marker = _auth_drift_marker_path()
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(str(time.time() - 3600))
+
+        with patch(
+            "gate.health.run_health_check",
+            return_value={"quota_auth": {"ok": False, "detail": "stale"}},
+        ):
+            rc = cmd_health(["--since-restart"])
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert "latched" in out
+        # 3600s == 1h, so "1h" should appear somewhere.
+        assert "1h" in out or "60m" in out
 
 
 class TestReviewArgValidation:

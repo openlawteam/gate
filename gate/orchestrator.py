@@ -528,6 +528,18 @@ class ReviewOrchestrator:
             elapsed = int(time.monotonic() - self.start_time)
             verdict.data["review_time_seconds"] = elapsed
 
+            # Collapse findings that describe one logical issue at
+            # multiple sites (PR A.2). Runs BEFORE finding_id stamping
+            # so the hash is computed on the canonical representative
+            # (primary location), preserving the existing
+            # (file, line, source_stage, message) hash scheme — critical
+            # for cross-review matching in post-fix re-reviews.
+            from gate.extract import _dedupe_findings
+            if isinstance(verdict.data.get("findings"), list):
+                verdict.data["findings"] = _dedupe_findings(
+                    verdict.data["findings"]
+                )
+
             # Stamp stable finding_ids on every finding BEFORE we persist
             # verdict.json. Without this, the ROI diff in post-fix
             # re-reviews can't match prior→current findings

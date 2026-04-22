@@ -59,6 +59,43 @@ class TestFormatFindings:
         result = _format_findings(findings)
         assert "test confirmed" in result
 
+    def test_deduped_multi_location_finding_renders_also_at(self):
+        findings = [
+            {
+                "severity": "warning",
+                "file": "a.py",
+                "line": 10,
+                "message": "Multi-line comment block",
+                "locations": [
+                    {"file": "a.py", "line": 10},
+                    {"file": "a.py", "line": 50},
+                    {"file": "b.py", "line": 5},
+                ],
+            },
+        ]
+        result = _format_findings(findings)
+        assert "a.py:10" in result
+        assert "Also at:" in result
+        assert "`a.py:50`" in result
+        assert "`b.py:5`" in result
+
+    def test_malformed_finding_surfaces_in_dedicated_section(self):
+        # Missing `message` — must NOT be silently dropped. A
+        # "Malformed findings" section flags emitter drift so the
+        # reviewer sees something is wrong at comment render time.
+        findings = [
+            {"severity": "error", "file": "a.py"},
+            {"severity": "warning", "file": "b.py", "message": "ok warning"},
+        ]
+        result = _format_findings(findings)
+        assert "Malformed findings" in result
+        assert "### Warnings" in result  # good one still rendered
+
+    def test_missing_severity_is_malformed_not_dropped(self):
+        findings = [{"file": "a.py", "message": "I forgot severity"}]
+        result = _format_findings(findings)
+        assert "Malformed findings" in result
+
 
 class TestFormatResolved:
     def test_empty_resolved(self):

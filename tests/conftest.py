@@ -22,6 +22,21 @@ shipped prompt parses), request the ``real_gate_dir`` fixture.
 
 import shutil
 
+# Dev-dependency guard (PR A.3). ``pip install -e .`` (no extras) leaves
+# ``pytest-asyncio`` uninstalled, which then manifests as 25 opaque
+# collection failures in test_tui.py. Detect the missing dep at
+# collection time and fail loud with the correct install command so
+# the next operator doesn't chase the same red herring I did.
+try:
+    import pytest_asyncio  # noqa: F401
+except ImportError as _e:  # pragma: no cover - depends on install mode
+    raise ImportError(
+        "Missing test dependency 'pytest-asyncio'. Install dev dependencies "
+        "with:  pip install -e '.[dev]'  "
+        "(a bare `pip install -e .` omits the `[dev]` extra and is NOT enough "
+        "to run Gate's test suite.)"
+    ) from _e
+
 import pytest
 
 import gate.config

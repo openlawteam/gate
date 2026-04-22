@@ -24,14 +24,21 @@ from gate.io import atomic_write
 logger = logging.getLogger(__name__)
 
 
-def get_pr_state_dir(pr_number: int, repo: str = "") -> Path:
-    """Get (and create) the per-PR state directory."""
+def get_pr_state_dir(pr_number: int, repo: str = "", create: bool = True) -> Path:
+    """Get the per-PR state directory.
+
+    When ``create`` is True (default) the directory (and any missing parents)
+    is created. Pass ``create=False`` for read-only callers such as
+    ``gate inspect-pr`` that must not leave a ghost dir behind for PRs Gate
+    never processed.
+    """
     root = state_dir()
     if repo:
         d = root / repo_slug(repo) / f"pr{pr_number}"
     else:
         d = root / f"pr{pr_number}"
-    d.mkdir(parents=True, exist_ok=True)
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
     return d
 
 

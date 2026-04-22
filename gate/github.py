@@ -232,50 +232,85 @@ def remove_label(repo: str, pr_number: int, label: str) -> None:
 def _format_findings(findings: list[dict]) -> str:
     """Format findings into markdown sections.
 
-    Ported from formatFindings() in post-review.js.
+    Ported from formatFindings() in post-review.js. Routes raw dicts
+    through :class:`gate.schemas.Finding` so emitter drift (e.g. a
+    stage forgetting ``severity``) raises at render time rather than
+    silently dropping the finding from the comment. Findings that fail
+    validation are rendered under a ``Malformed`` section so the
+    problem is visible in the PR comment rather than hidden.
     """
+    from gate.schemas import Finding
+
     if not findings:
         return ""
 
-    errors = [f for f in findings if f.get("severity") in ("critical", "error")]
-    warnings = [f for f in findings if f.get("severity") == "warning"]
-    infos = [f for f in findings if f.get("severity") == "info"]
+    parsed: list[Finding] = []
+    malformed: list[tuple[dict, str]] = []
+    for raw in findings:
+        try:
+            parsed.append(Finding.from_dict(raw))
+        except (ValueError, TypeError) as e:
+            malformed.append((raw if isinstance(raw, dict) else {}, str(e)))
+
+    errors = [f for f in parsed if f.severity in ("critical", "error")]
+    warnings = [f for f in parsed if f.severity == "warning"]
+    infos = [f for f in parsed if f.severity == "info"]
 
     md = ""
+
+    def _loc_label(loc) -> str:
+        label = loc.file or "?"
+        if loc.line:
+            label += f":{loc.line}"
+        return label
+
+    def _render_with_suggestion(finding: Finding, include_evidence: bool) -> str:
+        ev = ""
+        if include_evidence and finding.evidence_level:
+            label = EVIDENCE_LABELS.get(finding.evidence_level, finding.evidence_level)
+            ev = f" ({label})"
+        locs = finding.iter_locations()
+        primary = locs[0]
+        out = f"- **{_loc_label(primary)}**{ev} — {finding.message}"
+        if len(locs) > 1:
+            also = ", ".join(f"`{_loc_label(loc)}`" for loc in locs[1:])
+            out += f"\n  > Also at: {also}"
+        if finding.suggestion:
+            out += f"\n  > Fix: {finding.suggestion}"
+        return out + "\n"
 
     if errors:
         md += "\n### Errors\n\n"
         for f in errors:
-            ev_key = f.get("evidence_level", "")
-            ev = f" ({EVIDENCE_LABELS.get(ev_key, ev_key)})" if ev_key else ""
-            loc = f"{f.get('file', '?')}"
-            if f.get("line"):
-                loc += f":{f['line']}"
-            md += f"- **{loc}**{ev} — {f.get('message', '')}"
-            if f.get("suggestion"):
-                md += f"\n  > Fix: {f['suggestion']}"
-            md += "\n"
+            md += _render_with_suggestion(f, include_evidence=True)
 
     if warnings:
         md += "\n### Warnings\n\n"
         for f in warnings:
-            ev_key = f.get("evidence_level", "")
-            ev = f" ({EVIDENCE_LABELS.get(ev_key, ev_key)})" if ev_key else ""
-            loc = f"{f.get('file', '?')}"
-            if f.get("line"):
-                loc += f":{f['line']}"
-            md += f"- **{loc}**{ev} — {f.get('message', '')}"
-            if f.get("suggestion"):
-                md += f"\n  > Fix: {f['suggestion']}"
-            md += "\n"
+            md += _render_with_suggestion(f, include_evidence=True)
 
     if infos:
         md += "\n### Notes\n\n"
         for f in infos:
-            loc = f"{f.get('file', '?')}"
-            if f.get("line"):
-                loc += f":{f['line']}"
-            md += f"- **{loc}** — {f.get('message', '')}\n"
+            locs = f.iter_locations()
+            primary = locs[0]
+            md += f"- **{_loc_label(primary)}** — {f.message}"
+            if len(locs) > 1:
+                md += (
+                    "\n  > Also at: "
+                    + ", ".join(f"`{_loc_label(loc)}`" for loc in locs[1:])
+                )
+            md += "\n"
+
+    if malformed:
+        md += "\n### Malformed findings\n\n"
+        md += (
+            "> Gate received findings missing required fields. "
+            "This indicates a stage emitter drift and should be fixed at the source.\n\n"
+        )
+        for raw, err in malformed:
+            preview = raw.get("message") or raw.get("title") or "(no message)"
+            md += f"- `{err}` — `{str(preview)[:120]}`\n"
 
     return md
 

@@ -75,6 +75,24 @@ plan section.
 
 ### Fixed
 
+- **Silent approval when a build stage exits non-zero with zero parsed
+  findings (PR #223 regression).** `compile_build` now flags any
+  stage (`typecheck`, `lint`, `tests`) with `pass=false` and zero
+  parsed findings as `parse_failure: true`, appends a synthetic opaque
+  error with the raw log tail, and emits an unspinnable
+  `blocking_issues` string ("unknown output format — opaque build
+  failure, see raw_output_tail"). The verdict prompt's **Request
+  Changes** rule now hard-blocks on any `parse_failure: true` with
+  explicit language forbidding the "tooling anomaly" rationalisation.
+  Root cause could not be recovered because `compile_build` had been
+  discarding the raw `output` field — so `build.json` now also carries
+  `raw_output_tail` and `exit_code` for each stage so the next such
+  case is forensically debuggable. Belt-and-suspenders: `_parse_lint`
+  regex now accepts Next.js-wrapped severities (`Error:` / `Warning:`
+  case-insensitive), optional `./` file-path prefix, and `mjs`/`cjs`
+  extensions. Retro-scan of state found one historical silent approval
+  (adin-chat #219); the class is now closed. Also: `run_build` now
+  WARN-logs every `subprocess.TimeoutExpired` — previously silent.
 - **Stale `origin/<default_branch>` poisoning review diff scope (#15).**
   `create_worktree` now refreshes `origin/<default_branch>` alongside the
   PR branch via a new `_refresh_default_branch_ref` helper. Previously the

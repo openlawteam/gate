@@ -53,7 +53,6 @@ def run_build(worktree: Path, config: dict | None = None) -> dict:
 
     build_timeout = 300
 
-    # Typecheck
     if typecheck_cmd:
         tc_args = shlex.split(typecheck_cmd)
         try:
@@ -62,13 +61,16 @@ def run_build(worktree: Path, config: dict | None = None) -> dict:
                 capture_output=True, text=True, cwd=cwd, timeout=build_timeout,
             )
         except subprocess.TimeoutExpired:
+            logger.warning(
+                f"typecheck timed out after {build_timeout}s in {cwd} "
+                f"(cmd: {typecheck_cmd})"
+            )
             tc_result = subprocess.CompletedProcess(
-                tc_args, 1, stdout="", stderr="typecheck timed out",
+                tc_args, 1, stdout="", stderr=f"typecheck timed out after {build_timeout}s",
             )
     else:
         tc_result = subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
-    # Lint
     if lint_cmd:
         lint_args = shlex.split(lint_cmd)
         try:
@@ -77,13 +79,16 @@ def run_build(worktree: Path, config: dict | None = None) -> dict:
                 capture_output=True, text=True, cwd=cwd, timeout=build_timeout,
             )
         except subprocess.TimeoutExpired:
+            logger.warning(
+                f"lint timed out after {build_timeout}s in {cwd} "
+                f"(cmd: {lint_cmd})"
+            )
             lint_result = subprocess.CompletedProcess(
-                lint_args, 1, stdout="", stderr="lint timed out",
+                lint_args, 1, stdout="", stderr=f"lint timed out after {build_timeout}s",
             )
     else:
         lint_result = subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
-    # Tests
     if test_cmd:
         test_args = shlex.split(test_cmd)
         try:
@@ -92,8 +97,12 @@ def run_build(worktree: Path, config: dict | None = None) -> dict:
                 capture_output=True, text=True, cwd=cwd, timeout=build_timeout,
             )
         except subprocess.TimeoutExpired:
+            logger.warning(
+                f"tests timed out after {build_timeout}s in {cwd} "
+                f"(cmd: {test_cmd})"
+            )
             test_result = subprocess.CompletedProcess(
-                test_args, 1, stdout="", stderr="tests timed out",
+                test_args, 1, stdout="", stderr=f"tests timed out after {build_timeout}s",
             )
     else:
         test_result = subprocess.CompletedProcess([], 0, stdout="", stderr="")
@@ -147,17 +156,66 @@ def compile_build(
         lint = _parse_generic(lint_log, lint_exit)
         test = _parse_generic_test(test_log, test_exit)
 
+    # Flag non-zero exit with zero parsed findings as an opaque build failure.
+    for name, result, count_keys in [
+        ("typecheck", tc, ["error_count"]),
+        ("lint", lint, ["error_count", "warning_count"]),
+        ("tests", test, ["failed"]),
+    ]:
+        if not result["pass"]:
+            total_findings = sum(result.get(k, 0) for k in count_keys)
+            if total_findings == 0:
+                result["parse_failure"] = True
+                raw = (result.get("output") or "").strip()
+                tail = "\n".join(raw.splitlines()[-40:]) if raw else "(empty)"
+                synthetic = {
+                    "message": (
+                        f"{name} exited non-zero "
+                        f"(exit={result.get('exit_code', '?')}) but parser "
+                        f"extracted 0 findings. Treat as opaque build failure; "
+                        f"see raw_output_tail. Raw tail:\n{tail}"
+                    ),
+                    "rule": "gate/unparsed-build-output",
+                    "severity": "error",
+                }
+                if name == "tests":
+                    result.setdefault("failures", []).append(
+                        {"file": "<unparsed>", "message": synthetic["message"]}
+                    )
+                    result["failed"] = max(result.get("failed", 0), 1)
+                else:
+                    result.setdefault("errors", []).append(synthetic)
+                    result["error_count"] = max(result.get("error_count", 0), 1)
+
     overall_pass = tc["pass"] and lint["pass"] and test["pass"]
     blocking_issues = []
     tc_tool_name = typecheck_tool or "typecheck"
     if not tc["pass"]:
-        blocking_issues.append(f"{tc['error_count']} {tc_tool_name} errors")
+        if tc.get("parse_failure"):
+            blocking_issues.append(
+                f"{tc_tool_name} exited non-zero but parser extracted 0 findings "
+                f"(unknown output format — opaque build failure, see raw_output_tail)"
+            )
+        else:
+            blocking_issues.append(f"{tc['error_count']} {tc_tool_name} errors")
     if not lint["pass"]:
-        blocking_issues.append(
-            f"{lint['error_count']} lint errors, {lint.get('warning_count', 0)} warnings"
-        )
+        if lint.get("parse_failure"):
+            blocking_issues.append(
+                "lint exited non-zero but parser extracted 0 findings "
+                "(unknown output format — opaque build failure, see raw_output_tail)"
+            )
+        else:
+            blocking_issues.append(
+                f"{lint['error_count']} lint errors, {lint.get('warning_count', 0)} warnings"
+            )
     if not test["pass"]:
-        blocking_issues.append(f"{test.get('failed', 0)} test failures")
+        if test.get("parse_failure"):
+            blocking_issues.append(
+                "tests exited non-zero but parser extracted 0 findings "
+                "(unknown output format — opaque build failure, see raw_output_tail)"
+            )
+        else:
+            blocking_issues.append(f"{test.get('failed', 0)} test failures")
 
     return {
         "typecheck": {
@@ -165,6 +223,10 @@ def compile_build(
             "errors": tc.get("errors", []),
             "error_count": tc["error_count"],
             "tool": typecheck_tool,
+            "exit_code": tc.get("exit_code"),
+            "parse_failure": tc.get("parse_failure", False),
+            # Last 2000 chars of raw output, bounded per parser, for forensic audits.
+            "raw_output_tail": tc.get("output", ""),
         },
         "lint": {
             "pass": lint["pass"],
@@ -173,6 +235,9 @@ def compile_build(
             "warning_count": lint.get("warning_count", 0),
             "error_count": lint["error_count"],
             "tool": lint_tool,
+            "exit_code": lint.get("exit_code"),
+            "parse_failure": lint.get("parse_failure", False),
+            "raw_output_tail": lint.get("output", ""),
         },
         "tests": {
             "pass": test["pass"],
@@ -182,6 +247,9 @@ def compile_build(
             "skipped": test.get("skipped", 0),
             "failures": test.get("failures", [])[:10],
             "tool": test_tool,
+            "exit_code": test.get("exit_code"),
+            "parse_failure": test.get("parse_failure", False),
+            "raw_output_tail": test.get("output", ""),
         },
         "overall_pass": overall_pass,
         "blocking_issues": blocking_issues,
@@ -213,28 +281,35 @@ def _parse_tsc(log: str, exit_code: int) -> dict:
 
 
 def _parse_lint(log: str, exit_code: int) -> dict:
-    """Parse ESLint output. Ported from parseLint()."""
+    """Parse ESLint output (stylish and next-lint formats, case-insensitive severity)."""
     warnings = []
     errors = []
     current_file = None
     for line in log.split("\n"):
-        file_match = re.match(r"^([^\s].*\.(?:ts|tsx|js|jsx))$", line)
+        # Accept optional ./ prefix (next lint) and mjs/cjs extensions.
+        file_match = re.match(
+            r"^(?:\./)?([^\s].*\.(?:ts|tsx|js|jsx|mjs|cjs))$", line
+        )
         if file_match:
             current_file = file_match.group(1)
             continue
+        # Accept optional trailing colon after severity and case-insensitive.
         issue_match = re.match(
-            r"^\s*(\d+):(\d+)\s+(warning|error)\s+(.+?)\s{2,}(\S+)\s*$", line
+            r"^\s*(\d+):(\d+)\s+(warning|error):?\s+(.+?)\s{2,}(\S+)\s*$",
+            line,
+            re.IGNORECASE,
         )
         if issue_match and current_file:
+            severity = issue_match.group(3).lower()
             entry = {
                 "file": current_file,
                 "line": int(issue_match.group(1)),
                 "column": int(issue_match.group(2)),
-                "severity": issue_match.group(3),
+                "severity": severity,
                 "message": issue_match.group(4).strip(),
                 "rule": issue_match.group(5),
             }
-            if issue_match.group(3) == "error":
+            if severity == "error":
                 errors.append(entry)
             else:
                 warnings.append(entry)

@@ -133,6 +133,7 @@ Consult `$change_intent_json`:
 
 **Request Changes** only if ANY:
 - Build fails (typecheck/build errors, test failures)
+- **Any build stage has `parse_failure: true`** — an unparsed build failure (non-zero exit with zero parsed findings) is ALWAYS blocking. Do NOT rationalise it as a "tooling anomaly", "script misconfiguration", or "non-zero exit with empty findings means nothing broke". It means the parser could not read the tool's output and something may be genuinely broken. Surface the stage's `raw_output_tail` verbatim in a finding so a human can diagnose.
 - Critical or high security finding **introduced by this PR** with a concrete exploit scenario
 - Architecture error that will cause runtime failure (not a convention warning)
 - Logic error with `evidence_level` of `proof_confirmed`, `test_confirmed`, or `code_trace` and `introduced_by_pr: true`

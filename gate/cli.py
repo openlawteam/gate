@@ -1,6 +1,7 @@
 """Gate CLI — entry point for all gate commands."""
 
 import argparse
+import datetime as _dt
 import subprocess
 import sys
 from pathlib import Path
@@ -587,6 +588,69 @@ def cmd_cleanup_pr(args: list[str]) -> int:
     return 0
 
 
+def _inspect_pr_history(pr: int, repo: str, raw: bool) -> int:
+    """Render the per-review archive list for a PR.
+
+    Extracted from ``cmd_inspect_pr`` so the main inspect path stays
+    focused on the current-state view. Reads via
+    ``state.list_review_archives`` so archive-layout changes only need
+    to touch one place.
+    """
+    import json as _json
+
+    from gate.state import list_review_archives
+
+    archives = list_review_archives(pr, repo)
+    if raw:
+        out = [
+            {
+                "name": a["name"],
+                "timestamp": a["timestamp"],
+                "sha": a["sha"],
+                "suffix": a["suffix"],
+                "summary": a["summary"],
+            }
+            for a in archives
+        ]
+        print(_json.dumps(out, indent=2))
+        return 0
+
+    if not archives:
+        suffix = f" in {repo}" if repo else ""
+        print(f"No archived reviews for PR #{pr}{suffix}")
+        return 0
+
+    try:
+        from rich.console import Console
+        from rich.table import Table
+    except ImportError:
+        print("rich not installed — install with: pip install -e '.[dev]'")
+        return 1
+
+    console = Console()
+    console.print(f"[bold]PR #{pr}[/bold] review history ({len(archives)})")
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Timestamp")
+    table.add_column("SHA")
+    table.add_column("Kind")
+    table.add_column("Decision")
+    table.add_column("Findings", justify="right")
+    for a in archives:
+        summary = a.get("summary") or {}
+        decision = (summary.get("decision") or "?")[:24]
+        findings_count = summary.get("findings_count")
+        fc_display = str(findings_count) if findings_count is not None else "-"
+        table.add_row(
+            a["timestamp"] or "-",
+            a["sha"] or "-",
+            a["suffix"] or "-",
+            decision,
+            fc_display,
+        )
+    console.print(table)
+    return 0
+
+
 @command("inspect-pr", "Inspect persisted review state for a PR")
 def cmd_inspect_pr(args: list[str]) -> int:
     """Pretty-print findings and stage results from a PR's persisted state.
@@ -610,6 +674,11 @@ def cmd_inspect_pr(args: list[str]) -> int:
         "--raw", action="store_true",
         help="Dump raw JSON instead of the rich-table view.",
     )
+    parser.add_argument(
+        "--history", action="store_true",
+        help="List archived per-review snapshots (PR B.1) instead of "
+             "the current-state pointers.",
+    )
     try:
         parsed = parse_args(parser, args)
     except SystemExit:
@@ -626,6 +695,9 @@ def cmd_inspect_pr(args: list[str]) -> int:
         suffix = f" in {parsed.repo}" if parsed.repo else ""
         print(f"No persisted state for PR #{parsed.pr}{suffix}")
         return 1
+
+    if parsed.history:
+        return _inspect_pr_history(parsed.pr, parsed.repo, parsed.raw)
 
     stage_map = {
         "verdict": state_path / "verdict.json",
@@ -856,6 +928,14 @@ def cmd_prune(args: list[str]) -> int:
         help="Also prune worktrees newer than max-age-hours whose PR "
              "has no active review marker.",
     )
+    parser.add_argument(
+        "--reviews",
+        metavar="SPEC",
+        default=None,
+        help="Also prune per-review state archives. SPEC is "
+             "'older-than=<N>d' (days) or 'older-than=<N>h' (hours). "
+             "Example: --reviews older-than=30d.",
+    )
     parsed = parse_args(parser, args)
 
     from gate.cleanup import cleanup_worktrees
@@ -863,8 +943,210 @@ def cmd_prune(args: list[str]) -> int:
     cleanup_worktrees(max_age_hours=parsed.max_age_hours)
     if parsed.aggressive:
         cleanup_worktrees(max_age_hours=0)
+
+    if parsed.reviews:
+        from gate.state import prune_review_archives
+
+        seconds = _parse_older_than(parsed.reviews)
+        if seconds is None:
+            print(
+                f"error: --reviews expects 'older-than=<N>d' or "
+                f"'older-than=<N>h'; got {parsed.reviews!r}"
+            )
+            return 1
+        removed = prune_review_archives(older_than_seconds=seconds)
+        print(f"Pruned {removed} review archive(s) older than {parsed.reviews}")
+
     print("Prune complete")
     return 0
+
+
+def _parse_older_than(spec: str) -> float | None:
+    """Parse ``older-than=<N><unit>`` where unit ∈ {d,h,m,s}.
+
+    Returns the equivalent number of seconds, or None if the string
+    is not a valid spec. Used by ``gate prune --reviews``.
+    """
+    prefix = "older-than="
+    if not spec.startswith(prefix):
+        return None
+    value = spec[len(prefix):].strip().lower()
+    if not value:
+        return None
+    try:
+        if value.endswith("d"):
+            return float(value[:-1]) * 86400
+        if value.endswith("h"):
+            return float(value[:-1]) * 3600
+        if value.endswith("m"):
+            return float(value[:-1]) * 60
+        if value.endswith("s"):
+            return float(value[:-1])
+        return float(value)
+    except ValueError:
+        return None
+
+
+@command("audit", "Self-reflection checks (retro-scan, contradictions)")
+def cmd_audit(args: list[str]) -> int:
+    """Audit family: ``retro-scan`` and ``contradictions``.
+
+    Both subcommands surface self-reported "Gate missed this"
+    evidence without leaving the shell — the audit that used to live
+    as a one-shot ``/tmp/retro_scan_silent_approvals.py`` script is
+    promoted here (PR B.1) and the post-hoc recheck thread's
+    contradiction files (PR B.2) are grouped alongside it for
+    discoverability.
+    """
+    if not args or args[0] in ("-h", "--help"):
+        print("Usage: gate audit <retro-scan|contradictions> [options]")
+        print()
+        print("Subcommands:")
+        print(
+            "  retro-scan            Walk archived reviews for "
+            "silent approvals (build stage failed but verdict "
+            "approved)."
+        )
+        print(
+            "  contradictions        List post-hoc contradiction "
+            "records (external check flipped to red after approval)."
+        )
+        return 0 if args else 1
+
+    sub, rest = args[0], args[1:]
+    if sub in ("retro-scan", "retro_scan"):
+        return _cmd_audit_retro_scan(rest)
+    if sub == "contradictions":
+        return _cmd_audit_contradictions(rest)
+    print(f"unknown audit subcommand: {sub}")
+    return 1
+
+
+def _cmd_audit_retro_scan(args: list[str]) -> int:
+    import json as _json
+
+    parser = make_parser("audit retro-scan", "Walk archived reviews for silent approvals.")
+    parser.add_argument("--raw", action="store_true", help="Emit JSON output.")
+    try:
+        parsed = parse_args(parser, args)
+    except SystemExit:
+        return 0
+    except ArgumentError as e:
+        print(f"error: {e}")
+        parser.print_usage()
+        return 1
+
+    from gate.audit import retro_scan
+
+    hits = retro_scan()
+    if parsed.raw:
+        print(_json.dumps(hits, indent=2))
+        return 0
+    if not hits:
+        print("retro-scan: no silent approvals found across archived reviews.")
+        return 0
+    print(f"retro-scan: found {len(hits)} silent approval(s):")
+    for hit in hits:
+        print(
+            f"  {hit['timestamp']}  {hit['sha']}  {hit['decision']}  "
+            f"{hit['pr_dir']}"
+        )
+        for reason in hit["reasons"]:
+            print(f"    - {reason}")
+    return 0
+
+
+def _cmd_audit_contradictions(args: list[str]) -> int:
+    import json as _json
+
+    parser = make_parser(
+        "audit contradictions",
+        "List post-hoc contradiction records (external-check flips after approval).",
+    )
+    parser.add_argument(
+        "--since",
+        metavar="SPEC",
+        default=None,
+        help="Only include entries newer than SPEC "
+             "(e.g. '7d', '24h'). Default: all.",
+    )
+    parser.add_argument(
+        "--raw",
+        action="store_true",
+        help="Emit JSON output.",
+    )
+    try:
+        parsed = parse_args(parser, args)
+    except SystemExit:
+        return 0
+    except ArgumentError as e:
+        print(f"error: {e}")
+        parser.print_usage()
+        return 1
+
+    since_seconds: float | None = None
+    if parsed.since:
+        since_seconds = _parse_duration(parsed.since)
+        if since_seconds is None:
+            print(
+                f"error: --since expects '<N>d', '<N>h', '<N>m', or "
+                f"'<N>s'; got {parsed.since!r}"
+            )
+            return 1
+
+    from gate.audit import list_contradictions
+
+    hits = list_contradictions(since_seconds=since_seconds)
+    if parsed.raw:
+        rendered = [
+            {
+                "name": h["name"],
+                "pr_dir": h["pr_dir"],
+                "mtime": h["mtime"],
+                "data": h["data"],
+            }
+            for h in hits
+        ]
+        print(_json.dumps(rendered, indent=2))
+        return 0
+    if not hits:
+        window = f" in the last {parsed.since}" if parsed.since else ""
+        print(f"audit contradictions: none recorded{window}.")
+        return 0
+    print(f"audit contradictions: {len(hits)} record(s):")
+    for hit in hits:
+        when = _dt.datetime.fromtimestamp(hit["mtime"], tz=_dt.UTC).isoformat()
+        print(f"  {when}  {hit['name']}  {hit['pr_dir']}")
+        data = hit.get("data") or {}
+        check = data.get("check") or {}
+        if check:
+            name = check.get("name") or "?"
+            conclusion = check.get("conclusion") or "?"
+            print(f"    check: {name} → {conclusion}")
+    return 0
+
+
+def _parse_duration(spec: str) -> float | None:
+    """Parse a duration like '7d', '24h', '30m', '90s' into seconds.
+
+    Kept separate from ``_parse_older_than`` because that one requires
+    the ``older-than=`` prefix; this one takes the bare duration.
+    """
+    value = spec.strip().lower()
+    if not value:
+        return None
+    try:
+        if value.endswith("d"):
+            return float(value[:-1]) * 86400
+        if value.endswith("h"):
+            return float(value[:-1]) * 3600
+        if value.endswith("m"):
+            return float(value[:-1]) * 60
+        if value.endswith("s"):
+            return float(value[:-1])
+        return float(value)
+    except ValueError:
+        return None
 
 
 @command("digest", "Send daily metrics digest")

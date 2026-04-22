@@ -738,3 +738,127 @@ class TestEmit:
             conn.emit.assert_called_once_with(
                 "review_cancelled", review_id="a-b-pr1", head_sha="override"
             )
+
+
+class TestExternalChecksHook:
+    """PR B.2: _consult_external_checks and post-hoc recheck."""
+
+    def _cfg_with_required(self, sample_config, names):
+        cfg = dict(sample_config)
+        cfg["repo"] = dict(cfg.get("repo") or {})
+        cfg["repo"]["required_external_checks"] = [
+            {"name": n, "policy": "blocking"} for n in names
+        ]
+        cfg["external_checks"] = {"enabled": True, "wait_seconds_default": 1}
+        return cfg
+
+    def test_no_mutation_when_disabled(self, orchestrator, sample_config):
+        cfg = dict(sample_config)
+        cfg["external_checks"] = {"enabled": False}
+        cfg["repo"] = dict(cfg["repo"])
+        cfg["repo"]["required_external_checks"] = [{"name": "Vercel"}]
+        orchestrator.config = cfg
+        verdict = {"decision": "approve", "findings": []}
+        assert orchestrator._consult_external_checks(verdict) is False
+        assert verdict["decision"] == "approve"
+
+    def test_no_mutation_when_no_required(self, orchestrator, sample_config):
+        orchestrator.config = sample_config  # no required_external_checks
+        verdict = {"decision": "approve", "findings": []}
+        assert orchestrator._consult_external_checks(verdict) is False
+
+    def test_blocking_failure_flips_to_request_changes(
+        self, orchestrator, sample_config,
+    ):
+        from gate import external_checks as ec
+        orchestrator.config = self._cfg_with_required(sample_config, ["Vercel"])
+        fake = {"Vercel – Preview": ec.CheckState(
+            name="Vercel – Preview",
+            conclusion=ec.CONCLUSION_FAILURE,
+            status="completed",
+            url="https://vercel.example/u",
+        )}
+        verdict = {"decision": "approve", "findings": []}
+        with patch("gate.external_checks.fetch_check_state", return_value=fake):
+            mutated = orchestrator._consult_external_checks(verdict)
+        assert mutated is True
+        assert verdict["decision"] == "request_changes"
+        assert any(
+            f.get("source_stage") == "external_checks" and
+            "Vercel – Preview" in f.get("message", "")
+            for f in verdict["findings"]
+        )
+        assert all("finding_id" in f for f in verdict["findings"])
+
+    def test_blocking_pending_fail_closed_after_wait(
+        self, orchestrator, sample_config,
+    ):
+        from gate import external_checks as ec
+        orchestrator.config = self._cfg_with_required(sample_config, ["tests"])
+        orchestrator.config["external_checks"]["wait_seconds_default"] = 0
+        pending = {"tests": ec.CheckState(
+            name="tests", conclusion=ec.CONCLUSION_PENDING, status="in_progress",
+        )}
+        verdict = {"decision": "approve", "findings": []}
+        with patch("gate.external_checks.fetch_check_state", return_value=pending):
+            mutated = orchestrator._consult_external_checks(verdict)
+        assert mutated is True
+        assert verdict["decision"] == "request_changes"
+        assert any(
+            "pending" in f["message"].lower() for f in verdict["findings"]
+        )
+
+    def test_success_is_noop(self, orchestrator, sample_config):
+        from gate import external_checks as ec
+        orchestrator.config = self._cfg_with_required(sample_config, ["Vercel"])
+        green = {"Vercel – Preview": ec.CheckState(
+            name="Vercel – Preview",
+            conclusion=ec.CONCLUSION_SUCCESS,
+            status="completed",
+        )}
+        verdict = {"decision": "approve", "findings": []}
+        with patch("gate.external_checks.fetch_check_state", return_value=green):
+            mutated = orchestrator._consult_external_checks(verdict)
+        assert mutated is False
+        assert verdict["decision"] == "approve"
+
+    def test_fetch_exception_fails_open(self, orchestrator, sample_config):
+        orchestrator.config = self._cfg_with_required(sample_config, ["Vercel"])
+        verdict = {"decision": "approve", "findings": []}
+        with patch(
+            "gate.external_checks.fetch_check_state",
+            side_effect=RuntimeError("boom"),
+        ):
+            mutated = orchestrator._consult_external_checks(verdict)
+        assert mutated is False
+        assert verdict["decision"] == "approve"
+
+    def test_record_contradiction_writes_file(
+        self, orchestrator, sample_config, tmp_path,
+    ):
+        from gate import external_checks as ec
+        orchestrator.config = sample_config
+        failure = ec.CheckState(
+            name="vercel/preview",
+            conclusion=ec.CONCLUSION_FAILURE,
+            status="completed",
+            url="https://vercel/u",
+        )
+        orchestrator._record_contradiction(
+            failure,
+            verdict_snapshot={"decision": "approve", "sha": orchestrator.head_sha},
+            seconds_to_flip=120,
+        )
+        # Find the contradiction file in the isolated state dir.
+        from gate.state import get_pr_state_dir
+        cdir = get_pr_state_dir(
+            orchestrator.pr_number, orchestrator.repo, create=False,
+        ) / "contradictions"
+        assert cdir.exists()
+        files = list(cdir.glob("*.json"))
+        assert len(files) == 1
+        import json as _json
+        payload = _json.loads(files[0].read_text())
+        assert payload["check"]["name"] == "vercel/preview"
+        assert payload["check"]["conclusion"] == ec.CONCLUSION_FAILURE
+        assert payload["seconds_to_flip"] == 120

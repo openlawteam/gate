@@ -46,8 +46,10 @@ polish plan; lands on top of `gate-a-plus-polish`).
   GitHub post, Gate consults `required_external_checks` from the repo
   config. Blocking failures override `approve` with
   `request_changes`; blocking pending waits up to
-  `external_check_wait_seconds` (default 600 s) then fail-closes;
-  advisory failures are recorded but don't flip the verdict.
+  `external_check_wait_seconds` (default 600 s) then fail-closes.
+  Advisory failures do not block the verdict; the post-hoc recheck
+  thread is the mechanism that surfaces them (and any post-approval
+  flips of blocking checks).
 - **Post-hoc recheck thread (PR B.2).** On `approve` verdicts, a
   daemon thread polls external checks every minute for
   `external_check_recheck_minutes` (default 30 min). Any required

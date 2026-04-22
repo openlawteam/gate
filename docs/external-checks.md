@@ -41,8 +41,12 @@ Behaviour:
   with `request_changes`. A `pending` state waits
   `external_check_wait_seconds`; if still pending past that, Gate
   fail-closes (also `request_changes`).
-- **`policy = "advisory"`** — verdict is **not** flipped, but a red state
-  is recorded and included in the post-hoc recheck watch list.
+- **`policy = "advisory"`** — verdict is **not** flipped. The check is
+  still included in the post-hoc recheck watch list, so a flip to
+  failure after approval is recorded and alerted. Pre-approval
+  advisory failures are not annotated onto the verdict itself;
+  consult `gate audit contradictions` once the post-hoc phase has
+  run if you need the historical record.
 - **`match = "substring"` (default)** is case-insensitive. `name = "Vercel"`
   matches both `Vercel – Preview` and `Vercel – Production`.
 - **`match = "exact"`** requires the check name to equal `name` exactly.

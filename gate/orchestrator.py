@@ -1258,9 +1258,7 @@ class ReviewOrchestrator:
         if recheck_minutes <= 0:
             return
 
-        import threading as _threading
-
-        t = _threading.Thread(
+        t = threading.Thread(
             target=self._run_post_hoc_recheck,
             kwargs={
                 "required": required,
@@ -1292,10 +1290,13 @@ class ReviewOrchestrator:
         gh failure doesn't silently kill the thread.
         """
         from gate import external_checks, notify
-        from gate.config import gate_dir
+        from gate.config import logs_dir
 
         deadline = time.monotonic() + (recheck_minutes * 60)
-        poll_interval = 60.0
+        # Matches external_checks.DEFAULT_POLL_INTERVAL_S * 4: post-hoc is a
+        # background observer, not latency-critical, so we poll 4× slower than
+        # the pre-commit wait loop to conserve the GitHub API budget.
+        poll_interval = float(external_checks.DEFAULT_POLL_INTERVAL_S) * 4
         baseline_failures: set[str] = set()
 
         try:
@@ -1357,7 +1358,7 @@ class ReviewOrchestrator:
                         f"({e})"
                     )
                 try:
-                    alerts_path = gate_dir() / "logs" / "alerts.jsonl"
+                    alerts_path = logs_dir() / "alerts.jsonl"
                     alerts_path.parent.mkdir(parents=True, exist_ok=True)
                     with alerts_path.open("a", encoding="utf-8") as fp:
                         fp.write(json.dumps({

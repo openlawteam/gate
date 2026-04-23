@@ -87,7 +87,7 @@ class TestFetchCheckState:
              "target_url": "https://vercel/u"},
         ]}
 
-        def _fake_gh(args, timeout=None):  # noqa: ARG001
+        def _fake_gh(args, timeout=None, **_kw):  # noqa: ARG001
             if "check-runs" in args[1]:
                 return json.dumps(modern_runs)
             if args[1].endswith("/status"):
@@ -110,7 +110,7 @@ class TestFetchCheckState:
             {"context": "dup", "state": "failure"},
         ]}
 
-        def _fake_gh(args, timeout=None):  # noqa: ARG001
+        def _fake_gh(args, timeout=None, **_kw):  # noqa: ARG001
             return json.dumps(modern if "check-runs" in args[1] else legacy)
 
         with patch("gate.external_checks.gh._gh", side_effect=_fake_gh):
@@ -121,11 +121,141 @@ class TestFetchCheckState:
     def test_both_endpoints_fail_returns_empty(self):
         import subprocess
 
-        def _fail(args, timeout=None):  # noqa: ARG001
+        def _fail(args, timeout=None, **_kw):  # noqa: ARG001
             raise subprocess.CalledProcessError(1, "gh", stderr="boom")
 
         with patch("gate.external_checks.gh._gh", side_effect=_fail):
             assert ec.fetch_check_state("sha", "o/r") == {}
+
+
+@pytest.fixture
+def _reset_check_runs_flag():
+    """Isolate tests that mutate the process-global ``_check_runs_forbidden``.
+
+    The flag is intentionally process-scoped in production (see the
+    "Fine-grained PAT caveat" in external_checks.py), so tests must
+    snapshot-and-restore it to stay independent.
+    """
+    with ec._check_runs_forbidden_lock:
+        prior = ec._check_runs_forbidden
+        ec._check_runs_forbidden = False
+    try:
+        yield
+    finally:
+        with ec._check_runs_forbidden_lock:
+            ec._check_runs_forbidden = prior
+
+
+class TestFineGrainedPatGap:
+    """First-403 → cache-and-short-circuit for the Checks API gap.
+
+    Verifies the three externally-observable contracts:
+
+    1. A 403 on the check-runs endpoint does NOT poison the whole
+       ``fetch_check_state`` call — statuses still contribute.
+    2. Subsequent calls short-circuit (no second ``gh`` invocation
+       for check-runs) so the process-wide log stays quiet.
+    3. The 403 does not flip the flag when it comes from somewhere
+       other than the Checks API (defensive — we only want to
+       disable the check-runs half, not the statuses half).
+    """
+
+    def _pat_403(self):
+        import subprocess
+
+        return subprocess.CalledProcessError(
+            1, "gh",
+            stderr="gh: Resource not accessible by personal access token (HTTP 403)",
+        )
+
+    def test_first_403_degrades_to_statuses_only(self, _reset_check_runs_flag):
+        calls: list[str] = []
+        legacy = {"statuses": [
+            {"context": "Vercel", "state": "success",
+             "target_url": "https://vercel/u"},
+        ]}
+
+        def _fake(args, timeout=None, **_kw):  # noqa: ARG001
+            calls.append(args[1])
+            if "check-runs" in args[1]:
+                raise self._pat_403()
+            return json.dumps(legacy)
+
+        assert ec.check_runs_available() is True
+        with patch("gate.external_checks.gh._gh", side_effect=_fake):
+            result = ec.fetch_check_state("sha", "openlawteam/adin-chat")
+
+        assert "Vercel" in result
+        assert result["Vercel"].conclusion == ec.CONCLUSION_SUCCESS
+        assert result["Vercel"].source == "statuses"
+        assert ec.check_runs_available() is False
+        # One check-runs attempt + one statuses call — we don't paginate
+        # past the 403.
+        assert sum("check-runs" in c for c in calls) == 1
+        assert sum(c.endswith("/status") for c in calls) == 1
+
+    def test_subsequent_calls_short_circuit(self, _reset_check_runs_flag):
+        calls: list[str] = []
+
+        def _fake(args, timeout=None, **_kw):  # noqa: ARG001
+            calls.append(args[1])
+            if "check-runs" in args[1]:
+                raise self._pat_403()
+            return json.dumps({"statuses": []})
+
+        with patch("gate.external_checks.gh._gh", side_effect=_fake):
+            ec.fetch_check_state("sha1", "o/r")  # flips the flag
+            ec.fetch_check_state("sha2", "o/r")
+            ec.fetch_check_state("sha3", "o/r")
+
+        check_runs_attempts = sum("check-runs" in c for c in calls)
+        status_attempts = sum(c.endswith("/status") for c in calls)
+        # Only the first call ever hits check-runs; later calls
+        # short-circuit without a network round-trip.
+        assert check_runs_attempts == 1
+        # Statuses endpoint keeps running on every call — the whole
+        # point of the short-circuit is that we don't lose coverage.
+        assert status_attempts == 3
+
+    def test_non_pat_403_does_not_set_flag(self, _reset_check_runs_flag):
+        import subprocess
+
+        def _fake(args, timeout=None, **_kw):  # noqa: ARG001
+            if "check-runs" in args[1]:
+                # Some other failure (network, 500, etc.) — NOT the
+                # structural PAT 403. The flag must stay off so we
+                # retry check-runs on the next review.
+                raise subprocess.CalledProcessError(1, "gh", stderr="boom")
+            return json.dumps({"statuses": []})
+
+        with patch("gate.external_checks.gh._gh", side_effect=_fake):
+            ec.fetch_check_state("sha", "o/r")
+
+        assert ec.check_runs_available() is True
+
+    def test_pat_forbidden_matcher_recognises_github_message(self):
+        import subprocess
+
+        exc = subprocess.CalledProcessError(
+            1, "gh",
+            stderr='{"message":"Resource not accessible by personal access token","status":"403"}',
+        )
+        assert ec._is_pat_forbidden_error(exc) is True
+
+    def test_pat_forbidden_matcher_recognises_gh_cli_wrapped_message(self):
+        import subprocess
+
+        exc = subprocess.CalledProcessError(
+            1, "gh",
+            stderr="gh: Resource not accessible by personal access token (HTTP 403)",
+        )
+        assert ec._is_pat_forbidden_error(exc) is True
+
+    def test_pat_forbidden_matcher_rejects_unrelated_failures(self):
+        import subprocess
+
+        exc = subprocess.CalledProcessError(1, "gh", stderr="could not resolve host")
+        assert ec._is_pat_forbidden_error(exc) is False
 
 
 class TestClassify:

@@ -223,12 +223,150 @@ wait. Even at 50 PRs/day that's well under GitHub's 5000/hour
 authenticated limit. If you hit rate pressure, lower
 `external_check_recheck_minutes` or flip the kill-switch.
 
+## Fine-grained PAT limitation
+
+**Short version:** if `GATE_PAT` is a fine-grained PAT (`github_pat_…`
+prefix), Gate cannot read the Checks API. It detects this on the first
+403 response, logs one INFO line, and runs in statuses-only mode
+thereafter. No configuration change is required; no log spam is
+produced.
+
+### Why
+
+GitHub exposes two separate APIs for "things attached to a commit that
+say pass/fail":
+
+| API               | Path                                              | Who writes to it                    | Fine-grained PAT | Classic PAT | GitHub App |
+| ----------------- | ------------------------------------------------- | ----------------------------------- | ---------------- | ----------- | ---------- |
+| Commit Statuses   | `GET /repos/:r/commits/:sha/status`               | Vercel, Netlify, Render, scripts    | ✅ `Commit statuses: Read` | ✅ `repo` | ✅ `Commit statuses: Read` |
+| Check Runs        | `GET /repos/:r/commits/:sha/check-runs`           | GitHub Actions, CircleCI, Buildkite | ❌ **no permission exists** | ✅ `repo` | ✅ `Checks: Read` |
+
+The fine-grained-PAT permission picker has no "Checks" entry, and no
+other permission substitutes. GitHub's
+[March 2025 GA announcement](https://github.blog/changelog/2025-03-18-fine-grained-pats-are-now-generally-available/)
+lists "calling the Checks and Packages APIs" as a known feature gap for
+fine-grained PATs. The restriction also applies transitively: check-run
+access through GraphQL `statusCheckRollup.contexts` returns
+`FORBIDDEN` for `CheckRun` nodes while `StatusContext` nodes come back
+fine, and the Actions API (`/actions/runs`) is a separate permission
+that doesn't cover the generic Checks endpoint.
+
+This is not something a scope change can fix — it's a platform-level
+design decision by GitHub. Community discussion
+[#129512](https://github.com/orgs/community/discussions/129512) has
+GitHub support confirming the Checks API is intentionally
+GitHub-App-only for non-classic tokens.
+
+### What Gate does about it
+
+[`gate/external_checks.py`](../gate/external_checks.py)
+`_paginate_check_runs` is the hook point. On the first 403 from the
+check-runs endpoint:
+
+1. The offending `gh api` call is issued with `quiet_on_403=True`, so
+   the initial 403 logs at **DEBUG** instead of WARNING.
+2. A process-global flag (`_check_runs_forbidden`, guarded by a lock)
+   flips.
+3. One **INFO** line is emitted pointing to this section of the docs.
+4. Every subsequent call to `_paginate_check_runs` short-circuits to
+   `[]` without a network round-trip.
+5. The statuses endpoint continues to run normally on every request —
+   you keep full coverage of Vercel, Netlify, Render, Cloudflare
+   Pages, and anything else that publishes through legacy statuses.
+6. `_schedule_post_hoc_recheck` keeps polling (its statuses half still
+   works); the check-runs half is now free.
+
+Restart the gate server (`launchctl kickstart -k gui/$(id -u)
+com.gate.server`) to re-detect after a token swap — the flag is
+process-scoped on purpose so a token rotation requires an explicit
+bounce.
+
+Programmatic introspection is available via
+`external_checks.check_runs_available()` (returns `True` until the
+first 403, `False` thereafter).
+
+### What signal you lose in statuses-only mode
+
+Anything whose only pass/fail surface is the Checks API. In practice:
+
+- GitHub Actions job results that aren't mirrored onto commit statuses.
+- CircleCI results (CircleCI publishes through `check-runs` only).
+- Buildkite results.
+- Render / Netlify **build** checks *only* when configured to report
+  through the modern Checks API (both default to legacy statuses, so
+  usually fine).
+- Any third-party bot check (Dependabot status, CodeQL, security
+  advisories) that uses `POST /repos/:r/check-runs` exclusively.
+
+What you **keep**:
+
+- Vercel deploy status (uses legacy statuses).
+- `gate-review` / `Gate Auto-Fix` statuses Gate writes itself (these
+  are commit statuses, not check-runs — see
+  [`gate/github.py`](../gate/github.py) `create_check_run`, which
+  despite the name uses the Statuses API because of this same gap).
+- Any CI provider publishing commit statuses.
+
+If a repo's `required_external_checks` entry matches a check-run-only
+provider, `classify()` will bucket it as `unknown` every time; with
+`policy = "blocking"` + the default `external_check_wait_seconds`,
+that means fail-closed after the wait expires. Mis-configuration
+surfaces loudly — but if you explicitly need CircleCI / GHA job
+results to **not** block, mark them `policy = "advisory"` or drop
+them from the list.
+
+### Removing the limitation
+
+Two paths, in increasing "properness":
+
+**Option 1 — Classic PAT (quick).** Replace `GATE_PAT` with a
+`ghp_…` classic PAT with the `repo` scope (and `workflow` if you
+expect `fix-senior` to edit workflow YAML). Classic PATs hit both
+endpoints without ceremony. GitHub has not announced an EOL for
+classic PATs and self-hosted bots routinely use them; trade-off is
+they carry broader implicit scope than fine-grained PATs.
+
+```bash
+# In ~/.zshrc (or your LaunchAgent plist):
+export GATE_PAT="ghp_<new_classic_pat>"
+
+# Apply and re-detect:
+source ~/.zshrc
+launchctl kickstart -k "gui/$(id -u)/com.gate.server"
+```
+
+No code changes required — `_paginate_check_runs` will start returning
+check-runs on the next poll; the "forbidden" flag resets because the
+gate server is a new process.
+
+**Option 2 — GitHub App (proper).** Register a Gate app on the owning
+org with `Checks: Read`, `Contents: Write`, `Pull requests: Write`,
+`Commit statuses: Write`. Install on each repo that runs through Gate.
+Update `gate.github._gh_env` to mint installation tokens on demand
+(JWT-sign the app private key, POST
+`/app/installations/:id/access_tokens`, cache until expiry). This also
+lets `create_check_run` migrate from the Statuses API to real Check
+Runs with annotations (file/line-level red squiggles in the GitHub
+Files tab) and get rid of the apology comment in `github.py:486-489`.
+Material work — maybe a day — but it's the answer GitHub points you
+to. Not wired in today.
+
 ## See also
 
 - [`gate/external_checks.py`](../gate/external_checks.py) — the module
-  (fetch, classify, wait).
+  (fetch, classify, wait). Look for the "Fine-grained PAT caveat"
+  section in the module docstring and the `_check_runs_forbidden` flag
+  in `_paginate_check_runs`.
+- [`gate/github.py`](../gate/github.py) — `_gh` carries the
+  `quiet_on_403` kwarg that suppresses the expected warning;
+  `create_check_run` uses the Statuses API (not Checks) and documents
+  why at the top of the "Commit Status API" section.
 - [`gate/orchestrator.py`](../gate/orchestrator.py)
   `_consult_external_checks`, `_schedule_post_hoc_recheck`,
   `_run_post_hoc_recheck` — the hook points.
 - [`docs/finding-schema.md`](finding-schema.md) — the shape of
   injected `source_stage = "external_checks"` findings.
+- GitHub's [Fine-grained PAT GA announcement](https://github.blog/changelog/2025-03-18-fine-grained-pats-are-now-generally-available/)
+  (listing Checks API as a feature gap).
+- [Community discussion #129512](https://github.com/orgs/community/discussions/129512)
+  (GitHub support confirming Checks API is App-only).

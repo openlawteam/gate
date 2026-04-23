@@ -95,13 +95,27 @@ def _wait_for_connectivity(max_wait: float = 30.0) -> bool:
     return False
 
 
-def _gh(args: list[str], timeout: float | None = None) -> str:
+def _gh(
+    args: list[str],
+    timeout: float | None = None,
+    *,
+    quiet_on_403: bool = False,
+) -> str:
     """Run gh CLI with robust retry on transient network errors.
 
     Retries on any network-related failure (DNS, TCP, TLS, HTTP 5xx, 429).
     Uses exponential backoff with jitter. On the final retry, waits for TCP
     connectivity to GitHub before attempting — this handles intermittent
     network drops caused by Tailscale/macOS routing issues.
+
+    ``quiet_on_403`` is for callers that have a *structural* 403 they know
+    about (e.g. ``external_checks._paginate_check_runs`` hitting the Checks
+    API with a fine-grained PAT, which GitHub does not permit — see
+    ``docs/external-checks.md`` → "Fine-grained PAT limitation"). When set,
+    a 403 response is logged at DEBUG instead of WARNING so it doesn't spam
+    the activity log once per poll; the ``CalledProcessError`` is still
+    raised so the caller can react (cache the "forbidden" state, switch
+    strategies, etc.). Non-403 non-transient failures still log at WARNING.
     """
     env = _gh_env()
     effective_timeout = timeout or GH_TIMEOUT_S
@@ -131,11 +145,25 @@ def _gh(args: list[str], timeout: float | None = None) -> str:
             stderr_raw = result.stderr[:500].strip()
             stderr = stderr_raw.lower()
             is_transient = any(p in stderr for p in _TRANSIENT_PATTERNS)
+            # 403 is flagged separately so callers with a known-structural
+            # forbidden response (e.g. Checks API + fine-grained PAT) can
+            # opt into DEBUG-level logging via ``quiet_on_403``.
+            is_403 = (
+                "http 403" in stderr
+                or "403 forbidden" in stderr
+                or "resource not accessible by personal access token" in stderr
+            )
 
             if not is_transient:
-                logger.warning(
-                    f"gh non-transient failure (rc={result.returncode}): {stderr_raw[:200]}"
-                )
+                if is_403 and quiet_on_403:
+                    logger.debug(
+                        "gh 403 (expected, quiet_on_403=True): %s",
+                        stderr_raw[:200],
+                    )
+                else:
+                    logger.warning(
+                        f"gh non-transient failure (rc={result.returncode}): {stderr_raw[:200]}"
+                    )
 
             if is_transient and attempt < GH_MAX_RETRIES:
                 delay = GH_BASE_DELAY_S * (2 ** (attempt - 1)) * (0.5 + random.random())

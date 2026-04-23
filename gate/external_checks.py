@@ -26,6 +26,38 @@ Design invariants
   pending after ``wait_seconds``, Gate treats that as a failure — the
   safer direction because silent approvals are the outcome we're
   trying to prevent.
+
+Fine-grained PAT caveat
+-----------------------
+
+GitHub **does not expose the Checks API to fine-grained PATs** — there
+is no "Checks" permission in the fine-grained PAT permission picker and
+no other permission substitutes for it. The Statuses endpoint works,
+but any call to ``GET /repos/:r/commits/:sha/check-runs`` returns
+``HTTP 403 "Resource not accessible by personal access token"``.
+
+This is a platform-level restriction (not a missing scope). Confirmed
+on 2026-04-22 by direct test; referenced by GitHub's March 2025 GA
+changelog for fine-grained PATs ("calling the Checks and Packages APIs"
+is a listed feature gap) and community discussion #129512.
+
+To keep Gate quiet *and* still useful when ``GATE_PAT`` is fine-grained,
+this module:
+
+1. Calls ``check-runs`` with ``quiet_on_403=True`` so the first
+   403 logs at DEBUG (not WARNING).
+2. On the first 403, flips a process-wide
+   ``_check_runs_forbidden`` flag and logs one INFO line pointing at
+   ``docs/external-checks.md``.
+3. Short-circuits every subsequent call until the process restarts,
+   returning ``[]`` without hitting the wire. Statuses-only coverage
+   continues uninterrupted.
+
+Full Checks-API visibility (GitHub Actions job-level pass/fail,
+CircleCI, Buildkite, etc.) requires either a classic PAT with the
+``repo`` scope or a GitHub App installation token. See
+``docs/external-checks.md`` → "Fine-grained PAT limitation" for the
+comparison table and the migration sketch.
 """
 
 from __future__ import annotations
@@ -66,6 +98,21 @@ _FAILURE_VALUES: frozenset[str] = frozenset({
 _NEUTRAL_VALUES: frozenset[str] = frozenset({
     "neutral", "skipped", "stale",
 })
+
+# ── Fine-grained PAT Checks-API gap (see module docstring) ───────────
+#
+# Flipped the first time ``_paginate_check_runs`` observes a 403 from
+# ``GET /repos/:r/commits/:sha/check-runs``. Once set, every subsequent
+# call short-circuits to ``[]`` without a network round-trip. Protected
+# by a lock because the post-hoc recheck thread and the synchronous
+# verdict path can call in concurrently on a fresh gate restart.
+#
+# The flag is process-scoped on purpose: if the operator rotates
+# ``GATE_PAT`` to a classic PAT or a GitHub App token, they need to
+# bounce the gate server to pick up the new capability anyway
+# (``launchctl kickstart -k gui/$(id -u) com.gate.server``).
+_check_runs_forbidden: bool = False
+_check_runs_forbidden_lock: threading.Lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -169,15 +216,94 @@ def _gh_json(args: list[str]) -> Any:
         return None
 
 
+def _is_pat_forbidden_error(exc: BaseException) -> bool:
+    """Recognise the fine-grained-PAT-meets-Checks-API 403 signature.
+
+    GitHub's exact string is
+    ``"Resource not accessible by personal access token"``. We also
+    accept the plain ``"HTTP 403"`` marker that ``gh`` prefixes onto
+    the stderr so unit tests can simulate the error without depending
+    on the full GitHub error message.
+    """
+    stderr = str(getattr(exc, "stderr", "")) or str(exc)
+    stderr_l = stderr.lower()
+    return (
+        "resource not accessible by personal access token" in stderr_l
+        or "http 403" in stderr_l
+        or "403 forbidden" in stderr_l
+    )
+
+
+def check_runs_available() -> bool:
+    """Public accessor for the cached "can we reach the Checks API?" flag.
+
+    ``True`` until the first 403 is observed; ``False`` thereafter for
+    the life of the process. Exposed so tests (and ``gate status``, if
+    we wire it in later) can introspect without poking the private
+    module-global directly.
+    """
+    with _check_runs_forbidden_lock:
+        return not _check_runs_forbidden
+
+
 def _paginate_check_runs(repo: str, sha: str) -> list[dict[str, Any]]:
-    """Fetch all check-runs pages for a SHA, merging ``check_runs`` arrays."""
+    """Fetch all check-runs pages for a SHA, merging ``check_runs`` arrays.
+
+    Short-circuits to ``[]`` once the process has seen a 403 from this
+    endpoint — see the "Fine-grained PAT caveat" in the module
+    docstring. The Statuses endpoint (``fetch_check_state``'s second
+    call) is unaffected and continues to contribute signal.
+    """
+    global _check_runs_forbidden
+
+    with _check_runs_forbidden_lock:
+        if _check_runs_forbidden:
+            return []
+
     all_runs: list[dict[str, Any]] = []
     page = 1
     while True:
-        body = _gh_json([
+        args = [
             "api",
             f"repos/{repo}/commits/{sha}/check-runs?per_page=100&page={page}",
-        ])
+        ]
+        try:
+            # Direct ``gh._gh`` call (not ``_gh_json``) because we need
+            # to distinguish a structural 403 from other failures so we
+            # can cache the "forbidden" verdict. ``quiet_on_403=True``
+            # downgrades the first 403's log line to DEBUG; everything
+            # after is short-circuited above and never touches gh at all.
+            body_raw = gh._gh(args, quiet_on_403=True)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            if _is_pat_forbidden_error(e):
+                with _check_runs_forbidden_lock:
+                    first_time = not _check_runs_forbidden
+                    _check_runs_forbidden = True
+                if first_time:
+                    logger.info(
+                        "Checks API unreachable with current GATE_PAT "
+                        "(HTTP 403: 'Resource not accessible by personal "
+                        "access token'). This is a known fine-grained-PAT "
+                        "limitation — GitHub restricts the Checks API to "
+                        "GitHub Apps and classic PATs. Falling back to "
+                        "statuses-only coverage for the rest of this "
+                        "process's lifetime; check-runs calls will be "
+                        "suppressed. See docs/external-checks.md → "
+                        "'Fine-grained PAT limitation' for the full "
+                        "picture and migration options."
+                    )
+                return []
+            # Non-403 failures: preserve old behaviour — log a warning and
+            # let the statuses endpoint carry the review alone this round.
+            logger.warning(f"gh api call failed ({args[:3]}): {e}")
+            return all_runs
+
+        try:
+            body = json.loads(body_raw) if body_raw else None
+        except json.JSONDecodeError as e:
+            logger.warning(f"gh api returned non-JSON for {args[:3]}: {e}")
+            return all_runs
+
         if not isinstance(body, dict):
             break
         runs = body.get("check_runs")

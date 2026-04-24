@@ -1502,6 +1502,10 @@ class FixPipeline:
         env["GATE_CODEX_THREAD_ID"] = self.codex_thread_id
         env["GATE_FIX_WORKSPACE"] = str(self.workspace)
 
+        # Prompt is piped via stdin (not appended to argv) so large fix
+        # prompts can't hit macOS ARG_MAX (~1 MB) and crash with
+        # `OSError [Errno 7] Argument list too long` before claude starts.
+        # See gate.runner.StructuredRunner.run for the same fix.
         cmd = [
             "claude",
             "--dangerously-skip-permissions",
@@ -1512,7 +1516,6 @@ class FixPipeline:
             self.config.get("models", {}).get("fix_senior", "opus"),
             "--max-turns",
             str(RESUME_MAX_TURNS),
-            resume_prompt,
         ]
 
         stdout_path = self.workspace / "resume-stdout.log"
@@ -1521,10 +1524,10 @@ class FixPipeline:
             with open(stdout_path, "wb") as out, open(stderr_path, "wb") as err:
                 subprocess.run(
                     cmd,
+                    input=resume_prompt.encode("utf-8"),
                     env=env,
                     cwd=str(self.workspace),
                     timeout=self.config.get("timeouts", {}).get("fix_session_s", 2400),
-                    stdin=subprocess.DEVNULL,
                     stdout=out,
                     stderr=err,
                 )

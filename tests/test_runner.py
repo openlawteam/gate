@@ -183,6 +183,48 @@ class TestStructuredRunner:
         assert runner._parse_output("", "triage") is None
         assert runner._parse_output("   ", "triage") is None
 
+    @patch("gate.runner.subprocess.run")
+    def test_run_passes_prompt_via_stdin_not_argv(self, mock_run, tmp_path):
+        """Regression test for ARG_MAX overflow on PRs with huge diffs.
+
+        Before this fix, the assembled prompt was appended to argv with
+        ``cmd.append(prompt_text)`` and any prompt larger than macOS
+        ARG_MAX (~1 MB) raised
+        ``OSError: [Errno 7] Argument list too long: 'claude'`` inside
+        ``_execute_child`` before claude even started — silently failing
+        the structured stage with no actionable error.
+
+        adin-chat PR #261 (554 files, 5.5 MB diff) was the original repro.
+        """
+        mock_run.return_value = type(
+            "P", (), {"returncode": 0, "stdout": '{"change_type":"x"}', "stderr": ""}
+        )()
+        runner = StructuredRunner()
+        prompt = "x" * 5_500_000  # 5.5 MB — same scale as PR #261
+        runner.run("triage", prompt, tmp_path, {"models": {}, "timeouts": {}})
+        call = mock_run.call_args
+        cmd = call.args[0]
+        assert prompt not in cmd, (
+            "prompt must NOT be appended to argv (would hit ARG_MAX on big PRs); "
+            "pass it via input= instead"
+        )
+        assert call.kwargs.get("input") == prompt, "prompt must be piped via stdin"
+        assert "--print" in cmd, "claude must run with --print so it reads stdin"
+
+    @patch("gate.runner.subprocess.run")
+    def test_run_does_not_set_stdin_kwarg(self, mock_run, tmp_path):
+        """``input=`` and ``stdin=`` are mutually exclusive in subprocess.run.
+
+        Setting both raises ValueError at runtime. Pin the contract so
+        nobody re-adds an explicit ``stdin=DEVNULL``.
+        """
+        mock_run.return_value = type(
+            "P", (), {"returncode": 0, "stdout": "{}", "stderr": ""}
+        )()
+        runner = StructuredRunner()
+        runner.run("triage", "tiny prompt", tmp_path, {"models": {}, "timeouts": {}})
+        assert "stdin" not in mock_run.call_args.kwargs
+
 
 class TestRunWithRetry:
     def test_success_on_first_try(self, sample_config):

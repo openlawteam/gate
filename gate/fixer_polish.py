@@ -444,6 +444,10 @@ def _resume_fix_senior(pipeline: "FixPipeline", finding: dict, timeout_s: int) -
     env["GATE_FIX_WORKSPACE"] = str(workspace)
 
     from gate.fixer import RESUME_MAX_TURNS
+    # Prompt is piped via stdin (not appended to argv) so large polish
+    # prompts can't hit macOS ARG_MAX (~1 MB) and crash with
+    # `OSError [Errno 7] Argument list too long` before claude starts.
+    # See gate.runner.StructuredRunner.run for the same fix.
     cmd = [
         "claude",
         "--dangerously-skip-permissions",
@@ -454,7 +458,6 @@ def _resume_fix_senior(pipeline: "FixPipeline", finding: dict, timeout_s: int) -
         pipeline.config.get("models", {}).get("fix_senior", "opus"),
         "--max-turns",
         str(RESUME_MAX_TURNS),
-        resume_prompt,
     ]
     try:
         with open(workspace / "polish-resume-stdout.log", "ab") as out, open(
@@ -462,10 +465,10 @@ def _resume_fix_senior(pipeline: "FixPipeline", finding: dict, timeout_s: int) -
         ) as err:
             subprocess.run(
                 cmd,
+                input=resume_prompt.encode("utf-8"),
                 env=env,
                 cwd=str(workspace),
                 timeout=timeout_s,
-                stdin=subprocess.DEVNULL,
                 stdout=out,
                 stderr=err,
             )

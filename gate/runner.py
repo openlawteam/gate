@@ -531,7 +531,15 @@ class StructuredRunner:
         if effort:
             cmd += ["--effort", effort]
 
-        cmd.append(prompt_text)
+        # Prompt is piped to claude via stdin instead of appended to argv.
+        # macOS ARG_MAX is ~1 MB; a PR with hundreds of changed files can
+        # produce a multi-megabyte assembled prompt and would otherwise raise
+        # OSError [Errno 7] Argument list too long inside _execute_child
+        # before claude even starts (the subprocess never runs, so the usual
+        # rate-limit / transient-error stderr handling below never sees it).
+        # `claude --print` reads the prompt from stdin when no positional
+        # prompt arg is supplied (see `claude --help`: the positional `prompt`
+        # is optional with --print, and `--input-format text` is the default).
 
         env = build_claude_env()
         timeout = config.get("timeouts", {}).get("structured_stage_s", 120)
@@ -539,6 +547,7 @@ class StructuredRunner:
         try:
             proc = subprocess.run(
                 cmd,
+                input=prompt_text,
                 capture_output=True,
                 text=True,
                 env=env,

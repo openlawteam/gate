@@ -541,8 +541,12 @@ class TestResumeFixSession:
     under ``gate up`` (TUI mode) caused the resumed claude subprocess to
     fight the Textual app for ``/dev/tty``, hanging both indefinitely.
 
-    The fix is: detach stdio (``stdin=DEVNULL`` + file-backed stdout/stderr)
-    and pass ``--print`` so claude runs non-interactively.
+    The fix is: detach stdio (file-backed stdout/stderr) and pass ``--print``
+    so claude runs non-interactively. Stdin is also detached — historically
+    via ``stdin=DEVNULL``, now via an anonymous ``input=`` pipe that carries
+    the prompt itself (see ``test_resume_passes_prompt_via_stdin_not_argv``
+    for the ARG_MAX-overflow regression that motivated the switch). Either
+    way the child never inherits the parent's controlling terminal.
     """
 
     def _pipeline(self, tmp_path, sample_config):
@@ -572,8 +576,16 @@ class TestResumeFixSession:
         pipe.session_id = "sess-abc"
         pipe._resume_fix_session("go fix it")
         claude_call = self._find_claude_call(mock_run)
-        assert claude_call.kwargs["stdin"] is subprocess.DEVNULL, \
-            "stdin must be DEVNULL to avoid TTY deadlock with parent process"
+        # The child must not inherit the parent's controlling TTY. We now feed
+        # the prompt through stdin via ``input=``, which makes Python
+        # auto-allocate ``stdin=subprocess.PIPE`` — that is still a pipe
+        # (not /dev/tty), so the original TTY-deadlock guarantee holds.
+        # Fail loudly if anyone goes back to passing ``stdin=`` explicitly
+        # (which would conflict with ``input=`` and raise at runtime).
+        assert "stdin" not in claude_call.kwargs, \
+            "stdin must not be set explicitly when prompt is passed via input="
+        assert claude_call.kwargs.get("input") is not None, \
+            "prompt must be piped to claude via input= (not via argv)"
 
     @patch("gate.fixer.subprocess.run")
     def test_resume_redirects_stdout_and_stderr(self, mock_run, sample_config, tmp_path):

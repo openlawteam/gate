@@ -65,13 +65,13 @@ Then record every finding in that sub-scope under `not_fixed[]` with `reason: "s
 When every sub-scope is either checkpointed or explicitly deferred:
 
 1. Run one final **full** `build_verify` by asking the junior to run `$typecheck_cmd` and `$lint_cmd` and reading the tails. If both are clean, proceed. If the full build fails on cross-sub-scope interactions, run `gate checkpoint revert --to-last-clean` (drops the most recent sub-scope) and record its findings as `not_fixed` with reason `subscope_exhausted` and detail explaining the full-build break. Then re-run this step.
-2. Run:
+2. Write your commit message body to `gate-commit-message.md` in the workspace using your file-writing tool, then run:
 
 ```bash
-gate checkpoint finalize <<'EOF'
-<commit message body — the `fix(gate): auto-fix N/M findings...` template>
-EOF
+gate checkpoint finalize --message-file gate-commit-message.md
 ```
+
+Do **not** use heredoc (`<<'EOF' ... EOF`) — shell metacharacters after the `EOF` marker can create dangling pipes that hang the session. Always use `--message-file` with file-redirection.
 
 Gate squashes all `gate-checkpoint:` commits into one final commit on the PR branch ready for push. Do NOT run git commands yourself.
 

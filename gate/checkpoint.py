@@ -18,9 +18,10 @@ senior-facing contract is:
       pre-fix baseline if no checkpoints exist yet). Used when a sub-scope
       exhausts its iteration budget.
 
-- ``gate checkpoint finalize <<'EOF'  \n<commit body>\n EOF``
+- ``gate checkpoint finalize --message-file <path>``
       Squash every ``gate-checkpoint:`` commit between the pre-fix
       baseline and HEAD into a single final commit with the supplied body.
+      Also accepts ``--message <text>`` or stdin (with a 30 s timeout).
       Leaves the working tree clean and ready for ``commit_and_push``.
 
 - ``gate checkpoint list``
@@ -53,11 +54,14 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import select
 import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+STDIN_TIMEOUT_S = 30
 
 logger = logging.getLogger(__name__)
 
@@ -464,6 +468,21 @@ def _cmd_revert(args: argparse.Namespace) -> int:
     return 0
 
 
+def _read_stdin_with_timeout(timeout_s: int = STDIN_TIMEOUT_S) -> str:
+    """Read stdin with a timeout to prevent indefinite hangs.
+
+    When the senior model accidentally puts a pipe after a heredoc EOF
+    marker, zsh spawns a ``cat`` on stdin that blocks forever.  A bounded
+    read turns that into a clear error instead of a silent hang.
+    """
+    if not sys.stdin.isatty() and select.select([sys.stdin], [], [], timeout_s)[0]:
+        return sys.stdin.read().strip()
+    if sys.stdin.isatty():
+        return ""
+    logger.warning("stdin read timed out after %ds", timeout_s)
+    return ""
+
+
 def _cmd_finalize(args: argparse.Namespace) -> int:
     workspace = _resolve_workspace()
     baseline = _pre_fix_sha(workspace)
@@ -471,13 +490,18 @@ def _cmd_finalize(args: argparse.Namespace) -> int:
         print("missing pre-fix baseline; cannot finalize", file=sys.stderr)
         return 4
 
-    # Read the commit body from either --message or stdin (so senior can
-    # use a heredoc to supply multi-line bodies without shell-quoting
-    # hazards).
-    if args.message:
+    # Read the commit body from --message-file, --message, or stdin.
+    body = ""
+    if args.message_file:
+        p = Path(args.message_file)
+        if not p.exists():
+            print(f"message file not found: {p}", file=sys.stderr)
+            return 2
+        body = p.read_text().strip()
+    elif args.message:
         body = args.message
     else:
-        body = sys.stdin.read().strip()
+        body = _read_stdin_with_timeout()
     if not body:
         print("finalize requires a commit message body", file=sys.stderr)
         return 2
@@ -569,6 +593,11 @@ def cli_main(argv: list[str]) -> int:
         "finalize", help="squash all sub-scope checkpoints into one commit"
     )
     p_final.add_argument("--message", default="")
+    p_final.add_argument(
+        "--message-file",
+        default="",
+        help="path to a file containing the commit message body",
+    )
     p_final.set_defaults(func=_cmd_finalize)
 
     p_list = sub.add_parser("list", help="show current checkpoint commits")

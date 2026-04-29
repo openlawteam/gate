@@ -224,6 +224,33 @@ class TestFinalize:
         assert finalize_lines, f"no finalize progress message seen in {progress}"
         assert "squashed 3 checkpoints" in finalize_lines[-1]
 
+    def test_message_file_reads_body_from_disk(self, repo, stub_build_ok):
+        (repo / "a.txt").write_text("1")
+        assert checkpoint.cli_main(["save", "--name", "s1"]) == 0
+        (repo / "gate-commit-message.md").write_text("fix(gate): from file\n")
+
+        assert (
+            checkpoint.cli_main([
+                "finalize", "--message-file", "gate-commit-message.md",
+            ])
+            == 0
+        )
+
+        log = subprocess.run(
+            ["git", "log", "--pretty=%s", "-1"],
+            cwd=str(repo), capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        assert log == "fix(gate): from file"
+
+    def test_missing_message_file_exits_2(self, repo, stub_build_ok):
+        (repo / "a.txt").write_text("1")
+        assert checkpoint.cli_main(["save", "--name", "s1"]) == 0
+
+        rc = checkpoint.cli_main([
+            "finalize", "--message-file", "nonexistent.md",
+        ])
+        assert rc == 2
+
     def test_finalize_reports_single_checkpoint(
         self, repo, stub_build_ok, monkeypatch,
     ):

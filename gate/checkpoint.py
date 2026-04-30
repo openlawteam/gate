@@ -498,6 +498,7 @@ def _cmd_finalize(args: argparse.Namespace) -> int:
             print(f"message file not found: {p}", file=sys.stderr)
             return 2
         body = p.read_text().strip()
+        p.unlink(missing_ok=True)
     elif args.message:
         body = args.message
     else:

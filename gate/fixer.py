@@ -53,6 +53,9 @@ GATE_ARTIFACT_FILES = {
     # < gate-directions.md` invocation (Fix 3: replaces the deprecated
     # heredoc pattern). Never commit to the PR.
     "gate-directions.md",
+    # Commit message scratch file written by the senior during hopper
+    # finalize (consumed by `gate checkpoint finalize --message-file`).
+    "gate-commit-message.md",
     # Postcondition verification artifact (written by the postconditions
     # stage). Leaked into `git add -A` on Python repos during fix cycles
     # and crashed scoped ruff runs (PR #14 build failure).

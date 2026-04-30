@@ -241,6 +241,8 @@ class TestFinalize:
             cwd=str(repo), capture_output=True, text=True, check=True,
         ).stdout.strip()
         assert log == "fix(gate): from file"
+        assert not (repo / "gate-commit-message.md").exists(), \
+            "message file should be deleted after finalize consumes it"
 
     def test_missing_message_file_exits_2(self, repo, stub_build_ok):
         (repo / "a.txt").write_text("1")

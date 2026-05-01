@@ -320,6 +320,17 @@ def _codex_binary_key() -> tuple[str, float]:
         return (path, 0.0)
 
 
+def _claude_binary_key() -> tuple[str, float]:
+    """Return (path, mtime) for the claude binary, used as cache key."""
+    path = shutil.which("claude")
+    if not path:
+        return ("", 0.0)
+    try:
+        return (path, os.path.getmtime(path))
+    except OSError:
+        return (path, 0.0)
+
+
 def _diagnose_macos_gatekeeper(binary_path: str) -> str:
     """On macOS, inspect xattr/spctl for Gatekeeper clues."""
     if sys.platform != "darwin" or not binary_path:
@@ -384,7 +395,7 @@ def codex_health_check(force: bool = False) -> tuple[bool, str]:
 
     if not key[0]:
         result = (False, "codex: not found in PATH")
-        _store_health(result, key)
+        _store_health("codex", result, key)
         return result
 
     try:
@@ -406,13 +417,68 @@ def codex_health_check(force: bool = False) -> tuple[bool, str]:
     except (subprocess.SubprocessError, OSError) as e:
         result = (False, f"codex --version error: {e}")
 
-    _store_health(result, key)
+    _store_health("codex", result, key)
     return result
 
 
-def _store_health(result: tuple[bool, str], key: tuple[str, float]) -> None:
+def claude_health_check(force: bool = False) -> tuple[bool, str]:
+    """Fast probe: can the claude CLI start at all?
+
+    Mirrors ``codex_health_check`` — runs ``claude --version`` with a 10 s
+    timeout and caches the result for 5 minutes keyed on (binary_path,
+    mtime). On macOS, surfaces Gatekeeper diagnostics on failure so a
+    quarantined binary is self-describing.
+
+    Args:
+        force: Bypass the TTL cache and run a fresh probe.
+
+    Returns:
+        (ok, detail) — True + version string on success, False + reason
+        on failure.
+    """
+    key = _claude_binary_key()
+
     with _health_lock:
-        _health_cache["codex"] = {
+        cached = _health_cache.get("claude")
+        if (
+            not force
+            and cached
+            and cached["key"] == key
+            and (time.monotonic() - cached["ts"]) < _HEALTH_CACHE_TTL_S
+        ):
+            return cached["ok"], cached["detail"]
+
+    if not key[0]:
+        result = (False, "claude: not found in PATH")
+        _store_health("claude", result, key)
+        return result
+
+    try:
+        proc = subprocess.run(
+            ["claude", "--version"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if proc.returncode == 0:
+            version = (proc.stdout or "").strip().split("\n")[0]
+            result = (True, version)
+        else:
+            detail = (proc.stderr or "").strip()[:200] or f"exit code {proc.returncode}"
+            gk = _diagnose_macos_gatekeeper(key[0])
+            result = (False, f"claude --version failed: {detail}{gk}")
+    except subprocess.TimeoutExpired:
+        gk = _diagnose_macos_gatekeeper(key[0])
+        msg = f"claude --version hung (>10s) — likely Gatekeeper block{gk}"
+        result = (False, msg)
+    except (subprocess.SubprocessError, OSError) as e:
+        result = (False, f"claude --version error: {e}")
+
+    _store_health("claude", result, key)
+    return result
+
+
+def _store_health(name: str, result: tuple[bool, str], key: tuple[str, float]) -> None:
+    with _health_lock:
+        _health_cache[name] = {
             "ok": result[0],
             "detail": result[1],
             "ts": time.monotonic(),

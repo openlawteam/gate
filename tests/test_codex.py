@@ -7,6 +7,7 @@ from gate.codex import (
     BOOTSTRAP_TIMEOUT_S,
     _parse_thread_id,
     bootstrap_codex,
+    claude_health_check,
     codex_health_check,
     run_codex,
 )
@@ -395,3 +396,28 @@ class TestCodexHealthCheck:
         ok, detail = codex_health_check(force=True)
         assert ok is False
         assert "hung" in detail
+
+
+class TestClaudeHealthCheck:
+    """Tests for claude_health_check() — parity with codex probe."""
+
+    def _clear_cache(self):
+        from gate import codex
+        with codex._health_lock:
+            codex._health_cache.clear()
+
+    @patch("gate.codex.subprocess.run")
+    @patch("gate.codex._claude_binary_key", return_value=("/usr/bin/claude", 100.0))
+    def test_healthy_claude(self, _mock_key, mock_run):
+        self._clear_cache()
+        mock_run.return_value = MagicMock(returncode=0, stdout="1.2.3\n", stderr="")
+        ok, detail = claude_health_check(force=True)
+        assert ok is True
+        assert "1.2.3" in detail
+
+    @patch("gate.codex._claude_binary_key", return_value=("", 0.0))
+    def test_not_in_path(self, _mock_key):
+        self._clear_cache()
+        ok, detail = claude_health_check(force=True)
+        assert ok is False
+        assert "not found" in detail

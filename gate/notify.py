@@ -6,6 +6,7 @@ Ported from notify.sh. All notifications are best-effort (never block on failure
 import json
 import logging
 import os
+import threading
 import time
 import urllib.request
 from datetime import datetime, timezone
@@ -209,6 +210,7 @@ def fix_failed(
 
 _last_codex_alert_ts: float = 0.0
 _CODEX_ALERT_COOLDOWN_S = 3600  # 1 hour
+_codex_alert_lock = threading.Lock()
 
 
 def codex_unavailable(reason: str) -> None:
@@ -219,9 +221,10 @@ def codex_unavailable(reason: str) -> None:
     """
     global _last_codex_alert_ts
     now = time.monotonic()
-    if now - _last_codex_alert_ts < _CODEX_ALERT_COOLDOWN_S:
-        return
-    _last_codex_alert_ts = now
+    with _codex_alert_lock:
+        if now - _last_codex_alert_ts < _CODEX_ALERT_COOLDOWN_S:
+            return
+        _last_codex_alert_ts = now
 
     notify(
         "Codex CLI unavailable — auto-fix paused",

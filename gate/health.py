@@ -556,26 +556,13 @@ def check_codex_cli() -> dict:
 def check_claude_cli() -> dict:
     """Verify the Claude CLI can start (``claude --version``, 10 s timeout).
 
-    Parity with check_codex_cli — Claude hasn't broken yet, but a
-    future Anthropic CLI update or Gatekeeper change could wedge it
-    the same way codex 0.128.0 did.
+    Uses the cached health probe from ``gate.codex`` so repeated calls
+    within a 5-minute window are essentially free, and surfaces macOS
+    Gatekeeper diagnostics on failure.
     """
-    try:
-        result = subprocess.run(
-            ["claude", "--version"],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode == 0:
-            version = (result.stdout or "").strip().split("\n")[0]
-            return {"ok": True, "detail": version}
-        detail = (result.stderr or "").strip()[:200] or f"exit code {result.returncode}"
-        return {"ok": False, "detail": f"claude --version failed: {detail}"}
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "detail": "claude --version hung (>10s)"}
-    except FileNotFoundError:
-        return {"ok": False, "detail": "claude: not found in PATH"}
-    except (subprocess.SubprocessError, OSError) as e:
-        return {"ok": False, "detail": f"claude --version error: {e}"}
+    from gate.codex import claude_health_check
+    ok, detail = claude_health_check()
+    return {"ok": ok, "detail": detail}
 
 
 # ── Helpers ──────────────────────────────────────────────────

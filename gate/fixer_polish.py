@@ -219,7 +219,7 @@ def _attempt_finding(
     )
     from gate.fixer import _build_codex_bootstrap_prompt  # local import to avoid cycle
     codex_prompt = _build_codex_bootstrap_prompt()
-    _, thread_id = bootstrap_codex(codex_prompt, str(workspace), env=build_claude_env())
+    _, thread_id, _stderr = bootstrap_codex(codex_prompt, str(workspace), env=build_claude_env())
     if not thread_id:
         logger.warning(f"polish[{finding_id}] codex bootstrap failed")
         return {

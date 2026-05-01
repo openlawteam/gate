@@ -54,6 +54,8 @@ def run_health_check() -> dict:
         "quota": check_quota_freshness(),
         "quota_auth": check_quota_auth(),
         "recent_errors": check_recent_errors(),
+        "codex_cli": check_codex_cli(),
+        "claude_cli": check_claude_cli(),
     }
 
     errors = [k for k, v in results.items() if isinstance(v, dict) and not v.get("ok", True)]
@@ -538,6 +540,42 @@ def check_recent_errors() -> dict:
     error_count = sum(1 for d in recent if d == "error")
     ok = error_count < 3
     return {"ok": ok, "detail": f"{error_count}/5 errors"}
+
+
+def check_codex_cli() -> dict:
+    """Verify the Codex CLI can start (``codex --version``, 10 s timeout).
+
+    Uses the cached health probe from ``gate.codex`` so repeated calls
+    within a 5-minute window are essentially free.
+    """
+    from gate.codex import codex_health_check
+    ok, detail = codex_health_check()
+    return {"ok": ok, "detail": detail}
+
+
+def check_claude_cli() -> dict:
+    """Verify the Claude CLI can start (``claude --version``, 10 s timeout).
+
+    Parity with check_codex_cli — Claude hasn't broken yet, but a
+    future Anthropic CLI update or Gatekeeper change could wedge it
+    the same way codex 0.128.0 did.
+    """
+    try:
+        result = subprocess.run(
+            ["claude", "--version"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            version = (result.stdout or "").strip().split("\n")[0]
+            return {"ok": True, "detail": version}
+        detail = (result.stderr or "").strip()[:200] or f"exit code {result.returncode}"
+        return {"ok": False, "detail": f"claude --version failed: {detail}"}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "detail": "claude --version hung (>10s)"}
+    except FileNotFoundError:
+        return {"ok": False, "detail": "claude: not found in PATH"}
+    except (subprocess.SubprocessError, OSError) as e:
+        return {"ok": False, "detail": f"claude --version error: {e}"}
 
 
 # ── Helpers ──────────────────────────────────────────────────

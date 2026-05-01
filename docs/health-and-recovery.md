@@ -83,3 +83,79 @@ the Gate Auto-Fix check with title "skipped (no mechanical changes
 needed)" and logs `fix_no_op` to `reviews.jsonl`. Soft fix-attempt
 counters are reset on no-op so we don't exhaust the retry budget.
 Toggle with `graceful_noop_on_approve_with_notes` (default `true`).
+
+## Codex hangs in dyld / macOS Gatekeeper block
+
+### Symptoms
+
+- `Gate Auto-Fix: failed` on every PR, but the review itself passes.
+- `activity.log` shows `gate.codex ERROR codex bootstrap timed out` after
+  the full `BOOTSTRAP_TIMEOUT_S` (120 s).
+- No new session files appear in `~/.codex/sessions/<today>/` during the
+  fix window.
+- `gate doctor` reports `codex CLI ........ FAIL: hung after 10s`.
+
+### Root cause
+
+On macOS, Homebrew cask installs set the `com.apple.quarantine` extended
+attribute. If the user denies the Gatekeeper prompt (or it expires), or if
+`syspolicyd` caches a deny decision, the codex binary hangs indefinitely in
+`_dyld_start` — the dynamic linker cannot proceed, no output is produced on
+stdout or stderr, and the process never exits.
+
+### Diagnosis
+
+```bash
+# 1. Check quarantine xattr
+xattr -l /opt/homebrew/Caskroom/codex/*/codex-aarch64-apple-darwin
+#    → look for "com.apple.quarantine: 0381;..."
+
+# 2. Check spctl assessment
+spctl -a -v /opt/homebrew/Caskroom/codex/*/codex-aarch64-apple-darwin
+#    → "rejected" means Gatekeeper is blocking
+
+# 3. Sample a running (stuck) codex
+sample <pid> 1 -mayDie
+#    → all samples in _dyld_start = dyld hang
+
+# 4. Check kernel log for the definitive ASP denial
+log show --last 10m --predicate 'eventMessage CONTAINS "codex"'
+#    → look for "(AppleSystemPolicy) ASP: Security policy would not allow process"
+#    → or "(AppleMobileFileIntegrity) AMFI: unable to accelerate context: codex"
+```
+
+### Recovery
+
+`syspolicyd` caches deny decisions per binary path. On macOS 26+, `spctl --add`
+is no longer supported ("This operation is no longer supported"). The reliable
+fix is to copy the binary to a fresh path that has no cached deny:
+
+```bash
+# 1. Strip quarantine from the cask binary
+xattr -cr /opt/homebrew/Caskroom/codex/*/codex-aarch64-apple-darwin
+
+# 2. Copy to a user-writable location (syspolicyd cache is path-keyed)
+mkdir -p ~/.local/bin
+cp /opt/homebrew/Caskroom/codex/*/codex-aarch64-apple-darwin ~/.local/bin/codex
+xattr -cr ~/.local/bin/codex
+chmod +x ~/.local/bin/codex
+
+# 3. Ensure ~/.local/bin is in PATH *before* /opt/homebrew/bin
+#    (add to ~/.zshrc if not already present)
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+
+# 4. Verify
+codex --version    # should print version in <1s from ~/.local/bin/codex
+```
+
+After a `brew upgrade codex`, repeat steps 1-2 to refresh the copy. The
+original cask binary at `/opt/homebrew/Caskroom/codex/…` and the brew symlink
+at `/opt/homebrew/bin/codex` will remain blocked by `syspolicyd`'s cached deny;
+only the fresh-path copy works.
+
+On older macOS (< 26) where `spctl --add` still works, this alternative is
+available instead of step 2:
+
+```bash
+sudo spctl --add --label "codex-cli" /opt/homebrew/Caskroom/codex/*/codex-aarch64-apple-darwin
+```

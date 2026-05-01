@@ -1374,7 +1374,7 @@ class GateTUI(App):
                             container.remove()
                         del self._log_panes[key]
                     except Exception:
-                        logger.debug("Failed to remove log pane %s, rebuilding", key)
+                        logger.exception("Failed to remove log pane %s, rebuilding", key)
                         for child in list(panes_container.children):
                             child.remove()
                         self._log_panes.clear()

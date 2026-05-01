@@ -6,6 +6,8 @@ Ported from notify.sh. All notifications are best-effort (never block on failure
 import json
 import logging
 import os
+import threading
+import time
 import urllib.request
 from datetime import datetime, timezone
 
@@ -203,6 +205,37 @@ def fix_failed(
         f"PR #{pr_number}{repo_label} auto-fix failed",
         f"{reason} after {iterations} iteration(s)",
         color=15158332,
+    )
+
+
+_last_codex_alert_ts: float = 0.0
+_CODEX_ALERT_COOLDOWN_S = 3600  # 1 hour
+_codex_alert_lock = threading.Lock()
+
+
+def codex_unavailable(reason: str) -> None:
+    """Notify when the Codex CLI is broken / unavailable for auto-fix.
+
+    Throttled to at most once per hour so a persistently broken binary
+    doesn't spam every PR review.
+    """
+    global _last_codex_alert_ts
+    now = time.monotonic()
+    with _codex_alert_lock:
+        if now - _last_codex_alert_ts < _CODEX_ALERT_COOLDOWN_S:
+            return
+        _last_codex_alert_ts = now
+
+    notify(
+        "Codex CLI unavailable — auto-fix paused",
+        reason,
+        tags="warning",
+        priority="default",
+    )
+    notify_discord(
+        "Codex CLI unavailable — auto-fix paused",
+        reason,
+        color=15105570,  # orange
     )
 
 

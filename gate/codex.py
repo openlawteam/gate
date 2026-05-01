@@ -14,25 +14,46 @@ quietly chewing through quota.
 import json
 import logging
 import os
+import shutil
 import signal
 import subprocess
+import sys
 import threading
+import time
 
 logger = logging.getLogger(__name__)
 
 CODEX_FLAGS = "--dangerously-bypass-approvals-and-sandbox"
 
-# Timeout (seconds) applied to both bootstrap and resume codex runs.
-# Long-running by design — a full junior stage can easily exceed 10
-# minutes. See `gate.code.HEARTBEAT_INTERVAL_S` for the mechanism that
-# keeps senior's tmux pane from triggering the runner stuck-detector
-# during these long calls.
+# Timeout for ``run_codex`` resume calls. Long-running by design — a
+# full junior stage can easily exceed 10 minutes. See
+# ``gate.code.HEARTBEAT_INTERVAL_S`` for the mechanism that keeps
+# senior's tmux pane from triggering the runner stuck-detector during
+# these long calls.
 CODEX_TIMEOUT_S = 2400
+
+# Separate, shorter timeout for ``bootstrap_codex``. Bootstrap is a
+# quick "open a session" handshake; if it takes > 2 minutes the CLI is
+# wedged (Gatekeeper block, auth loop, network partition). A short
+# timeout lets the retry/skip logic surface the problem in seconds
+# instead of burning 40 minutes like the old shared 2400 s value did.
+BOOTSTRAP_TIMEOUT_S = 120
 
 # Grace period (seconds) between SIGTERM and SIGKILL when terminating
 # the codex process group. Short on purpose — codex does not catch
 # SIGTERM gracefully, and the orchestrator cares about prompt exit.
 _TERM_GRACE_S = 2.0
+
+# Cap on stderr captured from bootstrap_codex, in bytes.
+_STDERR_TAIL_BYTES = 2048
+
+# ---------------------------------------------------------------------------
+# Health check cache
+# ---------------------------------------------------------------------------
+_HEALTH_CACHE_TTL_S = 300  # 5 minutes
+
+_health_cache: dict = {}  # {"ok": bool, "detail": str, "ts": float, "key": tuple}
+_health_lock = threading.Lock()
 
 # Reference to the currently-running codex Popen, or None when no codex
 # call is in flight. Updated (serialized by ``_active_lock``) around each
@@ -103,7 +124,7 @@ def _kill_and_wait(proc: subprocess.Popen) -> None:
 
 def bootstrap_codex(
     prompt: str, cwd: str, env: dict | None = None
-) -> tuple[int, str | None]:
+) -> tuple[int, str | None, str]:
     """Bootstrap a new Codex session and return its thread ID.
 
     Runs codex exec --json to create a fresh session. Parses the thread_id
@@ -115,7 +136,9 @@ def bootstrap_codex(
         env: Optional environment dict. Uses inherited env if None.
 
     Returns:
-        (exit_code, thread_id) tuple. thread_id is None on failure.
+        (exit_code, thread_id, stderr_tail) triple. thread_id is None on
+        failure. stderr_tail is the last ~2 KB of stderr (useful for
+        diagnosing auth errors, Gatekeeper blocks, etc.).
         Exit code is 127 if codex not found, 130 on KeyboardInterrupt.
     """
     cmd = ["codex", "exec", CODEX_FLAGS, "--json", prompt]
@@ -128,32 +151,45 @@ def bootstrap_codex(
             cwd=cwd,
             env=env,
             stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             start_new_session=True,
         )
     except FileNotFoundError:
         logger.error("codex command not found")
-        return 127, None
+        return 127, None, "codex: command not found"
 
     _set_active(proc)
     try:
         try:
-            stdout, _ = proc.communicate(timeout=CODEX_TIMEOUT_S)
+            stdout, stderr = proc.communicate(timeout=BOOTSTRAP_TIMEOUT_S)
         except subprocess.TimeoutExpired:
-            logger.error("codex bootstrap timed out")
+            logger.error(
+                "codex bootstrap timed out after %ds", BOOTSTRAP_TIMEOUT_S
+            )
             _kill_and_wait(proc)
-            return 1, None
+            return 1, None, "bootstrap timed out (possible Gatekeeper block or network issue)"
         except KeyboardInterrupt:
             _kill_and_wait(proc)
-            return 130, None
+            return 130, None, "interrupted"
     finally:
         _set_active(None)
+
+    stderr_tail = (stderr or "")[-_STDERR_TAIL_BYTES:]
+    if stderr_tail:
+        logger.debug("codex bootstrap stderr: %s", stderr_tail[:500])
 
     thread_id = _parse_thread_id(stdout or "")
     if proc.returncode == 0 and not thread_id:
         logger.error("Failed to parse thread_id from codex output")
 
-    return proc.returncode, thread_id
+    if proc.returncode != 0:
+        logger.error(
+            "codex bootstrap failed (rc=%d): %s",
+            proc.returncode, stderr_tail[:500],
+        )
+
+    return proc.returncode, thread_id, stderr_tail
 
 
 def run_codex(
@@ -267,3 +303,184 @@ def _parse_thread_id(stdout: str) -> str | None:
         except json.JSONDecodeError:
             continue
     return None
+
+
+# ---------------------------------------------------------------------------
+# Health probe
+# ---------------------------------------------------------------------------
+
+def _codex_binary_key() -> tuple[str, float]:
+    """Return (path, mtime) for the codex binary, used as cache key."""
+    path = shutil.which("codex")
+    if not path:
+        return ("", 0.0)
+    try:
+        return (path, os.path.getmtime(path))
+    except OSError:
+        return (path, 0.0)
+
+
+def _claude_binary_key() -> tuple[str, float]:
+    """Return (path, mtime) for the claude binary, used as cache key."""
+    path = shutil.which("claude")
+    if not path:
+        return ("", 0.0)
+    try:
+        return (path, os.path.getmtime(path))
+    except OSError:
+        return (path, 0.0)
+
+
+def _diagnose_macos_gatekeeper(binary_path: str) -> str:
+    """On macOS, inspect xattr/spctl for Gatekeeper clues."""
+    if sys.platform != "darwin" or not binary_path:
+        return ""
+    hints: list[str] = []
+    try:
+        xattr_out = subprocess.run(
+            ["xattr", "-l", binary_path],
+            capture_output=True, text=True, timeout=5,
+        )
+        if "com.apple.quarantine" in (xattr_out.stdout or ""):
+            hints.append("quarantine xattr present")
+    except (subprocess.SubprocessError, OSError):
+        pass
+    try:
+        spctl_out = subprocess.run(
+            ["spctl", "-a", "-v", binary_path],
+            capture_output=True, text=True, timeout=5,
+        )
+        combined = (spctl_out.stdout or "") + (spctl_out.stderr or "")
+        if "rejected" in combined.lower():
+            hints.append("spctl rejected")
+    except (subprocess.SubprocessError, OSError):
+        pass
+    if hints:
+        return (
+            f" [macOS Gatekeeper: {', '.join(hints)}. "
+            f"Fix: cp {binary_path} ~/.local/bin/codex && "
+            f"xattr -cr ~/.local/bin/codex]"
+        )
+    return ""
+
+
+def codex_health_check(force: bool = False) -> tuple[bool, str]:
+    """Fast probe: can the codex CLI start at all?
+
+    Runs ``codex --version`` with a 10 s timeout. Results are cached for
+    5 minutes keyed on (binary_path, mtime) so a ``brew upgrade`` that
+    replaces the binary invalidates the cache automatically.
+
+    On macOS, when the probe fails, also inspects ``xattr`` and
+    ``spctl -a -v`` to produce a self-describing diagnostic.
+
+    Args:
+        force: Bypass the TTL cache and run a fresh probe.
+
+    Returns:
+        (ok, detail) — True + version string on success, False + reason
+        on failure.
+    """
+    key = _codex_binary_key()
+
+    with _health_lock:
+        cached = _health_cache.get("codex")
+        if (
+            not force
+            and cached
+            and cached["key"] == key
+            and (time.monotonic() - cached["ts"]) < _HEALTH_CACHE_TTL_S
+        ):
+            return cached["ok"], cached["detail"]
+
+    if not key[0]:
+        result = (False, "codex: not found in PATH")
+        _store_health("codex", result, key)
+        return result
+
+    try:
+        proc = subprocess.run(
+            ["codex", "--version"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if proc.returncode == 0:
+            version = (proc.stdout or "").strip().split("\n")[0]
+            result = (True, version)
+        else:
+            detail = (proc.stderr or "").strip()[:200] or f"exit code {proc.returncode}"
+            gk = _diagnose_macos_gatekeeper(key[0])
+            result = (False, f"codex --version failed: {detail}{gk}")
+    except subprocess.TimeoutExpired:
+        gk = _diagnose_macos_gatekeeper(key[0])
+        msg = f"codex --version hung (>10s) — likely Gatekeeper block{gk}"
+        result = (False, msg)
+    except (subprocess.SubprocessError, OSError) as e:
+        result = (False, f"codex --version error: {e}")
+
+    _store_health("codex", result, key)
+    return result
+
+
+def claude_health_check(force: bool = False) -> tuple[bool, str]:
+    """Fast probe: can the claude CLI start at all?
+
+    Mirrors ``codex_health_check`` — runs ``claude --version`` with a 10 s
+    timeout and caches the result for 5 minutes keyed on (binary_path,
+    mtime). On macOS, surfaces Gatekeeper diagnostics on failure so a
+    quarantined binary is self-describing.
+
+    Args:
+        force: Bypass the TTL cache and run a fresh probe.
+
+    Returns:
+        (ok, detail) — True + version string on success, False + reason
+        on failure.
+    """
+    key = _claude_binary_key()
+
+    with _health_lock:
+        cached = _health_cache.get("claude")
+        if (
+            not force
+            and cached
+            and cached["key"] == key
+            and (time.monotonic() - cached["ts"]) < _HEALTH_CACHE_TTL_S
+        ):
+            return cached["ok"], cached["detail"]
+
+    if not key[0]:
+        result = (False, "claude: not found in PATH")
+        _store_health("claude", result, key)
+        return result
+
+    try:
+        proc = subprocess.run(
+            ["claude", "--version"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if proc.returncode == 0:
+            version = (proc.stdout or "").strip().split("\n")[0]
+            result = (True, version)
+        else:
+            detail = (proc.stderr or "").strip()[:200] or f"exit code {proc.returncode}"
+            gk = _diagnose_macos_gatekeeper(key[0])
+            result = (False, f"claude --version failed: {detail}{gk}")
+    except subprocess.TimeoutExpired:
+        gk = _diagnose_macos_gatekeeper(key[0])
+        msg = f"claude --version hung (>10s) — likely Gatekeeper block{gk}"
+        result = (False, msg)
+    except (subprocess.SubprocessError, OSError) as e:
+        result = (False, f"claude --version error: {e}")
+
+    _store_health("claude", result, key)
+    return result
+
+
+def _store_health(name: str, result: tuple[bool, str], key: tuple[str, float]) -> None:
+    with _health_lock:
+        _health_cache[name] = {
+            "ok": result[0],
+            "detail": result[1],
+            "ts": time.monotonic(),
+            "key": key,
+        }

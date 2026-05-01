@@ -3,10 +3,19 @@
 import signal
 from unittest.mock import MagicMock, patch
 
-from gate.codex import _parse_thread_id, bootstrap_codex, run_codex
+from gate.codex import (
+    BOOTSTRAP_TIMEOUT_S,
+    _parse_thread_id,
+    bootstrap_codex,
+    claude_health_check,
+    codex_health_check,
+    run_codex,
+)
 
 
-def _make_popen_mock(returncode: int = 0, stdout: str = "", pid: int = 12345):
+def _make_popen_mock(
+    returncode: int = 0, stdout: str = "", stderr: str = "", pid: int = 12345,
+):
     """Build a MagicMock that mimics subprocess.Popen's attributes and
     ``communicate()`` contract used by gate.codex.
 
@@ -17,7 +26,7 @@ def _make_popen_mock(returncode: int = 0, stdout: str = "", pid: int = 12345):
     proc = MagicMock()
     proc.returncode = returncode
     proc.pid = pid
-    proc.communicate.return_value = (stdout, None)
+    proc.communicate.return_value = (stdout, stderr)
     proc.poll.return_value = returncode
     proc.wait.return_value = returncode
     return proc
@@ -53,31 +62,65 @@ class TestBootstrapCodex:
             returncode=0,
             stdout='{"type":"thread.started","thread_id":"test-thread"}\n',
         )
-        exit_code, thread_id = bootstrap_codex("prompt", "/tmp")
+        exit_code, thread_id, stderr_tail = bootstrap_codex("prompt", "/tmp")
         assert exit_code == 0
         assert thread_id == "test-thread"
+        assert isinstance(stderr_tail, str)
 
     @patch("gate.codex.subprocess.Popen")
     def test_no_thread_id(self, mock_popen):
         mock_popen.return_value = _make_popen_mock(
             returncode=0, stdout="no events\n"
         )
-        exit_code, thread_id = bootstrap_codex("prompt", "/tmp")
+        exit_code, thread_id, _ = bootstrap_codex("prompt", "/tmp")
         assert exit_code == 0
         assert thread_id is None
 
     @patch("gate.codex.subprocess.Popen", side_effect=FileNotFoundError)
     def test_codex_not_found(self, mock_popen):
-        exit_code, thread_id = bootstrap_codex("prompt", "/tmp")
+        exit_code, thread_id, stderr_tail = bootstrap_codex("prompt", "/tmp")
         assert exit_code == 127
         assert thread_id is None
+        assert "not found" in stderr_tail
 
     @patch("gate.codex.subprocess.Popen")
     def test_nonzero_exit(self, mock_popen):
-        mock_popen.return_value = _make_popen_mock(returncode=1, stdout="")
-        exit_code, thread_id = bootstrap_codex("prompt", "/tmp")
+        mock_popen.return_value = _make_popen_mock(returncode=1, stdout="", stderr="auth error")
+        exit_code, thread_id, stderr_tail = bootstrap_codex("prompt", "/tmp")
         assert exit_code == 1
         assert thread_id is None
+        assert "auth error" in stderr_tail
+
+    @patch("gate.codex.subprocess.Popen")
+    def test_stderr_captured(self, mock_popen):
+        mock_popen.return_value = _make_popen_mock(
+            returncode=1, stdout="", stderr="rate limit exceeded\nplease wait",
+        )
+        _, _, stderr_tail = bootstrap_codex("prompt", "/tmp")
+        assert "rate limit exceeded" in stderr_tail
+        assert "please wait" in stderr_tail
+
+    @patch("gate.codex.subprocess.Popen")
+    def test_uses_bootstrap_timeout(self, mock_popen):
+        mock_popen.return_value = _make_popen_mock(returncode=0, stdout="")
+        bootstrap_codex("prompt", "/tmp")
+        proc = mock_popen.return_value
+        proc.communicate.assert_called_once_with(timeout=BOOTSTRAP_TIMEOUT_S)
+
+    @patch("gate.codex._kill_and_wait")
+    @patch("gate.codex.subprocess.Popen")
+    def test_timeout_returns_hint(self, mock_popen, mock_kill):
+        import subprocess as _subprocess
+        proc = _make_popen_mock(returncode=0)
+        proc.communicate.side_effect = _subprocess.TimeoutExpired(
+            cmd=["codex"], timeout=120
+        )
+        mock_popen.return_value = proc
+        exit_code, thread_id, stderr_tail = bootstrap_codex("prompt", "/tmp")
+        assert exit_code == 1
+        assert thread_id is None
+        assert "timed out" in stderr_tail
+        mock_kill.assert_called_once()
 
     @patch("gate.codex.subprocess.Popen")
     def test_start_new_session_isolates_pgroup(self, mock_popen):
@@ -88,6 +131,14 @@ class TestBootstrapCodex:
         bootstrap_codex("prompt", "/tmp")
         kwargs = mock_popen.call_args.kwargs
         assert kwargs.get("start_new_session") is True
+
+    @patch("gate.codex.subprocess.Popen")
+    def test_stderr_pipe_is_set(self, mock_popen):
+        import subprocess as _subprocess
+        mock_popen.return_value = _make_popen_mock(returncode=0, stdout="")
+        bootstrap_codex("prompt", "/tmp")
+        kwargs = mock_popen.call_args.kwargs
+        assert kwargs.get("stderr") == _subprocess.PIPE
 
 
 class TestRunCodex:
@@ -256,3 +307,117 @@ class TestKillAndWait:
             codex._kill_and_wait(proc)
             assert mock_killpg.call_count == 1
             assert mock_killpg.call_args.args == (99999, signal.SIGTERM)
+
+
+class TestCodexHealthCheck:
+    """Tests for codex_health_check() — the fast CLI probe with caching."""
+
+    def _clear_cache(self):
+        from gate import codex
+        with codex._health_lock:
+            codex._health_cache.clear()
+
+    @patch("gate.codex.subprocess.run")
+    @patch("gate.codex._codex_binary_key", return_value=("/usr/bin/codex", 100.0))
+    def test_healthy_codex(self, _mock_key, mock_run):
+        self._clear_cache()
+        mock_run.return_value = MagicMock(returncode=0, stdout="0.128.0\n", stderr="")
+        ok, detail = codex_health_check(force=True)
+        assert ok is True
+        assert "0.128.0" in detail
+
+    @patch("gate.codex.subprocess.run")
+    @patch("gate.codex._codex_binary_key", return_value=("/usr/bin/codex", 100.0))
+    def test_nonzero_exit(self, _mock_key, mock_run):
+        self._clear_cache()
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error msg")
+        ok, detail = codex_health_check(force=True)
+        assert ok is False
+        assert "error msg" in detail
+
+    @patch("gate.codex._codex_binary_key", return_value=("", 0.0))
+    def test_not_in_path(self, _mock_key):
+        self._clear_cache()
+        ok, detail = codex_health_check(force=True)
+        assert ok is False
+        assert "not found" in detail
+
+    @patch("gate.codex.subprocess.run", side_effect=PermissionError("denied"))
+    @patch("gate.codex._codex_binary_key", return_value=("/usr/bin/codex", 100.0))
+    def test_os_error(self, _mock_key, mock_run):
+        self._clear_cache()
+        ok, detail = codex_health_check(force=True)
+        assert ok is False
+        assert "denied" in detail
+
+    @patch("gate.codex.subprocess.run")
+    @patch("gate.codex._codex_binary_key", return_value=("/usr/bin/codex", 100.0))
+    def test_cache_hit(self, _mock_key, mock_run):
+        self._clear_cache()
+        mock_run.return_value = MagicMock(returncode=0, stdout="0.128.0\n", stderr="")
+        codex_health_check(force=True)
+        assert mock_run.call_count == 1
+
+        ok, detail = codex_health_check(force=False)
+        assert ok is True
+        assert mock_run.call_count == 1  # no second call
+
+    @patch("gate.codex.subprocess.run")
+    @patch("gate.codex._codex_binary_key", return_value=("/usr/bin/codex", 100.0))
+    def test_force_bypasses_cache(self, _mock_key, mock_run):
+        self._clear_cache()
+        mock_run.return_value = MagicMock(returncode=0, stdout="0.128.0\n", stderr="")
+        codex_health_check(force=True)
+        codex_health_check(force=True)
+        assert mock_run.call_count == 2
+
+    @patch("gate.codex.subprocess.run")
+    @patch("gate.codex._codex_binary_key")
+    def test_cache_invalidated_by_binary_change(self, mock_key, mock_run):
+        self._clear_cache()
+        mock_run.return_value = MagicMock(returncode=0, stdout="0.128.0\n", stderr="")
+        mock_key.return_value = ("/usr/bin/codex", 100.0)
+        codex_health_check(force=True)
+
+        mock_key.return_value = ("/usr/bin/codex", 200.0)
+        codex_health_check(force=False)
+        assert mock_run.call_count == 2
+
+    @patch(
+        "gate.codex.subprocess.run",
+        side_effect=__import__("subprocess").TimeoutExpired(
+            cmd=["codex"], timeout=10,
+        ),
+    )
+    @patch("gate.codex._codex_binary_key", return_value=("/usr/bin/codex", 100.0))
+    @patch("gate.codex._diagnose_macos_gatekeeper", return_value="")
+    def test_timeout_reports_hung(self, _mock_diag, _mock_key, _mock_run):
+        self._clear_cache()
+        ok, detail = codex_health_check(force=True)
+        assert ok is False
+        assert "hung" in detail
+
+
+class TestClaudeHealthCheck:
+    """Tests for claude_health_check() — parity with codex probe."""
+
+    def _clear_cache(self):
+        from gate import codex
+        with codex._health_lock:
+            codex._health_cache.clear()
+
+    @patch("gate.codex.subprocess.run")
+    @patch("gate.codex._claude_binary_key", return_value=("/usr/bin/claude", 100.0))
+    def test_healthy_claude(self, _mock_key, mock_run):
+        self._clear_cache()
+        mock_run.return_value = MagicMock(returncode=0, stdout="1.2.3\n", stderr="")
+        ok, detail = claude_health_check(force=True)
+        assert ok is True
+        assert "1.2.3" in detail
+
+    @patch("gate.codex._claude_binary_key", return_value=("", 0.0))
+    def test_not_in_path(self, _mock_key):
+        self._clear_cache()
+        ok, detail = claude_health_check(force=True)
+        assert ok is False
+        assert "not found" in detail

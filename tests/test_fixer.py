@@ -1640,3 +1640,68 @@ class TestPublishGateMarker:
         assert any(
             ".gate/pre-fix-sha marker" in r.message for r in caplog.records
         ), "OSError during publish must surface as a WARNING log"
+
+
+class TestFixPipelineCodexPreflight:
+    """Tests for the codex health-check preflight + retry + soft-skip logic."""
+
+    def _make_pipeline(self, sample_config, tmp_path, decision="request_changes"):
+        findings = [{"severity": "warning", "message": "test finding", "file": "a.ts", "line": 1}]
+        verdict = {"decision": decision, "findings": findings}
+        (tmp_path / "verdict.json").write_text("{}")
+        (tmp_path / "triage.json").write_text("{}")
+        pipe = FixPipeline(
+            pr_number=1, repo="a/b", workspace=tmp_path,
+            verdict=verdict, build={}, config=sample_config,
+        )
+        return pipe
+
+    @patch("gate.fixer.notify")
+    @patch("gate.fixer.state.check_fix_limits", return_value=(True, ""))
+    @patch("gate.fixer.codex_health_check", return_value=(False, "codex not found"))
+    @patch("gate.fixer.github")
+    def test_preflight_fail_returns_soft_skip(
+        self, mock_gh, mock_health, mock_limits, mock_notify, sample_config, tmp_path
+    ):
+        pipe = self._make_pipeline(sample_config, tmp_path)
+        result = pipe.run()
+        assert result.success is True
+        assert result.pushed is False
+        assert "codex unavailable" in result.summary
+        mock_notify.codex_unavailable.assert_called_once()
+
+    @patch("gate.fixer.notify")
+    @patch("gate.fixer.state.check_fix_limits", return_value=(True, ""))
+    @patch("gate.fixer.codex_health_check", return_value=(True, "0.128.0"))
+    @patch("gate.fixer.bootstrap_codex", return_value=(1, None, "auth error"))
+    @patch("gate.fixer.github")
+    def test_bootstrap_retry_then_skip(
+        self, mock_gh, mock_bootstrap, mock_health, mock_limits, mock_notify,
+        sample_config, tmp_path,
+    ):
+        pipe = self._make_pipeline(sample_config, tmp_path)
+        result = pipe.run()
+        assert result.success is True
+        assert result.pushed is False
+        assert "bootstrap failed" in result.summary
+        assert mock_bootstrap.call_count == 2
+        mock_notify.codex_unavailable.assert_called_once()
+
+    @patch("gate.fixer.notify")
+    @patch("gate.fixer.state.check_fix_limits", return_value=(True, ""))
+    @patch("gate.fixer.codex_health_check", return_value=(True, "0.128.0"))
+    @patch("gate.fixer.github")
+    def test_bootstrap_success_first_attempt(
+        self, mock_gh, mock_health, mock_limits, mock_notify, sample_config, tmp_path
+    ):
+        with patch("gate.fixer.bootstrap_codex", return_value=(0, "thread-abc", "")) as mock_bs:
+            pipe = self._make_pipeline(sample_config, tmp_path)
+            pipe._run_fix_session = MagicMock(return_value={"has_changes": False, "fix_json": None})
+            pipe._is_graceful_noop_case = MagicMock(return_value=True)
+            pipe._graceful_noop_result = MagicMock(
+                return_value=MagicMock(success=True, pushed=False, summary="noop")
+            )
+            pipe.run()
+            assert mock_bs.call_count == 1
+            assert pipe.codex_thread_id == "thread-abc"
+            mock_notify.codex_unavailable.assert_not_called()

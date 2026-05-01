@@ -118,12 +118,56 @@ def _check_tool(
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         if result.returncode != 0:
             detail = result.stderr.strip().split("\n")[0] or f"exit code {result.returncode}"
-            checks.append((name, False, detail))
+            checks.append((name, False, detail + _gatekeeper_hint(cmd[0], path)))
             return
         version = result.stdout.strip().split("\n")[0]
         checks.append((name, True, version))
+    except subprocess.TimeoutExpired:
+        checks.append((
+            name, False,
+            f"hung after 10s{_gatekeeper_hint(cmd[0], path)}",
+        ))
     except (subprocess.SubprocessError, OSError) as e:
         checks.append((name, False, str(e)))
+
+
+def _gatekeeper_hint(cmd_name: str, binary_path: str) -> str:
+    """Return a macOS Gatekeeper remediation hint when relevant.
+
+    Only fires on macOS when the binary has a quarantine xattr or is
+    rejected by spctl. Returns an empty string otherwise.
+    """
+    if sys.platform != "darwin":
+        return ""
+    hints: list[str] = []
+    try:
+        xattr_out = subprocess.run(
+            ["xattr", "-l", binary_path],
+            capture_output=True, text=True, timeout=5,
+        )
+        if "com.apple.quarantine" in (xattr_out.stdout or ""):
+            hints.append("quarantine xattr present")
+    except (subprocess.SubprocessError, OSError):
+        pass
+    try:
+        spctl_out = subprocess.run(
+            ["spctl", "-a", "-v", binary_path],
+            capture_output=True, text=True, timeout=5,
+        )
+        combined = (spctl_out.stdout or "") + (spctl_out.stderr or "")
+        if "rejected" in combined.lower():
+            hints.append("spctl rejected")
+    except (subprocess.SubprocessError, OSError):
+        pass
+    if not hints:
+        return ""
+    return (
+        f"\n                   hint: macOS Gatekeeper is blocking {cmd_name}. Run:\n"
+        f"                     xattr -cr {binary_path}\n"
+        f"                     cp {binary_path} ~/.local/bin/{cmd_name}\n"
+        f"                     xattr -cr ~/.local/bin/{cmd_name}\n"
+        f"                   Ensure ~/.local/bin is in PATH before /opt/homebrew/bin."
+    )
 
 
 def print_checks(checks: list[tuple[str, bool, str]]) -> None:

@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 from gate import builder, github, notify, prompt, state
-from gate.codex import bootstrap_codex
+from gate.codex import bootstrap_codex, codex_health_check
 from gate.config import build_claude_env, gate_dir
 from gate.finding_id import compute_finding_id  # re-exported for back-compat
 from gate.io import atomic_write
@@ -1043,19 +1043,39 @@ class FixPipeline:
                     json.dumps(self.verdict, indent=2)
                 )
 
-            # Bootstrap Codex session
+            # Pre-flight: verify codex CLI is functional
+            ok, health_detail = codex_health_check()
+            if not ok:
+                reason = f"Auto-fix skipped — codex unavailable: {health_detail}"
+                write_live_log(self.pr_number, reason, prefix="fix", repo=self.repo)
+                logger.warning("Codex health check failed: %s", health_detail)
+                notify.codex_unavailable(health_detail)
+                return FixResult(success=True, pushed=False, summary=reason)
+
+            # Bootstrap Codex session (retry once on failure)
             write_live_log(self.pr_number, "Bootstrapping Codex...", prefix="fix", repo=self.repo)
             codex_prompt = _build_codex_bootstrap_prompt()
-            exit_code, codex_thread_id = bootstrap_codex(
-                codex_prompt, str(self.workspace), env=build_claude_env()
-            )
-
-            if codex_thread_id:
-                self.codex_thread_id = codex_thread_id
-                logger.info(f"Codex session bootstrapped: {codex_thread_id[:8]}")
+            stderr_tail = ""
+            for attempt in (1, 2):
+                _rc, codex_thread_id, stderr_tail = bootstrap_codex(
+                    codex_prompt, str(self.workspace), env=build_claude_env()
+                )
+                if codex_thread_id:
+                    self.codex_thread_id = codex_thread_id
+                    logger.info(f"Codex session bootstrapped: {codex_thread_id[:8]}")
+                    break
+                logger.warning(
+                    "Codex bootstrap failed (attempt %d/2): rc=%d stderr=%s",
+                    attempt, _rc, stderr_tail[:500],
+                )
+                codex_health_check(force=True)
+                if attempt < 2:
+                    time.sleep(5)
             else:
-                logger.warning("Codex bootstrap failed — senior will work without delegation")
-                (self.workspace / "no-codex.txt").write_text("codex bootstrap failed")
+                reason = f"Auto-fix skipped — codex bootstrap failed: {stderr_tail[:200]}"
+                write_live_log(self.pr_number, reason, prefix="fix", repo=self.repo)
+                notify.codex_unavailable(f"bootstrap failed: {stderr_tail[:200]}")
+                return FixResult(success=True, pushed=False, summary=reason)
 
             # Write env file for tmux-spawned runner (tmux doesn't inherit our env)
             fix_env = {

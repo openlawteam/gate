@@ -1046,12 +1046,13 @@ class GateTUI(App):
     def _poll_server(self) -> None:
         if not self.server:
             return
-        self._refresh_reviews_table()
+        reviews = list(self.server.reviews) if self.server.reviews else []
+        self._refresh_reviews_table(reviews)
         self._refresh_queue_table()
         self._refresh_health()
-        self._update_title()
+        self._update_title(reviews)
         self._update_system_info()
-        self._poll_log()
+        self._poll_log(reviews)
 
     def _update_recent_and_metrics(self) -> None:
         try:
@@ -1067,9 +1068,10 @@ class GateTUI(App):
 
     # ── Active Reviews Table (incremental) ───────────────────
 
-    def _refresh_reviews_table(self) -> None:
+    def _refresh_reviews_table(self, reviews: list[dict] | None = None) -> None:
         table = self.query_one("#reviews-table", DataTable)
-        reviews = self.server.reviews if self.server else []
+        if reviews is None:
+            reviews = list(self.server.reviews) if self.server and self.server.reviews else []
 
         # Empty-state placeholder. Mirrors the Queue's "Queue empty"
         # row so a resting TUI has two symmetric "nothing here"
@@ -1320,20 +1322,21 @@ class GateTUI(App):
 
     # ── Log Tail (multi-pane) ────────────────────────────────
 
-    def _poll_log(self) -> None:
+    def _poll_log(self, reviews: list[dict] | None = None) -> None:
         if not self._log_visible:
             return
 
         label_widget = self.query_one("#log-label", Static)
         panes_container = self.query_one("#log-panes", Horizontal)
 
-        active_reviews: list[tuple[str, int]] = []
-        if self.server and self.server.reviews:
-            active_reviews = [
-                (r.get("repo", ""), r.get("pr_number"))
-                for r in self.server.reviews
-                if r.get("pr_number")
-            ]
+        if reviews is None:
+            reviews = list(self.server.reviews) if self.server and self.server.reviews else []
+
+        active_reviews: list[tuple[str, int]] = [
+            (r.get("repo", ""), r.get("pr_number"))
+            for r in reviews
+            if r.get("pr_number")
+        ]
 
         desired_keys: set[str] = set()
         for repo, pr in active_reviews:
@@ -1353,22 +1356,29 @@ class GateTUI(App):
                 self._log_panes.clear()
             else:
                 for key in current_keys - desired_keys:
-                    pane_info = self._log_panes.pop(key, None)
-                    if pane_info:
-                        try:
-                            w = self.query_one(f"#{pane_info['widget_id']}", RichLog)
-                            container = w.parent
-                            prev_sep = container.previous_sibling if container else None
-                            if prev_sep and "log-pane-separator" in (prev_sep.classes or set()):
-                                prev_sep.remove()
-                            elif container:
-                                next_sep = container.next_sibling
-                                if next_sep and "log-pane-separator" in (next_sep.classes or set()):
-                                    next_sep.remove()
-                            if container:
-                                container.remove()
-                        except Exception:
-                            pass
+                    pane_info = self._log_panes.get(key)
+                    if not pane_info:
+                        self._log_panes.pop(key, None)
+                        continue
+                    try:
+                        w = self.query_one(f"#{pane_info['widget_id']}", RichLog)
+                        container = w.parent
+                        prev_sep = container.previous_sibling if container else None
+                        if prev_sep and "log-pane-separator" in (prev_sep.classes or set()):
+                            prev_sep.remove()
+                        elif container:
+                            next_sep = container.next_sibling
+                            if next_sep and "log-pane-separator" in (next_sep.classes or set()):
+                                next_sep.remove()
+                        if container:
+                            container.remove()
+                        del self._log_panes[key]
+                    except Exception:
+                        logger.exception("Failed to remove log pane %s, rebuilding", key)
+                        for child in list(panes_container.children):
+                            child.remove()
+                        self._log_panes.clear()
+                        break
 
             if "activity" in desired_keys and "activity" not in self._log_panes:
                 label_widget.update("Log [activity]")
@@ -1379,15 +1389,13 @@ class GateTUI(App):
                 )
                 self._log_panes["activity"] = {"widget_id": pane_id, "file_pos": 0}
             elif "activity" not in desired_keys:
-                keys_to_add = (
-                    desired_keys if switching_category
-                    else desired_keys - current_keys
-                )
+                keys_to_add = desired_keys - set(self._log_panes.keys())
                 for repo, pr in active_reviews:
                     slug = repo_slug(repo) if repo else ""
                     key = f"{slug}:{pr}" if slug else str(pr)
                     if key not in keys_to_add:
                         continue
+                    keys_to_add.discard(key)
                     if self._log_panes:
                         panes_container.mount(Static("", classes="log-pane-separator"))
                     safe_id = key.replace(":", "-")
@@ -1463,11 +1471,12 @@ class GateTUI(App):
 
     # ── Title ────────────────────────────────────────────────
 
-    def _update_title(self) -> None:
+    def _update_title(self, reviews: list[dict] | None = None) -> None:
         if not self.server:
             self.title = "gate"
             return
-        reviews = self.server.reviews
+        if reviews is None:
+            reviews = list(self.server.reviews) if self.server.reviews else []
         if not reviews:
             target = "gate"
         elif any(r.get("status") == "stuck" for r in reviews):

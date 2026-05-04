@@ -12,6 +12,7 @@ from gate.github import (
     comment_pr,
     complete_check_run,
     create_check_run,
+    post_review,
 )
 
 
@@ -376,6 +377,33 @@ class TestApprovePr:
         mock_gh.side_effect = err
         approve_pr("owner/repo", 42, "Looks good")
         mock_comment.assert_not_called()
+
+
+class TestPostReview:
+    @patch("gate.github.upsert_sticky_summary")
+    @patch("gate.github.comment_pr")
+    @patch("gate.github._gh")
+    def test_request_changes_falls_back_to_comment_when_own_pr_blocked(
+        self, mock_gh, mock_comment, mock_sticky
+    ):
+        err = subprocess.CalledProcessError(1, ["gh"])
+        err.stderr = "GraphQL: Review Can not request changes on your own pull request"
+        mock_gh.side_effect = err
+        verdict = {
+            "decision": "request_changes",
+            "confidence": "high",
+            "summary": "Needs fixes",
+            "findings": [{"severity": "error", "file": "x.py", "message": "bug"}],
+            "stats": {"stages_run": 4},
+        }
+
+        post_review("owner/repo", 42, verdict, None, "deadbeef")
+
+        mock_comment.assert_called_once()
+        args = mock_comment.call_args.args
+        assert args[:2] == ("owner/repo", 42)
+        assert "Changes requested" in args[2]
+        mock_sticky.assert_called_once_with("owner/repo", 42, verdict, None)
 
 
 class TestCommentPr:

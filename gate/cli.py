@@ -5,6 +5,7 @@ import datetime as _dt
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import setproctitle
 
@@ -415,12 +416,50 @@ def cmd_process(args: list[str]) -> int:
 
 @command("up", "Start server and TUI")
 def cmd_up(args: list[str]) -> int:
-    """Start the Gate server and TUI dashboard."""
+    """Start the Gate server and TUI dashboard.
+
+    With ``--serve-events ADDR`` (e.g. ``:7080`` or ``127.0.0.1:7080``)
+    Gate also exposes its broadcast stream as Server-Sent Events on
+    ``http://ADDR/v1/events``. The bearer token is read from the
+    ``GATE_SSE_TOKEN`` environment variable; the command refuses to
+    start if it's empty (an unauthenticated event stream would be a
+    one-way ticket to leaking review state). See
+    ``docs/protocol.md`` for the wire format.
+    """
+    import os
+
     from gate.config import socket_path as _socket_path
     from gate.tmux import get_current_tmux_location, is_inside_tmux
 
     parser = make_parser("up", "Start the Gate server and TUI.")
     parser.add_argument("--headless", action="store_true", help="Run without TUI")
+    parser.add_argument(
+        "--serve-events",
+        default="",
+        metavar="ADDR",
+        help=(
+            "Expose broadcasts as SSE on HOST:PORT (e.g. ':7080'). "
+            "Requires GATE_SSE_TOKEN env var."
+        ),
+    )
+    parser.add_argument(
+        "--cors-origin",
+        default="",
+        metavar="ORIGIN",
+        help=(
+            "Allow CORS for ORIGIN on the SSE endpoint "
+            "(dev only; production serves dashboard same-origin)."
+        ),
+    )
+    parser.add_argument(
+        "--poll-comments",
+        action="store_true",
+        help=(
+            "Poll PR issue comments on the configured repos for "
+            "/gate <verb> slash commands (rerun, skip, status, "
+            "explain, bypass)."
+        ),
+    )
     try:
         parsed = parse_args(parser, args)
     except SystemExit:
@@ -435,10 +474,44 @@ def cmd_up(args: list[str]) -> int:
     from gate.cleanup import cleanup_orphans
     cleanup_orphans()
 
+    serve_events_addr = parsed.serve_events.strip()
+    sse_token = os.environ.get("GATE_SSE_TOKEN", "").strip()
+    if serve_events_addr and not sse_token:
+        print(
+            "error: --serve-events requires the GATE_SSE_TOKEN environment "
+            "variable to be set to a non-empty bearer token."
+        )
+        return 1
+
+    poller_holder: dict[str, Any] = {}
+
+    def _maybe_start_sse(server) -> None:
+        if serve_events_addr:
+            try:
+                from gate.web_events import run_sse_server
+            except ImportError as e:
+                print(f"error: {e}")
+                raise SystemExit(1) from e
+            run_sse_server(
+                server,
+                serve_events_addr,
+                sse_token,
+                cors_origin=parsed.cors_origin or None,
+            )
+
+        if parsed.poll_comments:
+            from gate.config import load_config
+            from gate.config import socket_path as _sp
+            from gate.slash_commands import CommentPoller
+
+            poller = CommentPoller(socket_path=_sp(), config=load_config())
+            poller.start()
+            poller_holder["poller"] = poller
+
     if parsed.headless:
         from gate.server import start_server_headless
 
-        return start_server_headless(socket_path)
+        return start_server_headless(socket_path, on_started=_maybe_start_sse)
 
     if not is_inside_tmux():
         print("gate up must run inside tmux.")
@@ -450,7 +523,9 @@ def cmd_up(args: list[str]) -> int:
     from gate.server import start_server_with_tui
 
     tmux_location = get_current_tmux_location()
-    return start_server_with_tui(socket_path, tmux_location=tmux_location)
+    return start_server_with_tui(
+        socket_path, tmux_location=tmux_location, on_started=_maybe_start_sse
+    )
 
 
 @command("status", "Print current state")
@@ -1156,6 +1231,59 @@ def cmd_digest(args: list[str]) -> int:
 
     daily_digest()
     print("Digest sent")
+    return 0
+
+
+@command("report", "Aggregate review-volume / verdict / fix-pipeline stats")
+def cmd_report(args: list[str]) -> int:
+    """Print review and fix-pipeline metrics from ``reviews.jsonl``.
+
+    Examples:
+        gate report                       # last 7 days, all repos, text
+        gate report --since 24h           # last 24 hours
+        gate report --repo myorg/myrepo   # filter to one repo
+        gate report --json                # machine-readable
+    """
+    import json as _json
+
+    from gate.reports import (
+        format_json,
+        format_text,
+        load_reviews,
+        parse_since,
+        summarize,
+    )
+
+    parser = make_parser("report", "Aggregate stats from reviews.jsonl.")
+    parser.add_argument("--since", default="7d", help="e.g. 24h, 7d, 30d")
+    parser.add_argument("--repo", default="", help="Filter to one repo")
+    parser.add_argument(
+        "--json", action="store_true", help="Machine-readable output"
+    )
+    try:
+        parsed = parse_args(parser, args)
+    except SystemExit:
+        return 0
+    except ArgumentError as e:
+        print(f"error: {e}")
+        parser.print_usage()
+        return 1
+
+    try:
+        since = parse_since(parsed.since)
+    except ValueError as e:
+        print(f"error: {e}")
+        return 1
+
+    rows = load_reviews(since=since, repo=parsed.repo)
+    report = summarize(
+        rows, since_label=parsed.since, repo_label=parsed.repo
+    )
+
+    if parsed.json:
+        print(_json.dumps(format_json(report), indent=2, default=str))
+    else:
+        print(format_text(report))
     return 0
 
 

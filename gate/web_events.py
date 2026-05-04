@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import queue
+import secrets
 import threading
 import time
 from collections import deque
@@ -295,7 +296,7 @@ def create_app(
         if not authorization.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="Missing bearer token")
         provided = authorization.removeprefix("Bearer ").strip()
-        if provided != token:
+        if not secrets.compare_digest(provided, token):
             raise HTTPException(status_code=403, detail="Invalid bearer token")
 
     @app.get("/v1/health")

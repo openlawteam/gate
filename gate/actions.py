@@ -124,19 +124,23 @@ def read_actions(
     path = actions_log_path()
     if not path.exists():
         return
-    with open(path, "r", encoding="utf-8") as f:
-        for raw in f:
-            raw = raw.strip()
-            if not raw:
-                continue
-            try:
-                rec = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
-            if since_ms is not None and rec.get("ts", 0) < since_ms:
-                continue
-            if verb is not None and rec.get("verb") != verb:
-                continue
-            if repo is not None and rec.get("repo") != repo:
-                continue
-            yield rec
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for raw in f:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    rec = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if since_ms is not None and rec.get("ts", 0) < since_ms:
+                    continue
+                if verb is not None and rec.get("verb") != verb:
+                    continue
+                if repo is not None and rec.get("repo") != repo:
+                    continue
+                yield rec
+    except OSError:
+        logger.debug("read_actions: failed to read %s", path, exc_info=True)
+        return

@@ -50,7 +50,8 @@ from pathlib import Path
 
 from gate import client as gate_client
 from gate.actions import record_action
-from gate.config import data_dir, get_all_repos, repo_slug, state_dir
+from gate.config import data_dir, get_all_repos, repo_slug
+from gate.state import get_pr_state_dir
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +158,7 @@ def _validate_bypass_link(link: str, repo_config: dict | None) -> bool:
 
 def _latest_verdict_for_pr(repo: str, pr_number: int) -> dict | None:
     """Find the most-recent verdict.json for a (repo, pr) pair."""
-    pr_dir = state_dir() / repo_slug(repo) / f"pr{pr_number}"
+    pr_dir = get_pr_state_dir(pr_number, repo, create=False)
     if not pr_dir.exists():
         return None
     reviews_dir = pr_dir / "reviews"
@@ -284,10 +285,33 @@ def dispatch_command(
     if cmd.verb == "rerun":
         # Re-enqueue is a server socket message; reply tells the user
         # the request is in.
+        from gate.github import get_pr_info
 
-        head_sha = ""
-        if isinstance(repo_config, dict):
-            head_sha = str(repo_config.get("default_branch_head_sha", ""))
+        try:
+            pr_info = get_pr_info(cmd.repo, cmd.pr_number)
+        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+            record_action(
+                verb=cmd.verb, actor=cmd.commenter, repo=cmd.repo,
+                pr_number=cmd.pr_number, args={}, outcome="error",
+                detail=f"get_pr_info failed: {e}",
+            )
+            return "error", (
+                f":x: Could not fetch PR #{cmd.pr_number} head info; "
+                "rerun aborted."
+            )
+
+        head_sha = str(pr_info.get("headRefOid") or "")
+        branch = str(pr_info.get("headRefName") or "")
+        if not head_sha or not branch:
+            record_action(
+                verb=cmd.verb, actor=cmd.commenter, repo=cmd.repo,
+                pr_number=cmd.pr_number, args={}, outcome="rejected",
+                detail="missing_head_sha_or_branch",
+            )
+            return "rejected", (
+                f":no_entry_sign: PR #{cmd.pr_number} has no head commit "
+                "(closed or detached?). Cannot rerun."
+            )
         gate_client.send_message(
             socket_path,
             {
@@ -296,7 +320,7 @@ def dispatch_command(
                 "repo": cmd.repo,
                 "head_sha": head_sha,
                 "event": "manual_rerun",
-                "branch": "",
+                "branch": branch,
                 "labels": [],
             },
             wait_for_response=False,
@@ -436,9 +460,10 @@ class CommentPoller:
         socket_path: Path,
         repos: list[dict] | None = None,
         interval_s: float = DEFAULT_POLL_INTERVAL_S,
+        config: dict | None = None,
     ) -> None:
         self._socket_path = socket_path
-        self._repos = repos if repos is not None else get_all_repos()
+        self._repos = repos if repos is not None else get_all_repos(config)
         self._interval_s = interval_s
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None

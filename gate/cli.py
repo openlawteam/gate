@@ -500,10 +500,11 @@ def cmd_up(args: list[str]) -> int:
             )
 
         if parsed.poll_comments:
+            from gate.config import load_config
             from gate.config import socket_path as _sp
             from gate.slash_commands import CommentPoller
 
-            poller = CommentPoller(socket_path=_sp())
+            poller = CommentPoller(socket_path=_sp(), config=load_config())
             poller.start()
             poller_holder["poller"] = poller
 

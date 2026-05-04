@@ -148,9 +148,15 @@ class TestDispatchAuth:
             verb="rerun", args=[], pr_number=1, repo="o/r",
             commenter="alice",
         )
+        fake_pr_info = {
+            "headRefOid": "abc1234567890def",
+            "headRefName": "feature/x",
+        }
         with patch(
+            "gate.github.get_pr_info", return_value=fake_pr_info
+        ), patch(
             "gate.slash_commands.gate_client.send_message", return_value=None
-        ):
+        ) as mock_send:
             outcome, reply = dispatch_command(
                 cmd,
                 socket_path=tmp_path / "fake.sock",
@@ -158,6 +164,11 @@ class TestDispatchAuth:
             )
         assert outcome == "ok"
         assert "Re-running" in reply
+        msg = mock_send.call_args.args[1]
+        assert msg["head_sha"] == "abc1234567890def"
+        assert msg["branch"] == "feature/x"
+        assert msg["head_sha"] != ""
+        assert msg["branch"] != ""
 
 
 # ── Dispatch — verb-specific behaviour ──────────────────────

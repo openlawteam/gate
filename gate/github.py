@@ -491,11 +491,20 @@ def post_review(
             else:
                 raise
     else:
-        _gh([
-            "pr", "review", str(pr_number), "--repo", repo,
-            "--request-changes", "--body", comment,
-        ])
-        logger.info(f"PR #{pr_number} changes requested")
+        try:
+            _gh([
+                "pr", "review", str(pr_number), "--repo", repo,
+                "--request-changes", "--body", comment,
+            ])
+            logger.info(f"PR #{pr_number} changes requested")
+        except subprocess.CalledProcessError as e:
+            if "request changes on your own" in (e.stderr or ""):
+                logger.warning(
+                    f"PR #{pr_number}: cannot request changes on own PR, posting as comment"
+                )
+                comment_pr(repo, pr_number, comment)
+            else:
+                raise
 
         has_critical = any(
             f.get("severity") == "critical" and f.get("introduced_by_pr") is not False

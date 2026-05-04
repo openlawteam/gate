@@ -23,7 +23,6 @@ import pytest
 
 from gate.server import GateServer
 
-
 CLIENT_COUNT = 25
 EVENT_COUNT = 500
 

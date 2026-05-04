@@ -17,9 +17,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
-
-from gate import sticky as sticky_mod
 from gate.sticky import (
     STICKY_MARKER,
     _find_sticky_comment,

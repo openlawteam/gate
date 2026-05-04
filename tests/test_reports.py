@@ -9,14 +9,12 @@ from pathlib import Path
 import pytest
 
 from gate.reports import (
-    Report,
     format_json,
     format_text,
     load_reviews,
     parse_since,
     summarize,
 )
-
 
 # ── Time parsing ────────────────────────────────────────────
 

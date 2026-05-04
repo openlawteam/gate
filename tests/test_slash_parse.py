@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import json
 from unittest.mock import patch
-
-import pytest
 
 from gate import actions as actions_mod
 from gate.slash_commands import (
@@ -14,7 +11,6 @@ from gate.slash_commands import (
     dispatch_command,
     parse_command,
 )
-
 
 # ── Parser ──────────────────────────────────────────────────
 

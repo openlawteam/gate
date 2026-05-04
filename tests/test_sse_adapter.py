@@ -310,7 +310,7 @@ async def test_events_requires_auth(app_and_server):
 
 @pytest.mark.asyncio
 async def test_event_stream_replays_backlog_then_emits_live(running_server):
-    from gate.web_events import _EventRingBuffer, _event_stream
+    from gate.web_events import _event_stream, _EventRingBuffer
 
     server = running_server
     ring = _EventRingBuffer(50)
@@ -347,7 +347,7 @@ async def test_event_stream_replays_backlog_then_emits_live(running_server):
 
 @pytest.mark.asyncio
 async def test_event_stream_resume_in_range_serves_from_buffer():
-    from gate.web_events import _EventRingBuffer, _event_stream
+    from gate.web_events import _event_stream, _EventRingBuffer
 
     ring = _EventRingBuffer(50)
     for i in range(5):
@@ -369,7 +369,7 @@ async def test_event_stream_resume_in_range_serves_from_buffer():
 
 @pytest.mark.asyncio
 async def test_event_stream_resume_out_of_range_emits_state_resync():
-    from gate.web_events import _EventRingBuffer, _event_stream
+    from gate.web_events import _event_stream, _EventRingBuffer
 
     ring = _EventRingBuffer(20)
     for i in range(20):
@@ -392,7 +392,7 @@ async def test_event_stream_resume_out_of_range_emits_state_resync():
 
 @pytest.mark.asyncio
 async def test_event_stream_disconnect_terminates_generator():
-    from gate.web_events import _EventRingBuffer, _event_stream
+    from gate.web_events import _event_stream, _EventRingBuffer
 
     ring = _EventRingBuffer(10)
     req = _MockRequest()
@@ -409,7 +409,7 @@ async def test_event_stream_disconnect_terminates_generator():
 
 @pytest.mark.asyncio
 async def test_event_stream_shutdown_event_terminates_stream():
-    from gate.web_events import _EventRingBuffer, _event_stream
+    from gate.web_events import _event_stream, _EventRingBuffer
 
     ring = _EventRingBuffer(10)
     ring.append({

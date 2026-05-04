@@ -45,10 +45,8 @@ import re
 import shlex
 import subprocess
 import threading
-import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from gate import client as gate_client
 from gate.actions import record_action
@@ -222,7 +220,7 @@ def _format_explain(verdict: dict | None, finding_id: str) -> str:
             if rule:
                 parts += ["", f"_Rule source:_ `{rule}`"]
             if sugg:
-                parts += ["", f"_Suggested fix:_", "", sugg]
+                parts += ["", "_Suggested fix:_", "", sugg]
             return "\n".join(parts)
     return f"Finding `{finding_id}` not found in the latest verdict."
 
@@ -286,7 +284,6 @@ def dispatch_command(
     if cmd.verb == "rerun":
         # Re-enqueue is a server socket message; reply tells the user
         # the request is in.
-        from gate.config import get_repo_config as _get_repo_config
 
         head_sha = ""
         if isinstance(repo_config, dict):

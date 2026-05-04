@@ -13,10 +13,12 @@ dependencies = [
     "textual>=1.0.0",
     "platformdirs",
     "setproctitle",
+    "jinja2>=3.1",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio", "ruff", "mypy"]
+dev = ["pytest", "pytest-asyncio", "ruff", "mypy", "httpx", "fastapi", "uvicorn"]
+web = ["fastapi>=0.110", "uvicorn[standard]>=0.27"]
 
 [project.scripts]
 gate = "gate.cli:main"

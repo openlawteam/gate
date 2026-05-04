@@ -45,8 +45,8 @@ class TestLoadConfig:
 
     def test_timeouts_section(self):
         config = load_config()
-        assert config["timeouts"]["agent_stage_s"] == 900
-        assert config["timeouts"]["structured_stage_s"] == 120
+        assert config["timeouts"]["agent_stage_s"] == 2400
+        assert config["timeouts"]["structured_stage_s"] == 600
 
     def test_retry_section(self):
         config = load_config()

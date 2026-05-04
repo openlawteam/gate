@@ -16,6 +16,11 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from gate.schemas import CommitResult
 
+# Re-exported for callers that already import from ``gate.github``;
+# the implementation lives in :mod:`gate.sticky` so this module stays
+# focused on the GitHub HTTP surface.
+from gate.sticky import upsert_sticky_summary  # noqa: E402,F401
+
 logger = logging.getLogger(__name__)
 
 ESCALATION_REVIEWERS = ""
@@ -466,6 +471,10 @@ def post_review(
     """Post a review to the PR. Always enforcement mode.
 
     Ported from post-review.js main(). No advisory toggle.
+
+    Also upserts a sticky human-readable summary comment (separate from
+    the GitHub review object) so the team always has one canonical
+    place to read Gate's verdict for this PR.
     """
     comment = _build_comment(verdict, build)
     decision = verdict.get("decision", "approve")
@@ -508,6 +517,15 @@ def post_review(
                     logger.info(f"PR #{pr_number} escalated: {reason}")
                 except subprocess.CalledProcessError:
                     logger.warning(f"PR #{pr_number} escalation failed")
+
+    # Sticky summary is best-effort: never let a comment hiccup block
+    # the verdict path that the review object already recorded.
+    try:
+        upsert_sticky_summary(repo, pr_number, verdict, build)
+    except Exception:
+        logger.exception(
+            f"PR #{pr_number}: sticky summary upsert failed (non-fatal)"
+        )
 
 
 # ── Commit Status API ────────────────────────────────────────

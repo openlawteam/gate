@@ -283,7 +283,9 @@ class ReviewOrchestrator:
                     output_summary="Last 3 reviews were errors. Auto-approved.",
                     sha=self.head_sha,
                 )
-                notify.circuit_breaker(self.pr_number, repo=self.repo)
+                notify.circuit_breaker(
+                    self.pr_number, repo=self.repo, author=self.pr_author or None
+                )
                 write_live_log(self.pr_number, "Circuit breaker tripped", "gate", repo=self.repo)
                 self._emit("review_completed", review_id=review_id, decision="skip")
                 return
@@ -622,7 +624,10 @@ class ReviewOrchestrator:
                 elapsed, quota, triage=triage.data, repo=self.repo,
                 **roi_kwargs,
             )
-            notify.review_complete(self.pr_number, verdict.data, self.repo)
+            notify.review_complete(
+                self.pr_number, verdict.data, self.repo,
+                author=self.pr_author or None,
+            )
 
             # === PERSIST STATE ===
             clone_path = self._clone_path()
@@ -851,7 +856,10 @@ class ReviewOrchestrator:
                         output_summary=f"Review crashed: {e}. PR auto-approved (fail-open).",
                         sha=self.head_sha,
                     )
-                notify.review_failed(self.pr_number, str(e), repo=self.repo)
+                notify.review_failed(
+                    self.pr_number, str(e), repo=self.repo,
+                    author=self.pr_author or None,
+                )
                 write_live_log(self.pr_number, f"FAILED: {e}", "orchestrator", repo=self.repo)
         finally:
             self._remove_active_marker()

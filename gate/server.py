@@ -25,11 +25,31 @@ def _current_ms() -> int:
     return int(time.time() * 1000)
 
 
+PROTOCOL_VERSION = 1
+
+
 class GateServer:
     """Broadcast message server over Unix domain socket.
 
     Uses a single writer thread to serialize all broadcasts, preventing
     race conditions when multiple client handler threads send concurrently.
+
+    Broadcast envelope (see ``docs/protocol.md``):
+
+    * ``v``    — protocol version (currently ``1``). Bumped only on
+      breaking changes (renamed/removed fields, type changes). Additive
+      changes do **not** bump ``v``; consumers must ignore unknown
+      fields.
+    * ``id``   — monotonic per-server-process broadcast sequence number.
+      SSE clients use this with ``Last-Event-ID`` to resume after a
+      reconnect.
+    * ``ts``   — wall-clock timestamp in ms since epoch.
+    * ``type`` — event type (e.g. ``review_updated``).
+
+    Sequence numbers are assigned at the broadcast-queue dequeue point
+    (``_writer_loop``) so the on-the-wire ``id`` order matches the order
+    clients see the events. ``stop()`` envelopes the final ``shutdown``
+    event directly because ``_writer_loop`` has already exited.
     """
 
     def __init__(self, socket_path: Path, tmux_location: dict | None = None):
@@ -49,6 +69,10 @@ class GateServer:
         self.health: dict = {}
         self._log_handler: logging.FileHandler | None = None
         self._review_queue = ReviewQueue(socket_path=socket_path)
+        self._next_event_id: int = 0
+        self._event_id_lock = threading.Lock()
+        self._subscribers: list[queue.Queue] = []
+        self._subscriber_lock = threading.Lock()
 
     def _find_review(self, review_id: str) -> dict | None:
         return next((r for r in self.reviews if r.get("id") == review_id), None)
@@ -90,7 +114,10 @@ class GateServer:
 
         self.server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.server_socket.bind(str(self.socket_path))
-        self.server_socket.listen(5)
+        # Backlog of 64 so a burst of dashboard reconnects (e.g. after
+        # a Cloudflare-Tunnel hiccup that drops every active SSE client
+        # at once) doesn't overflow the kernel accept queue.
+        self.server_socket.listen(64)
         self.server_socket.settimeout(1.0)
 
         self.writer_thread = threading.Thread(
@@ -363,17 +390,94 @@ class GateServer:
         """Public API for in-process callers (TUI) to submit mutations."""
         self._enqueue_event(message)
 
+    def _make_envelope(self, payload: dict) -> dict:
+        """Wrap a broadcast payload in the canonical envelope.
+
+        Order is intentional — ``v``, ``id``, ``ts``, ``type`` come first
+        so a human reading the JSONL stream can tell at a glance which
+        version, which sequence, when, and what.
+
+        ``payload`` MUST contain ``type``. Other fields from ``payload``
+        are merged after the envelope header so callers can include
+        additional structured data (``review``, ``queue``, ``health``,
+        ...).
+        """
+        with self._event_id_lock:
+            self._next_event_id += 1
+            eid = self._next_event_id
+        envelope: dict = {
+            "v": PROTOCOL_VERSION,
+            "id": eid,
+            "ts": _current_ms(),
+            "type": payload.get("type", ""),
+        }
+        # Envelope header fields are authoritative — a payload that
+        # accidentally carries ``v`` / ``id`` / ``ts`` / ``type`` must
+        # NOT be allowed to overwrite the canonical values.
+        _RESERVED = ("v", "id", "ts", "type")
+        for k, v in payload.items():
+            if k in _RESERVED:
+                continue
+            envelope[k] = v
+        return envelope
+
+    def subscribe(self, maxsize: int = 1000) -> queue.Queue:
+        """Register an in-process subscriber and return its delivery queue.
+
+        Each enveloped broadcast is ``put_nowait``'d onto the queue.
+        Subscribers that fail to drain (queue full) are evicted on the
+        next broadcast — slow consumers do not back-pressure the writer
+        thread.
+
+        Used by :mod:`gate.web_events` so the SSE adapter can re-emit
+        events without going back through JSON encode/decode over a
+        socket. Symmetric with :meth:`unsubscribe`.
+        """
+        q: queue.Queue = queue.Queue(maxsize=maxsize)
+        with self._subscriber_lock:
+            self._subscribers.append(q)
+        return q
+
+    def unsubscribe(self, q: queue.Queue) -> None:
+        """Remove an in-process subscriber. Idempotent."""
+        with self._subscriber_lock:
+            if q in self._subscribers:
+                self._subscribers.remove(q)
+
+    def _fanout_to_subscribers(self, enveloped: dict) -> None:
+        """Deliver an enveloped event to every in-process subscriber.
+
+        Slow / dead subscribers (queue full) are evicted in place so
+        a stuck consumer cannot stall the writer thread.
+        """
+        with self._subscriber_lock:
+            subs = list(self._subscribers)
+        dead: list[queue.Queue] = []
+        for sub in subs:
+            try:
+                sub.put_nowait(enveloped)
+            except queue.Full:
+                dead.append(sub)
+        if dead:
+            with self._subscriber_lock:
+                for sub in dead:
+                    if sub in self._subscribers:
+                        self._subscribers.remove(sub)
+            logger.warning(
+                f"Evicted {len(dead)} slow subscriber(s) from broadcast fanout"
+            )
+
     def _writer_loop(self) -> None:
         while not self.stop_event.is_set():
             try:
                 message = self.broadcast_queue.get(timeout=0.1)
             except queue.Empty:
                 continue
-            self._send_to_clients(message)
+            enveloped = self._make_envelope(message)
+            self._send_to_clients(enveloped)
+            self._fanout_to_subscribers(enveloped)
 
     def _send_to_clients(self, message: dict) -> None:
-        if "ts" not in message:
-            message["ts"] = _current_ms()
         data = (json.dumps(message) + "\n").encode("utf-8")
 
         with self.lock:
@@ -410,7 +514,9 @@ class GateServer:
     def stop(self) -> None:
         logger.debug("Server stopping")
         self._review_queue.stop()
-        self._send_to_clients({"type": "shutdown"})
+        shutdown_envelope = self._make_envelope({"type": "shutdown"})
+        self._send_to_clients(shutdown_envelope)
+        self._fanout_to_subscribers(shutdown_envelope)
         with self.lock:
             for client in self.clients:
                 try:
@@ -464,8 +570,18 @@ class GateServer:
             logger.warning(f"Reaped stale review: {r.get('id')}")
 
 
-def start_server_with_tui(socket_path: Path, tmux_location: dict | None = None) -> int:
-    """Start the server in a background thread and run the TUI."""
+def start_server_with_tui(
+    socket_path: Path,
+    tmux_location: dict | None = None,
+    on_started=None,
+) -> int:
+    """Start the server in a background thread and run the TUI.
+
+    ``on_started`` is invoked with the live ``GateServer`` instance once
+    the AF_UNIX socket is accepting connections, so callers can attach
+    additional in-process consumers (e.g. the SSE adapter from
+    :mod:`gate.web_events`).
+    """
     from gate.tui import run_tui
 
     server = GateServer(socket_path, tmux_location=tmux_location)
@@ -500,6 +616,12 @@ def start_server_with_tui(socket_path: Path, tmux_location: dict | None = None) 
         server.stop()
         return 1
 
+    if on_started is not None:
+        try:
+            on_started(server)
+        except Exception:
+            logger.exception("on_started callback failed; continuing without it")
+
     try:
         return run_tui(server)
     except KeyboardInterrupt:
@@ -511,8 +633,13 @@ def start_server_with_tui(socket_path: Path, tmux_location: dict | None = None) 
         atexit.unregister(cleanup_socket)
 
 
-def start_server_headless(socket_path: Path) -> int:
-    """Start the server without TUI (for LaunchAgent)."""
+def start_server_headless(socket_path: Path, on_started=None) -> int:
+    """Start the server without TUI (for LaunchAgent).
+
+    ``on_started`` mirrors :func:`start_server_with_tui` — invoked once
+    the AF_UNIX socket is up so callers can attach the SSE adapter (or
+    any other in-process consumer).
+    """
     server = GateServer(socket_path)
 
     def handle_shutdown_signal(signum, frame):
@@ -529,6 +656,37 @@ def start_server_headless(socket_path: Path) -> int:
                 pass
 
     atexit.register(cleanup_socket)
+
+    if on_started is not None:
+        server_thread = threading.Thread(
+            target=server.start, name="server", daemon=True
+        )
+        server_thread.start()
+
+        for _ in range(50):
+            if socket_path.exists():
+                break
+            time.sleep(0.1)
+        else:
+            print("Server failed to start")
+            server.stop()
+            return 1
+
+        try:
+            on_started(server)
+        except Exception:
+            logger.exception("on_started callback failed; continuing without it")
+
+        try:
+            while server_thread.is_alive():
+                server_thread.join(timeout=1.0)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            server.stop()
+            server_thread.join(timeout=2.0)
+            atexit.unregister(cleanup_socket)
+        return 0
 
     try:
         server.start()

@@ -1,0 +1,70 @@
+{{ marker }}
+{%- if approved %}
+## Gate Review Summary
+
+**Verdict:** :white_check_mark: **{{ decision_label }}** &nbsp;·&nbsp; confidence `{{ confidence }}`{% if review_time %} &nbsp;·&nbsp; {{ review_time }}s{% endif %}
+
+{{ summary }}
+{%- else %}
+## Gate Review Summary
+
+**Verdict:** :x: **{{ decision_label }}** &nbsp;·&nbsp; confidence `{{ confidence }}`{% if review_time %} &nbsp;·&nbsp; {{ review_time }}s{% endif %}
+
+{{ summary }}
+{%- endif %}
+
+{%- if blocking_findings %}
+
+### Blocking findings ({{ blocking_findings | length }})
+
+{% for f in blocking_findings %}
+- **{{ f.severity | upper }}** &nbsp;`{{ f.location }}`{% if f.finding_id %} &nbsp;·&nbsp; `{{ f.finding_id }}`{% endif %}
+  {{ f.message }}
+{%- endfor %}
+{%- endif %}
+
+{%- if non_blocking_findings %}
+
+<details><summary>Non-blocking notes ({{ non_blocking_findings | length }})</summary>
+
+{% for f in non_blocking_findings %}
+- **{{ f.severity | upper }}** &nbsp;`{{ f.location }}`{% if f.finding_id %} &nbsp;·&nbsp; `{{ f.finding_id }}`{% endif %}
+  {{ f.message }}
+{%- endfor %}
+
+</details>
+{%- endif %}
+
+{%- if build_summary %}
+
+### Build
+
+{{ build_summary }}
+{%- endif %}
+
+### Stats
+
+{{ stats_line }}
+
+---
+
+### Next steps
+
+{%- if approved %}
+- This PR is approved by Gate.{% if has_non_blocking %} Non-blocking notes above are advisory.{% endif %}
+- A human reviewer should still sign off if your branch protection requires it.
+{%- else %}
+- Push fixes for the blocking findings above; Gate re-runs automatically on every push.
+- If a finding is wrong, comment on the PR with `/gate explain <finding-id>` to see Gate's reasoning, or add the `gate-emergency-bypass` label with a linked incident if you must merge anyway.
+{%- endif %}
+
+### How to override
+
+| You want to… | Add this label, or comment |
+|---|---|
+| Skip Gate entirely | `gate-skip` &nbsp;or&nbsp; `/gate skip <reason>` |
+| Re-run the review | `gate-rerun` &nbsp;or&nbsp; `/gate rerun` |
+| Bypass blocking findings (audited) | `gate-emergency-bypass` &nbsp;or&nbsp; `/gate bypass <incident-link>` |
+| Disable auto-fix for this PR | `gate-no-fix` |
+
+<sub>Updated {{ updated_at }} &nbsp;·&nbsp; sticky comment, replaced in-place on each review cycle.</sub>

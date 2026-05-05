@@ -106,7 +106,7 @@ class TestCommandGroups:
     def test_command_display_joins_for_prompts(self):
         profile = {"lint_cmds": ["npm run lint:check", "deno lint apps/engine/src"]}
         assert command_display(profile, "lint_cmd") == (
-            "npm run lint:check && deno lint apps/engine/src"
+            "(npm run lint:check && deno lint apps/engine/src)"
         )
 
 

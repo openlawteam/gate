@@ -95,7 +95,10 @@ def _wait_for_connectivity(max_wait: float = 30.0) -> bool:
                 s.close()
             except Exception:
                 pass
-            time.sleep(min(2.0, deadline - time.monotonic()))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(2.0, remaining))
     logger.warning(f"GitHub unreachable after {max_wait}s of probing")
     return False
 

@@ -1,8 +1,10 @@
 """Tests for gate.github module."""
 
+import socket
 import subprocess
 from unittest.mock import patch
 
+from gate import github
 from gate.github import (
     _build_comment,
     _format_build_section,
@@ -14,6 +16,34 @@ from gate.github import (
     create_check_run,
     post_review,
 )
+
+
+class TestWaitForConnectivity:
+    def test_timeout_does_not_sleep_negative(self, monkeypatch):
+        class FakeSocket:
+            def settimeout(self, _timeout):
+                pass
+
+            def connect(self, _target):
+                raise TimeoutError("timed out")
+
+            def close(self):
+                pass
+
+        times = iter([0.0, 0.0, 6.0])
+        sleeps: list[float] = []
+
+        monkeypatch.setattr(
+            socket,
+            "getaddrinfo",
+            lambda *_args, **_kwargs: [(None, None, None, None, ("127.0.0.1", 443))],
+        )
+        monkeypatch.setattr(socket, "socket", lambda *_args, **_kwargs: FakeSocket())
+        monkeypatch.setattr(github.time, "monotonic", lambda: next(times))
+        monkeypatch.setattr(github.time, "sleep", sleeps.append)
+
+        assert github._wait_for_connectivity(max_wait=5.0) is False
+        assert sleeps == []
 
 
 class TestFormatFindings:

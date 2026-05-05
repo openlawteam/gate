@@ -26,6 +26,11 @@ The following files/directories are off-limits. If a finding requires modifying 
 
 $blocklist
 
+## Repository Layout
+
+- Project source root(s): `$source_root`
+- Gate test location(s): `$test_dir`
+
 ---
 
 ## How you work
@@ -62,7 +67,7 @@ Your directions are the most important thing you produce. They should be:
 - **Concise** — no filler, just what the junior engineer needs to execute
 
 Bad: "Fix the type errors in the service layer."
-Good: "In src/lib/services/teamService, the `getTeamMembers` function at line 42 returns `Promise<any>`. Change the return type to `Promise<TeamMember[]>` and update the caller in src/app/api/teams/route line 18 to use the typed result."
+Good: "In the service file under `$source_root`, the `getTeamMembers` function returns `Promise<any>`. Change the return type to `Promise<TeamMember[]>` and update the cited API route caller to use the typed result."
 
 ### Evaluating results
 

@@ -180,3 +180,23 @@ postconditions_max_functions = 10
 # [repos.build]
 # verify_cmd = "dafny verify {FILE}"         # Dafny example
 # verify_cmd = "verus --crate-type=lib {FILE}"   # Verus example
+
+# --- Monorepo/application layout (per-repo) ---
+# For npm workspaces or other monorepos, keep clone_path at the repo root
+# and override commands/layout here. Gate still computes diffs from the
+# root, while prompts tell agents where the app code and temporary Gate
+# tests live.
+#
+# [repos.build]
+# typecheck_cmds = ["npm run type-check", "npm run api:type-check"]
+# lint_cmds = ["npm run lint:check", "npm run api:lint"]
+# scoped_lint_cmd = "npm exec eslint --"
+# scoped_lint_cwd = "apps/frontend"
+# test_cmds = ["npm run --workspace frontend test:run", "npm run api:test"]
+# dep_install_cmd = "npm ci"
+# dep_file = "package-lock.json"
+# source_root = "apps/frontend and apps/api"
+# test_dir = "apps/frontend for frontend tests; apps/api for API tests"
+#
+# Use singular *_cmd keys for one command, or plural *_cmds arrays when a
+# monorepo needs several runtimes checked in sequence.

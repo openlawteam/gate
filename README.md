@@ -128,6 +128,16 @@ worktree_base = "/tmp/gate-worktrees"
 # build.typecheck_cmd = "npx tsc --noEmit"
 # build.lint_cmd = "npm run lint:check"
 # build.test_cmd = "npm run test:run"
+# build.typecheck_cmds = ["npm run type-check", "npm run api:type-check"]
+# build.lint_cmds = ["npm run lint:check", "npm run api:lint"]
+# build.test_cmds = ["npm run --workspace frontend test:run", "npm run api:test"]
+# build.scoped_lint_cmd = "npm exec eslint --"  # optional app-local scoped lint
+# build.scoped_lint_cwd = "apps/frontend"
+# build.source_root = "apps/frontend and apps/api"  # monorepo source roots, if applicable
+# build.test_dir = "apps/frontend for frontend tests; apps/api for API tests"
+
+# Use singular *_cmd keys for one command, or plural *_cmds arrays
+# when a monorepo needs several runtimes checked in sequence.
 
 # Per-repo limit overrides:
 # limits.max_fix_attempts_total = 0

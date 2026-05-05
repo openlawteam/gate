@@ -440,6 +440,39 @@ class TestScopedLintExtensionFilter:
         # Unknown linter path: full command string passed through, no files appended.
         assert calls[0] == ["mylint --fix"]
 
+    def test_workspace_eslint_strips_command_cwd(self, tmp_path, monkeypatch):
+        (tmp_path / "apps" / "web").mkdir(parents=True)
+        from gate import profiles
+
+        monkeypatch.setattr(
+            profiles, "resolve_profile",
+            lambda _cfg, _ws: {
+                "lint_cmd": "npm run lint:check",
+                "scoped_lint_cmd": "npm exec eslint --",
+                "scoped_lint_cwd": "apps/web",
+                "project_type": "node",
+            },
+        )
+        calls: list[tuple[list[str], str | None]] = []
+
+        def _fake_run(cmd, cwd=None):
+            calls.append((cmd if isinstance(cmd, list) else [cmd], cwd))
+            return "", 0
+
+        monkeypatch.setattr("gate.fixer._run_silent", _fake_run)
+        exit_code, _ = checkpoint._scoped_lint(
+            tmp_path,
+            {},
+            ["apps/web/src/a.ts", "apps/web/build.json", "scripts/root.ts"],
+        )
+        assert exit_code == 0
+        assert calls == [
+            (
+                ["npm", "exec", "eslint", "--", "src/a.ts"],
+                str(tmp_path / "apps" / "web"),
+            )
+        ]
+
     def test_lint_family_recognizes_prefixed_tools(self):
         # Accept things like `./node_modules/.bin/eslint` or `poetry run ruff`.
         assert checkpoint._lint_family("./node_modules/.bin/eslint") == "eslint"

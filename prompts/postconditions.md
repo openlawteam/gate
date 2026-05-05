@@ -15,6 +15,8 @@ Produce postconditions based on the code's apparent purpose and its public contr
 - **Changed files:** $file_list
 - **Risk level:** $risk_level
 - **Project language:** $project_language
+- **Project source root(s):** `$source_root`
+- **Gate test location(s):** `$test_dir`
 
 ### Author's Claimed Intent (from triage)
 

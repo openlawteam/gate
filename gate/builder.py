@@ -25,11 +25,11 @@ def run_build(worktree: Path, config: dict | None = None) -> dict:
     profile = profiles.resolve_profile(repo_cfg, worktree)
     project_type = profile.get("project_type", "none")
 
-    typecheck_cmd = profile.get("typecheck_cmd", "")
-    lint_cmd = profile.get("lint_cmd", "")
-    test_cmd = profile.get("test_cmd", "")
+    typecheck_cmds = profiles.command_list(profile, "typecheck_cmd")
+    lint_cmds = profiles.command_list(profile, "lint_cmd")
+    test_cmds = profiles.command_list(profile, "test_cmd")
 
-    if not typecheck_cmd and not lint_cmd and not test_cmd:
+    if not typecheck_cmds and not lint_cmds and not test_cmds:
         logger.info(f"No build commands for {worktree} (project_type={project_type}), skipping")
         return {
             "typecheck": {"pass": True, "errors": [], "error_count": 0, "tool": ""},
@@ -53,63 +53,13 @@ def run_build(worktree: Path, config: dict | None = None) -> dict:
 
     build_timeout = 300
 
-    if typecheck_cmd:
-        tc_args = shlex.split(typecheck_cmd)
-        try:
-            tc_result = subprocess.run(
-                tc_args,
-                capture_output=True, text=True, cwd=cwd, timeout=build_timeout,
-            )
-        except subprocess.TimeoutExpired:
-            logger.warning(
-                f"typecheck timed out after {build_timeout}s in {cwd} "
-                f"(cmd: {typecheck_cmd})"
-            )
-            tc_result = subprocess.CompletedProcess(
-                tc_args, 1, stdout="", stderr=f"typecheck timed out after {build_timeout}s",
-            )
-    else:
-        tc_result = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+    tc_result = run_command_group(typecheck_cmds, cwd, build_timeout, "typecheck")
+    lint_result = run_command_group(lint_cmds, cwd, build_timeout, "lint")
+    test_result = run_command_group(test_cmds, cwd, build_timeout, "tests")
 
-    if lint_cmd:
-        lint_args = shlex.split(lint_cmd)
-        try:
-            lint_result = subprocess.run(
-                lint_args,
-                capture_output=True, text=True, cwd=cwd, timeout=build_timeout,
-            )
-        except subprocess.TimeoutExpired:
-            logger.warning(
-                f"lint timed out after {build_timeout}s in {cwd} "
-                f"(cmd: {lint_cmd})"
-            )
-            lint_result = subprocess.CompletedProcess(
-                lint_args, 1, stdout="", stderr=f"lint timed out after {build_timeout}s",
-            )
-    else:
-        lint_result = subprocess.CompletedProcess([], 0, stdout="", stderr="")
-
-    if test_cmd:
-        test_args = shlex.split(test_cmd)
-        try:
-            test_result = subprocess.run(
-                test_args,
-                capture_output=True, text=True, cwd=cwd, timeout=build_timeout,
-            )
-        except subprocess.TimeoutExpired:
-            logger.warning(
-                f"tests timed out after {build_timeout}s in {cwd} "
-                f"(cmd: {test_cmd})"
-            )
-            test_result = subprocess.CompletedProcess(
-                test_args, 1, stdout="", stderr=f"tests timed out after {build_timeout}s",
-            )
-    else:
-        test_result = subprocess.CompletedProcess([], 0, stdout="", stderr="")
-
-    tc_tool = shlex.split(typecheck_cmd)[0] if typecheck_cmd else ""
-    lint_tool = shlex.split(lint_cmd)[0] if lint_cmd else ""
-    test_tool = shlex.split(test_cmd)[0] if test_cmd else ""
+    tc_tool = command_group_tool(typecheck_cmds)
+    lint_tool = command_group_tool(lint_cmds)
+    test_tool = command_group_tool(test_cmds)
 
     return compile_build(
         typecheck_log=tc_result.stdout + tc_result.stderr,
@@ -122,6 +72,57 @@ def run_build(worktree: Path, config: dict | None = None) -> dict:
         typecheck_tool=tc_tool,
         lint_tool=lint_tool,
         test_tool=test_tool,
+    )
+
+
+def command_group_tool(cmds: list[str]) -> str:
+    """Best-effort tool label for a command group."""
+    if not cmds:
+        return ""
+    try:
+        return shlex.split(cmds[0])[0]
+    except ValueError:
+        return ""
+
+
+def run_command_group(
+    cmds: list[str],
+    cwd: str,
+    timeout: int,
+    label: str,
+) -> subprocess.CompletedProcess:
+    """Run one or more commands sequentially without invoking a shell."""
+    if not cmds:
+        return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+
+    outputs: list[str] = []
+    first_nonzero = 0
+    for cmd in cmds:
+        args: list[str] = []
+        try:
+            args = shlex.split(cmd)
+            result = subprocess.run(
+                args,
+                capture_output=True, text=True, cwd=cwd, timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                f"{label} timed out after {timeout}s in {cwd} "
+                f"(cmd: {cmd})"
+            )
+            result = subprocess.CompletedProcess(
+                args, 1, stdout="", stderr=f"{label} timed out after {timeout}s",
+            )
+        except (OSError, ValueError) as exc:
+            result = subprocess.CompletedProcess(
+                args, 1, stdout="", stderr=f"{label} failed to start: {exc}",
+            )
+        outputs.append(f"$ {cmd}\n{result.stdout}{result.stderr}")
+        if result.returncode != 0 and first_nonzero == 0:
+            first_nonzero = result.returncode
+
+    return subprocess.CompletedProcess(
+        cmds, first_nonzero, stdout="\n".join(outputs), stderr=""
     )
 
 

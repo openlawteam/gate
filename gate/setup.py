@@ -77,6 +77,13 @@ _MULTI_REPO_DOCS = """\
 # # build.typecheck_cmd = "npx tsc --noEmit"
 # # build.lint_cmd = "npm run lint:check"
 # # build.test_cmd = "npm run test:run"
+# # build.typecheck_cmds = ["npm run type-check", "npm run api:type-check"]
+# # build.lint_cmds = ["npm run lint:check", "npm run api:lint"]
+# # build.test_cmds = ["npm run --workspace frontend test:run", "npm run api:test"]
+# # build.scoped_lint_cmd = "npm exec eslint --"
+# # build.scoped_lint_cwd = "apps/frontend"
+# # build.source_root = "apps/frontend and apps/api"
+# # build.test_dir = "apps/frontend for frontend tests; apps/api for API tests"
 #
 # # Per-repo limit/timeout/retry overrides:
 # # limits.max_fix_attempts_total = 0

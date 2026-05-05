@@ -276,6 +276,41 @@ class TestBuildVars:
         assert len(findings) == 1
         assert findings[0]["severity"] == "warning"
 
+    def test_exposes_monorepo_layout_from_profile(self, tmp_workspace):
+        env_vars = {}
+        vars = build_vars(
+            tmp_workspace, "logic", env_vars,
+            config={
+                "repo": {
+                    "project_type": "node",
+                    "build": {
+                        "source_root": "apps/web",
+                        "test_dir": "apps/web",
+                    },
+                },
+            },
+        )
+        assert vars["source_root"] == "apps/web"
+        assert vars["test_dir"] == "apps/web"
+
+    def test_exposes_command_groups_as_shell_friendly_display(self, tmp_workspace):
+        env_vars = {}
+        vars = build_vars(
+            tmp_workspace, "logic", env_vars,
+            config={
+                "repo": {
+                    "project_type": "node",
+                    "build": {
+                        "typecheck_cmds": [
+                            "npm run type-check",
+                            "npm run engine:check",
+                        ],
+                    },
+                },
+            },
+        )
+        assert vars["typecheck_cmd"] == "npm run type-check && npm run engine:check"
+
 
 class TestBuildDiffOrSummary:
     def test_returns_full_diff_if_small(self, tmp_workspace):

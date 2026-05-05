@@ -121,6 +121,11 @@ def run_code_stage(
     profile = profiles.resolve_profile(repo_config, workspace_path)
     vars_dict = {"request": request}
     vars_dict.update({k: v for k, v in profile.items() if isinstance(v, str)})
+    vars_dict.update({
+        "typecheck_cmd": profiles.command_display(profile, "typecheck_cmd"),
+        "lint_cmd": profiles.command_display(profile, "lint_cmd"),
+        "test_cmd": profiles.command_display(profile, "test_cmd"),
+    })
     prompt_text = safe_substitute(template, vars_dict, f"gate-code-{stage}")
 
     version = _next_version(workspace, stage)

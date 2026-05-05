@@ -161,4 +161,7 @@ def command_list(profile: dict[str, Any], key: str) -> list[str]:
 
 def command_display(profile: dict[str, Any], key: str) -> str:
     """Render configured commands for prompt variables and docs."""
-    return " && ".join(command_list(profile, key))
+    cmds = command_list(profile, key)
+    if len(cmds) <= 1:
+        return cmds[0] if cmds else ""
+    return "(" + " && ".join(cmds) + ")"

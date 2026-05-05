@@ -15,7 +15,7 @@ from pathlib import Path
 
 from gate import builder, github, notify, prompt, state
 from gate.codex import bootstrap_codex, codex_health_check
-from gate.config import build_claude_env, gate_dir
+from gate.config import build_claude_env, gate_dir, get_repo_bool
 from gate.finding_id import compute_finding_id  # re-exported for back-compat
 from gate.io import atomic_write
 from gate.logger import write_live_log
@@ -669,6 +669,34 @@ def tag_findings(findings: list[dict]) -> list[dict]:
     return tagged
 
 
+def select_actionable_findings(
+    findings: list[dict],
+    verdict: dict | None = None,
+    config: dict | None = None,
+) -> list[dict]:
+    """Return findings the auto-fix pipeline should attempt.
+
+    Request-changes reviews should prioritize actual blockers. When a PR has
+    critical/error findings, warnings are review notes by default; attempting
+    broad warning refactors in the same fix run creates noisy, risky pushes.
+    Repos can opt back in with ``fix_warnings_on_request_changes = true``.
+    """
+    actionable = [f for f in findings if f.get("severity", "") != "info"]
+    decision = (verdict or {}).get("decision")
+    has_blockers = any(
+        f.get("severity") in ("critical", "error") for f in actionable
+    )
+    fix_warnings = get_repo_bool(
+        config or {}, "fix_warnings_on_request_changes", False
+    )
+    if decision == "request_changes" and has_blockers and not fix_warnings:
+        return [
+            f for f in actionable
+            if f.get("severity") in ("critical", "error")
+        ]
+    return actionable
+
+
 def fixability_summary(findings: list[dict]) -> str:
     """Return a one-line human-readable count, e.g. ``5 trivial, 3 scoped, 2 broad, 0 unknown``."""
     buckets = {"trivial": 0, "scoped": 0, "broad": 0, "unknown": 0}
@@ -1013,7 +1041,9 @@ class FixPipeline:
         self._publish_gate_marker()
 
         findings = self.verdict.get("findings", [])
-        actionable = [f for f in findings if f.get("severity", "") != "info"]
+        actionable = select_actionable_findings(
+            findings, self.verdict, self.config
+        )
         finding_count = len(actionable)
 
         # Check fix attempt limits
@@ -1899,6 +1929,13 @@ class FixPipeline:
                     f"PR #{self.pr_number}: pre-commit reset "
                     f"to pre-fix sha failed: {exc}"
                 )
+
+        # The soft reset above re-stages the full checkpoint diff relative
+        # to the pre-fix baseline, including any Gate-written evidence tests
+        # that were committed inside hopper checkpoints. Clean again after
+        # the reset so final `git add -A` cannot publish scratch artifacts.
+        cleanup_gate_tests(self.workspace)
+        cleanup_artifacts(self.workspace)
 
         result = github.commit_and_push(self.workspace, commit_msg, branch=self.branch)
 

@@ -390,15 +390,13 @@ def build_vars(
     # (audit A2 + 1E.ii) before handing the list to the fix-senior prompt.
     # Import lazily to avoid a fixer → prompt → fixer cycle at module load.
     try:
-        from gate.fixer import (
-            fixability_summary as _fixability_summary,
+        import gate.fixer as fixer_mod
+        fixable_findings = fixer_mod.select_actionable_findings(
+            fixable_findings, verdict or {}, config or {}
         )
-        from gate.fixer import (
-            tag_findings as _tag_findings,
-        )
-        fixable_findings = _tag_findings(fixable_findings)
+        fixable_findings = fixer_mod.tag_findings(fixable_findings)
         fix_mode = "polish" if (verdict or {}).get("decision") == "approve_with_notes" else "strict"
-        summary_line = _fixability_summary(fixable_findings)
+        summary_line = fixer_mod.fixability_summary(fixable_findings)
     except Exception as e:  # noqa: BLE001
         logger.warning(f"fix-senior tagging failed: {e}")
         fix_mode = "strict"

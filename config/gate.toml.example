@@ -38,6 +38,12 @@ project_type = "node"   # node | python | go | rust | none
 # Default: true.
 # fix_polish_loop_enabled = true
 #
+# Request-changes auto-fix scope. Default false: when critical/error findings
+# exist, warnings are left as review notes so Gate does not combine blocker
+# fixes with broad cleanup refactors. Set true only for repos that explicitly
+# want warnings fixed in the same strict-mode run.
+# fix_warnings_on_request_changes = false
+#
 # Per-finding timeouts (seconds) for the polish loop. Broad findings are
 # skipped by default (timeout 0) because they are expected to require
 # architectural changes that do not fit inside a bounded polish attempt.

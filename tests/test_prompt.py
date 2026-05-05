@@ -309,7 +309,7 @@ class TestBuildVars:
                 },
             },
         )
-        assert vars["typecheck_cmd"] == "npm run type-check && npm run engine:check"
+        assert vars["typecheck_cmd"] == "(npm run type-check && npm run engine:check)"
 
 
 class TestBuildDiffOrSummary:

@@ -101,6 +101,43 @@ class TestCleanupGateTests:
         assert not (tmp_path / "__gate_test_foo.ts").exists()
         assert not (tmp_path / "__gate_fix_test_bar.ts").exists()
 
+    def test_removes_nested_gate_test_files_from_index(self, tmp_path):
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=tmp_path, check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=tmp_path, check=True,
+        )
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "app.ts").write_text("export const x = 1;\n")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True)
+        base_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=tmp_path, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        gate_test = tmp_path / "apps" / "web" / "tests" / "__gate_test_bug.ts"
+        gate_test.parent.mkdir(parents=True)
+        gate_test.write_text("test\n")
+        (tmp_path / "src" / "app.ts").write_text("export const x = 2;\n")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "checkpoint"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "reset", "--soft", base_sha], cwd=tmp_path, check=True)
+
+        cleanup_gate_tests(tmp_path)
+
+        assert not gate_test.exists()
+        staged = subprocess.run(
+            ["git", "diff", "--cached", "--name-only"],
+            cwd=tmp_path, capture_output=True, text=True, check=True,
+        ).stdout
+        assert "apps/web/tests/__gate_test_bug.ts" not in staged
+        assert "src/app.ts" in staged
+
 
 class TestSortFindingsBySeverity:
     def test_sorts_critical_first(self):
@@ -778,6 +815,53 @@ class TestTagFindings:
         assert tagged[1]["ambiguity"] == "none"
         # No suggestion and no ambiguity cue -> "low"
         assert tagged[2]["ambiguity"] == "low"
+
+
+class TestSelectActionableFindings:
+    def test_request_changes_with_errors_skips_warnings_by_default(self):
+        from gate.fixer import select_actionable_findings
+
+        findings = [
+            {"severity": "error", "message": "real blocker"},
+            {"severity": "warning", "message": "cleanup"},
+            {"severity": "info", "message": "note"},
+        ]
+        selected = select_actionable_findings(
+            findings, {"decision": "request_changes"}, {}
+        )
+        assert selected == [{"severity": "error", "message": "real blocker"}]
+
+    def test_request_changes_can_opt_into_warning_fixes(self):
+        from gate.fixer import select_actionable_findings
+
+        findings = [
+            {"severity": "error", "message": "real blocker"},
+            {"severity": "warning", "message": "cleanup"},
+        ]
+        selected = select_actionable_findings(
+            findings,
+            {"decision": "request_changes"},
+            {"repo": {"fix_warnings_on_request_changes": True}},
+        )
+        assert selected == findings
+
+    def test_request_changes_warning_only_still_fixable(self):
+        from gate.fixer import select_actionable_findings
+
+        findings = [{"severity": "warning", "message": "cleanup"}]
+        selected = select_actionable_findings(
+            findings, {"decision": "request_changes"}, {}
+        )
+        assert selected == findings
+
+    def test_approve_with_notes_keeps_warnings(self):
+        from gate.fixer import select_actionable_findings
+
+        findings = [{"severity": "warning", "message": "polish"}]
+        selected = select_actionable_findings(
+            findings, {"decision": "approve_with_notes"}, {}
+        )
+        assert selected == findings
 
 
 class TestClassifyAmbiguity:

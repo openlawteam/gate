@@ -52,6 +52,10 @@ fix-polish.json
 fix-decomposition.json
 # Hopper-mode baseline marker written by fixer.ReviewFixer.run()
 .gate/
+# Gate-written verification tests are evidence only; never commit them to PRs.
+**/__gate_test_*
+**/__gate_fix_test_*
+tests/gate/
 *-findings.json
 *-result.json
 *-session-id.txt

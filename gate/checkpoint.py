@@ -289,6 +289,23 @@ def _lint_family(tool: str) -> str | None:
     return None
 
 
+def _lint_family_from_tokens(tokens: list[str]) -> str | None:
+    """Return the linter family mentioned anywhere in a command argv."""
+    for token in tokens:
+        family = _lint_family(token)
+        if family is not None:
+            return family
+    return None
+
+
+def _paths_for_command_cwd(files: list[str], cwd: str) -> list[str]:
+    """Translate root-relative paths for a command run from a subdirectory."""
+    if not cwd or cwd == ".":
+        return files
+    prefix = cwd.rstrip("/") + "/"
+    return [f.removeprefix(prefix) for f in files if f == cwd or f.startswith(prefix)]
+
+
 def _scoped_lint(workspace: Path, config: dict, files: list[str]) -> tuple[int, str]:
     """Run lint scoped to ``files`` where the linter supports it.
 
@@ -306,25 +323,27 @@ def _scoped_lint(workspace: Path, config: dict, files: list[str]) -> tuple[int, 
 
     repo_cfg = (config or {}).get("repo", {})
     profile = profiles.resolve_profile(repo_cfg, workspace)
-    lint_cmd = profile.get("lint_cmd", "")
+    lint_cmd = profile.get("scoped_lint_cmd") or profile.get("lint_cmd", "")
     if not lint_cmd or not files:
         return 0, ""
 
     tokens = shlex.split(lint_cmd)
-    tool = tokens[0] if tokens else ""
-    family = _lint_family(tool)
+    family = _lint_family_from_tokens(tokens)
     if family is None:
         # Unknown linter — just run the full command.
         out, exit_code = _run_silent(lint_cmd, cwd=str(workspace))
         return exit_code, out[-4000:]
 
+    command_cwd = profile.get("scoped_lint_cwd", "")
+    lint_files = _paths_for_command_cwd(files, command_cwd)
     allowed = _LINT_EXTS[family]
-    filtered = [f for f in files if f.endswith(allowed)]
+    filtered = [f for f in lint_files if f.endswith(allowed)]
     if not filtered:
         return 0, ""
 
     scoped = tokens + filtered
-    out, exit_code = _run_silent(scoped, cwd=str(workspace))
+    cwd = workspace / command_cwd if command_cwd else workspace
+    out, exit_code = _run_silent(scoped, cwd=str(cwd))
     return exit_code, out[-4000:]
 
 

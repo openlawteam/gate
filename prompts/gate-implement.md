@@ -2,6 +2,9 @@
 
 Implement the task described below based on the plan we've reviewed.
 
+Project source root(s): `$source_root`
+Gate test location(s): `$test_dir`
+
 1. **Work through it carefully** — clean, maintainable code. KISS and DRY.
 
 2. **Verify when complete** — run `$typecheck_cmd 2>&1 | tail -30` and `$lint_cmd 2>&1 | tail -30` to check your work. Fix errors in files you touched.

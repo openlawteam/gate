@@ -37,6 +37,10 @@ $logic_json
 ### Changed Files
 $file_list
 
+### Repository Layout
+- Project source root(s): `$source_root`
+- Gate test location(s): `$test_dir`
+
 ### Diff Stats
 $diff_stats
 

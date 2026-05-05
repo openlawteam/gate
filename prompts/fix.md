@@ -54,6 +54,9 @@ $blocklist
 
 Follow the fix plan step by step. Each step tells you what to change and what depends on it.
 
+Project source root(s): `$source_root`
+Gate test location(s): `$test_dir`
+
 1. Execute each plan step in order — dependency ordering matters
 2. For each step, read the cited file and understand the full context before editing
 3. Apply the fix thoroughly:

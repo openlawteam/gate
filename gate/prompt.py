@@ -488,14 +488,16 @@ def build_vars(
         # Project profile variables
         "project_language": profile.get("language", "Unknown"),
         "project_type": profile.get("project_type", ""),
-        "typecheck_cmd": profile.get("typecheck_cmd", ""),
-        "lint_cmd": profile.get("lint_cmd", ""),
-        "test_cmd": profile.get("test_cmd", ""),
+        "typecheck_cmd": profiles.command_display(profile, "typecheck_cmd"),
+        "lint_cmd": profiles.command_display(profile, "lint_cmd"),
+        "test_cmd": profiles.command_display(profile, "test_cmd"),
         "test_file_pattern": profile.get("test_file_pattern", ""),
         "dep_file": profile.get("dep_file", ""),
         "config_files": profile.get("config_files", ""),
         "env_access_pattern": profile.get("env_access_pattern", ""),
         "import_style": profile.get("import_style", ""),
+        "source_root": profile.get("source_root", "."),
+        "test_dir": profile.get("test_dir", "."),
         # Phase 6: pass-through verifier command for the `proof_confirmed`
         # evidence tier. Empty string means "this repo has no verifier";
         # prompts must gate the proof-verification section on a non-empty

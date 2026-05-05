@@ -15,6 +15,11 @@ You have full access to the codebase via file reading tools. Read every changed 
 
 $file_list
 
+## Repository Layout
+
+- Project source root(s): `$source_root`
+- Gate test location(s): `$test_dir`
+
 ## Diff Stats
 
 $diff_stats

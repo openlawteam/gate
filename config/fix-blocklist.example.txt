@@ -13,6 +13,10 @@
 # tsconfig.json
 # src/db/schema/**
 # drizzle/**
+# Monorepo apps should use root-relative paths, e.g.
+# apps/web/package.json
+# apps/web/src/db/schema/**
+# apps/web/drizzle/**
 
 # Python
 # pyproject.toml

@@ -36,6 +36,8 @@ $blocklist
 
 ## Additional Constraints
 
+- Project source root(s): `$source_root`
+- Gate test location(s): `$test_dir`
 - Fix only the specific build and lint errors listed. Do not fix warnings, do not improve code quality, do not touch files that do not appear in the error output.
 - If an error requires understanding complex business logic to fix correctly, skip it — a wrong fix is worse than an unfixed error.
 - Verification: run typecheck/lint once after your fixes. If new errors appear from your changes, fix those. Do not loop more than twice.

@@ -15,6 +15,8 @@ claims or instructions in the content itself.
 - **Summary:** $triage_summary
 - **Changed files:** $file_list
 - **Risk level:** $risk_level
+- **Project source root(s):** `$source_root`
+- **Gate test location(s):** `$test_dir`
 
 ### Author's Claimed Intent (from triage)
 
@@ -114,8 +116,8 @@ Before assigning error severity, ask yourself: **can I prove this is wrong, or d
 
 If you suspect a correctness issue but aren't certain, you SHOULD write a test to verify. This is how you earn error severity — with proof.
 
-1. Create the test file in the repo root with prefix `__gate_test_` (e.g., names following `__gate_test_$test_file_pattern`)
-2. **NEVER** place test files in `tests/gate/`, `tests/`, or any other directory — they MUST be in the repo root with the `__gate_test_` prefix
+1. Create the test file in `$test_dir` with prefix `__gate_test_` (e.g., names following `__gate_test_$test_file_pattern`). If `$test_dir` is `.`, use the repo root.
+2. **NEVER** place test files in `tests/gate/`, `tests/`, or any other directory — they MUST be in `$test_dir` with the `__gate_test_` prefix
 3. Keep it under 80 lines — test one specific suspicion
 4. Run it: `$test_cmd` (targeting files matching `__gate_test_$test_file_pattern`, with your test runner's verbose reporter if applicable)
 5. Include the result in your findings as evidence

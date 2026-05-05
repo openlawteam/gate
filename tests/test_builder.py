@@ -154,6 +154,34 @@ class TestRunBuildSkip:
         assert "skipped" not in result or result["skipped"] is not True
 
 
+class TestRunBuildCommandGroups:
+    def test_runs_multiple_typecheck_commands(self, tmp_path):
+        calls = []
+
+        def fake_run(args, **kwargs):
+            calls.append(args)
+            return subprocess.CompletedProcess(args, 0, stdout="ok\n", stderr="")
+
+        with patch("gate.builder.subprocess.run", side_effect=fake_run), \
+             patch(
+                 "gate.builder.profiles.resolve_profile",
+                 return_value={
+                     "project_type": "node",
+                     "typecheck_cmd": "",
+                     "typecheck_cmds": ["npm run type-check", "npm run engine:check"],
+                     "lint_cmd": "",
+                     "test_cmd": "",
+                 },
+             ):
+            result = run_build(tmp_path)
+
+        assert result["overall_pass"] is True
+        assert calls == [
+            ["npm", "run", "type-check"],
+            ["npm", "run", "engine:check"],
+        ]
+
+
 class TestCompileBuild:
     def test_node_project_uses_structured_parsers(self):
         result = compile_build(

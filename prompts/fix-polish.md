@@ -25,7 +25,7 @@ $compiled_cursor_rules
 - Do NOT fix findings that were not part of this fix session
 - Do NOT refactor code that works correctly
 - Do NOT add new features or improvements
-- Do NOT modify any file matching the blocklist (`.github/**`, `.env*`, `src/db/schema/**`, `drizzle/**`, `$dep_file`, lockfiles, `$config_files`, `.cursor/rules/**`)
+- Do NOT modify any file matching the blocklist (`.github/**`, `.env*`, `$dep_file`, lockfiles, `$config_files`, `.cursor/rules/**`, or repo-specific blocked paths)
 
 ## Constraints
 

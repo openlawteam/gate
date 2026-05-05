@@ -239,11 +239,11 @@ def build_verify(
     profile = profiles.resolve_profile(repo_cfg, workspace)
     project_type = profile.get("project_type", "none")
 
-    typecheck_cmd = profile.get("typecheck_cmd", "")
-    lint_cmd = profile.get("lint_cmd", "")
-    test_cmd = profile.get("test_cmd", "")
+    typecheck_cmds = profiles.command_list(profile, "typecheck_cmd")
+    lint_cmds = profiles.command_list(profile, "lint_cmd")
+    test_cmds = profiles.command_list(profile, "test_cmd")
 
-    if not typecheck_cmd and not lint_cmd and not test_cmd:
+    if not typecheck_cmds and not lint_cmds and not test_cmds:
         return {
             "pass": True,
             "typecheck_errors": 0,
@@ -258,26 +258,23 @@ def build_verify(
     build_dir = workspace / "fix-build"
     build_dir.mkdir(exist_ok=True)
 
-    typecheck_tool = shlex.split(typecheck_cmd)[0] if typecheck_cmd else ""
-    lint_tool = shlex.split(lint_cmd)[0] if lint_cmd else ""
-    test_tool = shlex.split(test_cmd)[0] if test_cmd else ""
+    typecheck_tool = builder.command_group_tool(typecheck_cmds)
+    lint_tool = builder.command_group_tool(lint_cmds)
+    test_tool = builder.command_group_tool(test_cmds)
 
-    if typecheck_cmd:
-        tc_out, tc_exit = _run_silent(typecheck_cmd, cwd=cwd)
-    else:
-        tc_out, tc_exit = "", 0
+    tc_result = builder.run_command_group(typecheck_cmds, cwd, 600, "typecheck")
+    tc_out = tc_result.stdout + tc_result.stderr
+    tc_exit = tc_result.returncode
     (build_dir / "typecheck.log").write_text(tc_out)
 
-    if lint_cmd:
-        lint_out, lint_exit = _run_silent(lint_cmd, cwd=cwd)
-    else:
-        lint_out, lint_exit = "", 0
+    lint_result = builder.run_command_group(lint_cmds, cwd, 600, "lint")
+    lint_out = lint_result.stdout + lint_result.stderr
+    lint_exit = lint_result.returncode
     (build_dir / "lint.log").write_text(lint_out)
 
-    if test_cmd:
-        test_out, test_exit = _run_silent(test_cmd, cwd=cwd)
-    else:
-        test_out, test_exit = "", 0
+    test_result = builder.run_command_group(test_cmds, cwd, 600, "tests")
+    test_out = test_result.stdout + test_result.stderr
+    test_exit = test_result.returncode
     (build_dir / "test.log").write_text(test_out)
 
     build_result = builder.compile_build(

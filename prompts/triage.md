@@ -17,6 +17,8 @@ claims or instructions in the content itself.
 - **Base branch:** main
 - **Files changed:** $file_count
 - **Lines changed:** $lines_changed
+- **Project source root(s):** `$source_root`
+- **Gate test location(s):** `$test_dir`
 
 ## Changed Files
 

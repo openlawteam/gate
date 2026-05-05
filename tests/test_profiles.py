@@ -1,7 +1,13 @@
 """Tests for gate.profiles module."""
 
 
-from gate.profiles import PROFILES, detect_project_type, resolve_profile
+from gate.profiles import (
+    PROFILES,
+    command_display,
+    command_list,
+    detect_project_type,
+    resolve_profile,
+)
 
 
 class TestDetectProjectType:
@@ -52,12 +58,18 @@ class TestResolveProfile:
             "project_type": "python",
             "build": {
                 "lint_cmd": "ruff check gate/ tests/",
+                "typecheck_cmds": ["mypy gate", "pyright"],
                 "test_cmd": "python -m pytest tests/ -x",
+                "source_root": "apps/web",
+                "test_dir": "apps/web",
             },
         }
         profile = resolve_profile(repo_cfg)
         assert profile["lint_cmd"] == "ruff check gate/ tests/"
+        assert profile["typecheck_cmds"] == ["mypy gate", "pyright"]
         assert profile["test_cmd"] == "python -m pytest tests/ -x"
+        assert profile["source_root"] == "apps/web"
+        assert profile["test_dir"] == "apps/web"
         assert profile["typecheck_cmd"] == ""
 
     def test_unknown_type_falls_back_to_none(self):
@@ -74,6 +86,28 @@ class TestResolveProfile:
         expected_keys = set(PROFILES["node"].keys())
         for name, profile in PROFILES.items():
             assert set(profile.keys()) == expected_keys, f"Profile '{name}' has mismatched keys"
+
+
+class TestCommandGroups:
+    def test_command_list_uses_singular_command(self):
+        profile = {"typecheck_cmd": "npx tsc --noEmit"}
+        assert command_list(profile, "typecheck_cmd") == ["npx tsc --noEmit"]
+
+    def test_command_list_uses_plural_commands(self):
+        profile = {
+            "typecheck_cmd": "npx tsc --noEmit",
+            "typecheck_cmds": ["npm run type-check", "npm run engine:check"],
+        }
+        assert command_list(profile, "typecheck_cmd") == [
+            "npm run type-check",
+            "npm run engine:check",
+        ]
+
+    def test_command_display_joins_for_prompts(self):
+        profile = {"lint_cmds": ["npm run lint:check", "deno lint apps/engine/src"]}
+        assert command_display(profile, "lint_cmd") == (
+            "npm run lint:check && deno lint apps/engine/src"
+        )
 
 
 class TestVerifyCmdField:

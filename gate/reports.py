@@ -13,8 +13,10 @@ record kinds in ``reviews.jsonl`` are differentiated by:
   {``approve``, ``approve_with_notes``, ``request_changes``,
   ``error``, ``skip``, ``cancelled``}.
 * Fix-followup records — ``is_fix_followup: true`` and ``decision`` ∈
-  {``fix_succeeded``, ``fix_failed``, ``fix_no_op``}. These do NOT
-  count as fresh reviews; they're aggregated separately.
+  {``fix_succeeded``, ``fix_failed``, ``fix_no_op``, ``fix_skipped``}.
+  These do NOT count as fresh reviews; they're aggregated separately.
+  ``fix_no_op`` and ``fix_skipped`` are excluded from the success-rate
+  denominator (neither represents a real fix attempt).
 
 Cost tracking is intentionally out of scope for Phase 1 — the
 ``reviews.jsonl`` writer doesn't emit token/cost fields today (see the
@@ -78,7 +80,9 @@ _REVIEW_DECISIONS = frozenset({
     "approve", "approve_with_notes", "request_changes",
     "error", "skip", "cancelled",
 })
-_FIX_DECISIONS = frozenset({"fix_succeeded", "fix_failed", "fix_no_op"})
+_FIX_DECISIONS = frozenset(
+    {"fix_succeeded", "fix_failed", "fix_no_op", "fix_skipped"}
+)
 
 
 def _is_review(row: dict) -> bool:
@@ -212,7 +216,13 @@ def summarize(
     )
     succeeded = fix_outcomes.get("fix_succeeded", 0)
     failed = fix_outcomes.get("fix_failed", 0)
-    fix_attempts = succeeded + failed  # exclude fix_no_op from rate denominator
+    # Exclude ``fix_no_op`` and ``fix_skipped`` from the rate
+    # denominator: neither represents an actual fix attempt that
+    # produced a verdict. ``fix_no_op`` is graceful-no-op
+    # (approve_with_notes with no mechanical work); ``fix_skipped``
+    # is cancellation (supersede / operator cancel / workspace
+    # teardown) or policy block (cooldown, soft / lifetime limit).
+    fix_attempts = succeeded + failed
     fix_rate: float | None = None
     if fix_attempts:
         fix_rate = succeeded / fix_attempts

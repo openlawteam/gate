@@ -119,6 +119,12 @@ DECISION_ICONS = {
     # clean). Without an explicit entry it fell through to the "?"
     # fallback, which looked like an error in the reviews table.
     "fix_no_op": "⚒—",
+    # ``fix_skipped`` is emitted when the fix pipeline short-circuited
+    # before attempting work — cancellation (supersede / operator
+    # cancel / workspace teardown) or policy (cooldown, soft / lifetime
+    # limit). Excluded from the success-rate denominator in
+    # ``gate.reports`` since neither outcome is a real attempt.
+    "fix_skipped": "⚒○",
 }
 
 DECISION_COLORS = {
@@ -130,6 +136,7 @@ DECISION_COLORS = {
     "fix_succeeded": "bright_green",
     "fix_failed": "bright_yellow",
     "fix_no_op": "dim",
+    "fix_skipped": "dim",
 }
 
 STAGE_COLORS = {
@@ -1363,15 +1370,37 @@ class GateTUI(App):
                     try:
                         w = self.query_one(f"#{pane_info['widget_id']}", RichLog)
                         container = w.parent
-                        prev_sep = container.previous_sibling if container else None
-                        if prev_sep and "log-pane-separator" in (prev_sep.classes or set()):
-                            prev_sep.remove()
-                        elif container:
-                            next_sep = container.next_sibling
-                            if next_sep and "log-pane-separator" in (next_sep.classes or set()):
-                                next_sep.remove()
-                        if container:
-                            container.remove()
+                        if container is None:
+                            del self._log_panes[key]
+                            continue
+                        # Look up the container's position via the public
+                        # ``children`` collection and remove an adjacent
+                        # separator if present. Textual's Widget has no
+                        # ``previous_sibling`` attribute (the audit observed
+                        # 40+ AttributeError crashes from probing it); the
+                        # prior code's intent — find the separator paired
+                        # with this pane — survives via index lookup.
+                        siblings = list(panes_container.children)
+                        idx = siblings.index(container)
+                        # Panes after the first are mounted preceded by a
+                        # separator (see add path below). Removing the
+                        # ``before`` separator is the canonical path; for
+                        # the first pane (idx == 0) fall back to the
+                        # following separator so we don't leave a stale
+                        # leading divider.
+                        if (
+                            idx > 0
+                            and "log-pane-separator"
+                            in (siblings[idx - 1].classes or set())
+                        ):
+                            siblings[idx - 1].remove()
+                        elif (
+                            idx + 1 < len(siblings)
+                            and "log-pane-separator"
+                            in (siblings[idx + 1].classes or set())
+                        ):
+                            siblings[idx + 1].remove()
+                        container.remove()
                         del self._log_panes[key]
                     except Exception:
                         logger.exception("Failed to remove log pane %s, rebuilding", key)

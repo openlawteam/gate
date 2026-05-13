@@ -408,6 +408,53 @@ class TestApprovePr:
         approve_pr("owner/repo", 42, "Looks good")
         mock_comment.assert_not_called()
 
+    # ── Bot-authored PR routing (audit P2.3) ─────────────────
+
+    @patch("gate.github.comment_pr")
+    @patch("gate.github._gh")
+    def test_bot_authored_pr_skips_gh_review_and_comments_directly(
+        self, mock_gh, mock_comment
+    ):
+        """When ``pr_author == bot_account``, we know GitHub will reject
+        the self-review GraphQL call. Skip the wasted round-trip and
+        post as a comment directly.
+        """
+        config = {"repo": {"bot_account": "openlawbot"}}
+        approve_pr(
+            "owner/repo", 42, "Looks good",
+            pr_author="openlawbot", config=config,
+        )
+        mock_gh.assert_not_called()
+        mock_comment.assert_called_once_with("owner/repo", 42, "Looks good")
+
+    @patch("gate.github.comment_pr")
+    @patch("gate.github._gh")
+    def test_human_pr_still_calls_gh_review(self, mock_gh, mock_comment):
+        config = {"repo": {"bot_account": "openlawbot"}}
+        mock_gh.return_value = ""
+        approve_pr(
+            "owner/repo", 42, "Looks good",
+            pr_author="alice", config=config,
+        )
+        mock_gh.assert_called_once()
+        mock_comment.assert_not_called()
+
+    @patch("gate.github.comment_pr")
+    @patch("gate.github._gh")
+    def test_empty_pr_author_falls_through_to_legacy_path(
+        self, mock_gh, mock_comment
+    ):
+        """``pr_author=""`` (the default) preserves legacy behavior —
+        the helper still attempts ``gh pr review`` and relies on the
+        stderr fallback if the bot is actually the author. This is the
+        path used by health.py orphan cleanup, which doesn't have
+        pr_author readily available.
+        """
+        config = {"repo": {"bot_account": "openlawbot"}}
+        mock_gh.return_value = ""
+        approve_pr("owner/repo", 42, "Looks good", config=config)
+        mock_gh.assert_called_once()
+
 
 class TestPostReview:
     @patch("gate.github.upsert_sticky_summary")
@@ -434,6 +481,74 @@ class TestPostReview:
         assert args[:2] == ("owner/repo", 42)
         assert "Changes requested" in args[2]
         mock_sticky.assert_called_once_with("owner/repo", 42, verdict, None)
+
+    # ── Bot-authored PR routing (audit P2.3) ─────────────────
+
+    @patch("gate.github.upsert_sticky_summary")
+    @patch("gate.github.comment_pr")
+    @patch("gate.github._gh")
+    def test_bot_authored_request_changes_skips_gh_review(
+        self, mock_gh, mock_comment, mock_sticky
+    ):
+        """Bot-authored PR + request_changes: post as a comment up front,
+        do not attempt the failing ``gh pr review --request-changes``.
+        Escalation still runs (label + reviewer) because humans need to
+        be paged regardless of who opened the PR.
+        """
+        config = {"repo": {"bot_account": "openlawbot", "escalation_reviewers": ""}}
+        verdict = {
+            "decision": "request_changes",
+            "confidence": "high",
+            "summary": "Needs fixes",
+            "findings": [{"severity": "error", "file": "x.py", "message": "bug"}],
+            "stats": {"stages_run": 4},
+        }
+
+        post_review(
+            "owner/repo", 42, verdict, None, "deadbeef",
+            config=config, pr_author="openlawbot",
+        )
+
+        # No `pr review` calls at all — the bot path bypasses gh entirely
+        # for the review step. (Other `_gh` calls — e.g. escalation
+        # labels — are also gated, since no reviewers are configured.)
+        review_calls = [
+            c for c in mock_gh.call_args_list
+            if c.args and c.args[0][:2] == ["pr", "review"]
+        ]
+        assert review_calls == []
+        mock_comment.assert_called_once()
+        mock_sticky.assert_called_once()
+
+    @patch("gate.github.upsert_sticky_summary")
+    @patch("gate.github.comment_pr")
+    @patch("gate.github._gh")
+    def test_bot_authored_approve_skips_gh_review(
+        self, mock_gh, mock_comment, mock_sticky
+    ):
+        """Bot-authored PR + approve: same routing — comment, no
+        ``gh pr review --approve`` round-trip.
+        """
+        config = {"repo": {"bot_account": "openlawbot"}}
+        verdict = {
+            "decision": "approve",
+            "confidence": "high",
+            "summary": "LGTM",
+            "findings": [],
+            "stats": {"stages_run": 4},
+        }
+
+        post_review(
+            "owner/repo", 42, verdict, None, "deadbeef",
+            config=config, pr_author="openlawbot",
+        )
+
+        review_calls = [
+            c for c in mock_gh.call_args_list
+            if c.args and c.args[0][:2] == ["pr", "review"]
+        ]
+        assert review_calls == []
+        mock_comment.assert_called_once()
 
 
 class TestCommentPr:

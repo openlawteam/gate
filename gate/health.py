@@ -376,9 +376,19 @@ def check_orphaned_check_runs() -> dict:
                 )
             try:
                 pr_number = int(pr_num)
+                # ``pr_author`` is intentionally omitted here: the
+                # active_review.json marker does not persist it (the
+                # orchestrator writes the marker before fetching PR
+                # info), and this orphan-cleanup path is a fail-open
+                # recovery that runs at most a few times per day. The
+                # stderr-fallback in ``approve_pr`` still handles bot
+                # PRs correctly — it just costs one extra GraphQL
+                # round-trip and a WARNING log line per orphaned bot
+                # PR, which is acceptable for a recovery path.
                 github.approve_pr(
                     repo, pr_number,
                     "**Gate (error)** — review process died. Auto-approving.",
+                    config=config,
                 )
             except ValueError:
                 pass

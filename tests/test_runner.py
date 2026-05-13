@@ -5,7 +5,10 @@ StructuredRunner parsing, and run_with_retry logic.
 """
 
 import json
-from unittest.mock import patch
+import subprocess
+import threading
+import time
+from unittest.mock import MagicMock, patch
 
 from gate.runner import (
     ReviewRunner,
@@ -183,47 +186,69 @@ class TestStructuredRunner:
         assert runner._parse_output("", "triage") is None
         assert runner._parse_output("   ", "triage") is None
 
-    @patch("gate.runner.subprocess.run")
-    def test_run_passes_prompt_via_stdin_not_argv(self, mock_run, tmp_path):
+    @patch("gate.runner.subprocess.Popen")
+    def test_run_passes_prompt_via_stdin_not_argv(self, mock_popen, tmp_path):
         """Regression test for ARG_MAX overflow on PRs with huge diffs.
 
-        Before this fix, the assembled prompt was appended to argv with
-        ``cmd.append(prompt_text)`` and any prompt larger than macOS
-        ARG_MAX (~1 MB) raised
+        Before the original ARG_MAX fix, the assembled prompt was
+        appended to argv with ``cmd.append(prompt_text)`` and any
+        prompt larger than macOS ARG_MAX (~1 MB) raised
         ``OSError: [Errno 7] Argument list too long: 'claude'`` inside
         ``_execute_child`` before claude even started — silently failing
         the structured stage with no actionable error.
 
-        adin-chat PR #261 (554 files, 5.5 MB diff) was the original repro.
+        adin-chat PR #261 (554 files, 5.5 MB diff) was the original
+        repro. After the May 2026 cancellation refactor (audit P2.1)
+        we run claude via ``Popen`` + ``communicate(input=...)`` so a
+        watchdog thread can ``terminate()`` mid-flight on cancel;
+        the prompt-via-stdin contract is preserved.
         """
-        mock_run.return_value = type(
-            "P", (), {"returncode": 0, "stdout": '{"change_type":"x"}', "stderr": ""}
-        )()
+        proc = MagicMock()
+        proc.communicate.return_value = ('{"change_type":"x"}', "")
+        proc.returncode = 0
+        mock_popen.return_value = proc
+
         runner = StructuredRunner()
         prompt = "x" * 5_500_000  # 5.5 MB — same scale as PR #261
         runner.run("triage", prompt, tmp_path, {"models": {}, "timeouts": {}})
-        call = mock_run.call_args
-        cmd = call.args[0]
+
+        popen_call = mock_popen.call_args
+        cmd = popen_call.args[0]
         assert prompt not in cmd, (
             "prompt must NOT be appended to argv (would hit ARG_MAX on big PRs); "
-            "pass it via input= instead"
+            "pass it via communicate(input=...) instead"
         )
-        assert call.kwargs.get("input") == prompt, "prompt must be piped via stdin"
+        # The prompt is delivered through ``communicate(input=prompt)``,
+        # which requires ``stdin=PIPE`` on the Popen call so the child
+        # has a pipe to read from. Verify both halves of that contract.
+        assert popen_call.kwargs.get("stdin") == subprocess.PIPE, (
+            "Popen must set stdin=PIPE so communicate(input=...) has somewhere to write"
+        )
+        proc.communicate.assert_called_once()
+        comm_kwargs = proc.communicate.call_args.kwargs
+        assert comm_kwargs.get("input") == prompt, "prompt must be piped via stdin"
         assert "--print" in cmd, "claude must run with --print so it reads stdin"
 
-    @patch("gate.runner.subprocess.run")
-    def test_run_does_not_set_stdin_kwarg(self, mock_run, tmp_path):
-        """``input=`` and ``stdin=`` are mutually exclusive in subprocess.run.
+    @patch("gate.runner.subprocess.Popen")
+    def test_run_sets_stdin_pipe_for_communicate(self, mock_popen, tmp_path):
+        """``Popen(stdin=PIPE)`` is required for ``communicate(input=...)``.
 
-        Setting both raises ValueError at runtime. Pin the contract so
-        nobody re-adds an explicit ``stdin=DEVNULL``.
+        Pins the contract that the prompt-via-stdin path uses a pipe
+        (not DEVNULL, not file). Replaces the prior ``test_run_does_not_
+        set_stdin_kwarg`` regression which only made sense with
+        ``subprocess.run(input=...)``.
         """
-        mock_run.return_value = type(
-            "P", (), {"returncode": 0, "stdout": "{}", "stderr": ""}
-        )()
+        proc = MagicMock()
+        proc.communicate.return_value = ("{}", "")
+        proc.returncode = 0
+        mock_popen.return_value = proc
+
         runner = StructuredRunner()
         runner.run("triage", "tiny prompt", tmp_path, {"models": {}, "timeouts": {}})
-        assert "stdin" not in mock_run.call_args.kwargs
+
+        assert mock_popen.call_args.kwargs.get("stdin") == subprocess.PIPE
+        assert mock_popen.call_args.kwargs.get("stdout") == subprocess.PIPE
+        assert mock_popen.call_args.kwargs.get("stderr") == subprocess.PIPE
 
 
 class TestRunWithRetry:
@@ -283,6 +308,206 @@ class TestRunWithRetry:
         cancelled = StageResult(stage="triage", success=False, cancelled=True)
         result = run_with_retry(lambda: cancelled, "triage", sample_config)
         assert result.cancelled is True
+
+    # ── Cancellation event plumbing (audit P2.1) ─────────────
+
+    def test_cancelled_event_short_circuits_before_first_attempt(
+        self, sample_config
+    ):
+        """Pre-set cancel event causes early return before run_fn runs.
+
+        Mirrors the orchestrator behavior where a queue supersede can
+        flip ``_cancelled`` between stage selection and the stage's
+        first attempt. Without this gate the orchestrator burns one
+        full stage attempt's worth of time after the cancel.
+        """
+        cancelled = threading.Event()
+        cancelled.set()
+        called = [0]
+
+        def run_fn():
+            called[0] += 1
+            return StageResult(stage="triage", success=True, data={"key": "val"})
+
+        result = run_with_retry(
+            run_fn, "triage", sample_config, cancelled=cancelled
+        )
+        assert called[0] == 0
+        assert result.cancelled is True
+        assert result.success is False
+
+    def test_cancelled_event_breaks_rate_limit_retry_sleep(self, sample_config):
+        """Setting the event mid retry-sleep wakes the wait immediately.
+
+        Without ``Event.wait``, the rate-limit back-off uses
+        ``time.sleep(60+)`` which blocks supersede latency by minutes.
+        With the event, ``wait(delay)`` returns True the moment the
+        event is set from another thread.
+        """
+        # Force a short base delay so the test can complete fast.
+        config = {"retry": {"max_retries": 2, "base_delay_s": 5}}
+        cancelled = threading.Event()
+        rate_limited = StageResult(
+            stage="triage", success=False, is_rate_limited=True
+        )
+
+        # Fire the cancel ~50ms into the rate-limit sleep.
+        def _cancel_soon():
+            time.sleep(0.05)
+            cancelled.set()
+
+        threading.Thread(target=_cancel_soon, daemon=True).start()
+
+        start = time.monotonic()
+        result = run_with_retry(
+            lambda: rate_limited, "triage", config, cancelled=cancelled
+        )
+        elapsed = time.monotonic() - start
+
+        assert result.cancelled is True
+        assert elapsed < 1.0, (
+            f"cancel during rate-limit sleep should wake in <1s, took {elapsed:.2f}s"
+        )
+
+    def test_cancelled_event_breaks_transient_retry_sleep(self, sample_config):
+        """Same shape as the rate-limit test but for the transient branch."""
+        config = {
+            "retry": {"max_retries": 2, "base_delay_s": 60, "transient_base_delay_s": 5}
+        }
+        cancelled = threading.Event()
+        transient = StageResult(stage="triage", success=False, is_transient=True)
+
+        def _cancel_soon():
+            time.sleep(0.05)
+            cancelled.set()
+
+        threading.Thread(target=_cancel_soon, daemon=True).start()
+
+        start = time.monotonic()
+        result = run_with_retry(
+            lambda: transient, "triage", config, cancelled=cancelled
+        )
+        elapsed = time.monotonic() - start
+
+        assert result.cancelled is True
+        assert elapsed < 1.0, (
+            f"cancel during transient sleep should wake in <1s, took {elapsed:.2f}s"
+        )
+
+    def test_cancelled_none_preserves_legacy_behavior(self, sample_config):
+        """Back-compat: ``cancelled=None`` (the default) uses time.sleep.
+
+        Legacy callers that haven't been updated must see byte-identical
+        behavior. Verified by patching ``time.sleep`` and asserting it
+        was invoked (the Event.wait path would skip the patch).
+        """
+        rate_limited = StageResult(
+            stage="triage", success=False, is_rate_limited=True
+        )
+
+        with patch("gate.runner.time.sleep") as mock_sleep:
+            run_with_retry(lambda: rate_limited, "triage", sample_config)
+            assert mock_sleep.called, "legacy callers must still use time.sleep"
+
+
+class TestStructuredRunnerCancellation:
+    """Watchdog-based cancellation for the structured stage subprocess.
+
+    Audit P2.1: ``StructuredRunner.run`` previously blocked up to
+    ``structured_stage_s`` (600s in production config) on a single
+    attempt. With the watchdog wired in, cancellation arriving mid-call
+    terminates the Claude subprocess within ~0.5s.
+    """
+
+    @patch("gate.runner.subprocess.Popen")
+    def test_cancelled_event_terminates_subprocess(self, mock_popen, tmp_path):
+        cancelled = threading.Event()
+
+        proc = MagicMock()
+        # Simulate Claude taking forever: communicate() blocks until cancel
+        # is set, then unblocks (mimicking proc.terminate()).
+        comm_done = threading.Event()
+
+        def _communicate(input=None, timeout=None):
+            # Wait for the watchdog to call terminate(), then return.
+            comm_done.wait(timeout=3.0)
+            return ("", "killed by cancel")
+
+        def _terminate():
+            comm_done.set()
+
+        proc.communicate.side_effect = _communicate
+        proc.terminate.side_effect = _terminate
+        proc.kill = MagicMock()
+        proc.poll.return_value = None
+        proc.returncode = -15  # SIGTERM
+        proc.wait.return_value = -15
+        mock_popen.return_value = proc
+
+        # Fire cancel ~100ms after run() starts.
+        def _cancel_soon():
+            time.sleep(0.1)
+            cancelled.set()
+
+        threading.Thread(target=_cancel_soon, daemon=True).start()
+
+        runner = StructuredRunner()
+        result = runner.run(
+            "triage", "prompt", tmp_path,
+            {"models": {}, "timeouts": {}},
+            cancelled=cancelled,
+        )
+
+        assert result.cancelled is True
+        assert proc.terminate.called, "watchdog must call terminate() on cancel"
+
+    @patch("gate.runner.subprocess.Popen")
+    def test_cancelled_after_completion_returns_normal_result(
+        self, mock_popen, tmp_path
+    ):
+        """If cancel arrives after communicate() returns cleanly, the
+        normal parse path runs — we don't retroactively mark success as
+        cancelled.
+        """
+        cancelled = threading.Event()
+
+        proc = MagicMock()
+        proc.communicate.return_value = ('{"change_type":"refactor"}', "")
+        proc.returncode = 0
+        proc.poll.return_value = 0
+        mock_popen.return_value = proc
+
+        runner = StructuredRunner()
+        result = runner.run(
+            "triage", "prompt", tmp_path,
+            {"models": {}, "timeouts": {}},
+            cancelled=cancelled,
+        )
+
+        # Cancel set AFTER run completes — should not affect result.
+        cancelled.set()
+
+        assert result.cancelled is False
+        assert result.success is True
+
+    @patch("gate.runner.subprocess.Popen")
+    def test_no_watchdog_when_cancelled_is_none(self, mock_popen, tmp_path):
+        """Legacy callers (``cancelled=None``) get the cheaper code path —
+        no watchdog thread, no terminate() machinery.
+        """
+        proc = MagicMock()
+        proc.communicate.return_value = ('{"x": 1}', "")
+        proc.returncode = 0
+        mock_popen.return_value = proc
+
+        runner = StructuredRunner()
+        # We can't directly assert "no thread spawned" without
+        # introspection, but we can assert terminate is not called.
+        result = runner.run(
+            "triage", "prompt", tmp_path, {"models": {}, "timeouts": {}}
+        )
+        assert proc.terminate.called is False
+        assert result.success is True
 
 
 class TestReviewRunnerHandleSignalSweep:

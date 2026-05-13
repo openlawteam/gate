@@ -1789,3 +1789,84 @@ class TestFixPipelineCodexPreflight:
             assert mock_bs.call_count == 1
             assert pipe.codex_thread_id == "thread-abc"
             mock_notify.codex_unavailable.assert_not_called()
+
+
+class TestFixResultSkipped:
+    """Audit P3.1: cancellation and policy-block branches return
+    ``FixResult(skipped=True)`` rather than the legacy
+    ``success=False``-with-no-skipped-flag that ``log_fix_result``
+    mapped to ``decision: "fix_failed"``. PR #340 hit the cooldown
+    branch on May 13 2026 and was logged as a spurious ``fix_failed``,
+    which is what motivated this distinction.
+    """
+
+    def _make_pipeline(self, sample_config, tmp_path):
+        findings = [
+            {"severity": "warning", "message": "test", "file": "a.ts", "line": 1}
+        ]
+        verdict = {"decision": "request_changes", "findings": findings}
+        (tmp_path / "verdict.json").write_text("{}")
+        (tmp_path / "triage.json").write_text("{}")
+        return FixPipeline(
+            pr_number=1, repo="a/b", workspace=tmp_path,
+            verdict=verdict, build={}, config=sample_config,
+        )
+
+    def test_cancelled_before_start_returns_skipped(
+        self, sample_config, tmp_path
+    ):
+        """Pre-set cancel event → ``skipped=True`` (was ``failed``)."""
+        pipe = self._make_pipeline(sample_config, tmp_path)
+        pipe._cancelled.set()
+        result = pipe.run()
+        assert result.success is False
+        assert result.skipped is True
+        assert "Cancelled" in result.summary
+
+    @patch("gate.fixer.github")
+    @patch("gate.fixer.state.check_fix_limits")
+    def test_fix_cooldown_returns_skipped(
+        self, mock_limits, mock_gh, sample_config, tmp_path
+    ):
+        """``check_fix_limits`` returning False for cooldown maps to
+        ``skipped=True``. This is the exact PR #340 case."""
+        mock_limits.return_value = (False, "Fix cooldown active (268s remaining)")
+        pipe = self._make_pipeline(sample_config, tmp_path)
+        result = pipe.run()
+        assert result.success is False
+        assert result.skipped is True
+        assert "cooldown" in result.reason.lower()
+
+    @patch("gate.fixer.github")
+    @patch("gate.fixer.state.check_fix_limits")
+    def test_soft_limit_returns_skipped(
+        self, mock_limits, mock_gh, sample_config, tmp_path
+    ):
+        """Soft / lifetime limit hits are policy decisions, not
+        failures — share the same ``skipped`` mapping as the cooldown.
+        """
+        mock_limits.return_value = (False, "Soft fix limit reached (3 this review cycle)")
+        pipe = self._make_pipeline(sample_config, tmp_path)
+        result = pipe.run()
+        assert result.success is False
+        assert result.skipped is True
+
+    @patch("gate.fixer.github")
+    @patch("gate.fixer.state.check_fix_limits")
+    def test_lifetime_limit_returns_skipped(
+        self, mock_limits, mock_gh, sample_config, tmp_path
+    ):
+        mock_limits.return_value = (False, "Lifetime fix limit reached (6)")
+        pipe = self._make_pipeline(sample_config, tmp_path)
+        result = pipe.run()
+        assert result.success is False
+        assert result.skipped is True
+
+    def test_skipped_default_false_on_real_failure_paths(self):
+        """Belt-and-suspenders: a default-constructed ``FixResult`` does
+        not accidentally claim ``skipped=True``. The flag must be
+        opt-in or the orchestrator will mis-route real failures.
+        """
+        from gate.schemas import FixResult
+        result = FixResult(success=False, summary="something bad")
+        assert result.skipped is False

@@ -254,6 +254,7 @@ class ReviewOrchestrator:
                 github.approve_pr(
                     self.repo, self.pr_number,
                     f"**Gate: {action}** — review skipped by label.",
+                    pr_author=self.pr_author, config=self.config,
                 )
                 github.complete_check_run(
                     self.repo, self.check_run_id,
@@ -275,6 +276,7 @@ class ReviewOrchestrator:
                     self.repo, self.pr_number,
                     "**Gate (circuit breaker)** — last 3 reviews were errors. "
                     "Auto-approving. Investigate the gate machine.",
+                    pr_author=self.pr_author, config=self.config,
                 )
                 github.complete_check_run(
                     self.repo, self.check_run_id,
@@ -377,6 +379,7 @@ class ReviewOrchestrator:
                 github.approve_pr(
                     self.repo, self.pr_number,
                     "**Gate (quota pause)** — auto-approved, quota low.",
+                    pr_author=self.pr_author, config=self.config,
                 )
                 github.complete_check_run(
                     self.repo, self.check_run_id,
@@ -398,6 +401,7 @@ class ReviewOrchestrator:
                 github.approve_pr(
                     self.repo, self.pr_number,
                     "**Gate (cycle limit)** — auto-approved after max review cycles.",
+                    pr_author=self.pr_author, config=self.config,
                 )
                 github.complete_check_run(
                     self.repo, self.check_run_id,
@@ -430,7 +434,33 @@ class ReviewOrchestrator:
             self._update_check("Stage 2: Build verification...")
             write_live_log(self.pr_number, "Build starting", "stage", repo=self.repo)
             build_result = builder.run_build(self.workspace, config=self.config)
-            (self.workspace / "build.json").write_text(json.dumps(build_result, indent=2))
+            # Guard the build.json write the same way ``_save_stage_result``
+            # guards stage outputs. The queue can supersede a review
+            # mid-build, at which point the worktree may already be torn
+            # down — without this guard the write raises FileNotFoundError
+            # and the review exits as ``error`` instead of ``cancelled``
+            # (observed on PR #318 May 11, 2026). The reason-split log
+            # message distinguishes a real cancel from a workspace-gone
+            # race so future audits don't conflate them.
+            if self._cancelled.is_set() or not self.workspace.exists():
+                reason = "review cancelled" if self._cancelled.is_set() else "workspace gone"
+                logger.info(f"Skipping build.json write: {reason}")
+                self._emit("review_completed", review_id=review_id, decision="skip")
+                return
+            try:
+                (self.workspace / "build.json").write_text(
+                    json.dumps(build_result, indent=2)
+                )
+            except (FileNotFoundError, OSError) as e:
+                if self._cancelled.is_set() or not self.workspace.exists():
+                    logger.info(
+                        f"build.json write failed after cancel/teardown: {e}"
+                    )
+                    self._emit(
+                        "review_completed", review_id=review_id, decision="skip"
+                    )
+                    return
+                raise
 
             # === Fast-track check ===
             fast_track = (
@@ -579,7 +609,7 @@ class ReviewOrchestrator:
             # === POST REVIEW ===
             github.post_review(
                 self.repo, self.pr_number, verdict.data, build_result, self.head_sha,
-                config=self.config,
+                config=self.config, pr_author=self.pr_author,
             )
 
             # Complete check run
@@ -719,7 +749,20 @@ class ReviewOrchestrator:
                     # statuses API maps ``neutral`` → ``success`` state; the
                     # title/description is the primary visible signal.
                     fix_total = fix_result.fixed_count + fix_result.not_fixed_count
-                    if not fix_result.success:
+                    if fix_result.skipped:
+                        # Cancellation (supersede / operator cancel /
+                        # workspace teardown) or policy block (cooldown,
+                        # soft / lifetime limit). Map to ``neutral`` so
+                        # the PR check shows yellow rather than red and
+                        # log as ``fix_skipped`` so reviews.jsonl
+                        # success-rate isn't distorted by non-attempts.
+                        fix_conclusion = "neutral"
+                        check_title = (
+                            f"Gate Auto-Fix: skipped ({fix_result.reason})"
+                            if fix_result.reason
+                            else "Gate Auto-Fix: skipped"
+                        )
+                    elif not fix_result.success:
                         fix_conclusion = "failure"
                         check_title = "Gate Auto-Fix: failed"
                     elif is_no_op:
@@ -756,7 +799,8 @@ class ReviewOrchestrator:
                         fix_result.summary, decision, repo=self.repo,
                         fix_elapsed_seconds=fix_elapsed,
                         status=(
-                            "no_op" if is_no_op
+                            "skipped" if fix_result.skipped
+                            else "no_op" if is_no_op
                             else ("succeeded" if fix_result.success else "failed")
                         ),
                         pipeline_mode=fix_result.pipeline_mode or None,
@@ -847,6 +891,7 @@ class ReviewOrchestrator:
                 github.approve_pr(
                     self.repo, self.pr_number,
                     f"**Gate (error)** — review failed: {e}. Auto-approving.",
+                    pr_author=self.pr_author, config=self.config,
                 )
                 if self.check_run_id:
                     github.complete_check_run(
@@ -880,6 +925,7 @@ class ReviewOrchestrator:
             lambda: self._spawn_and_wait_agent(stage_name),
             stage_name,
             self.config,
+            cancelled=self._cancelled,
         )
 
     def _spawn_and_wait_agent(self, stage_name: str) -> StageResult:
@@ -904,9 +950,6 @@ class ReviewOrchestrator:
         deadline = time.monotonic() + timeout
 
         while time.monotonic() < deadline:
-            if self._cancelled.is_set():
-                kill_window(pane_id)
-                return StageResult(stage=stage_name, success=False, data={}, cancelled=True)
             if result_file.exists():
                 try:
                     envelope = json.loads(result_file.read_text())
@@ -919,7 +962,18 @@ class ReviewOrchestrator:
                     )
                 except json.JSONDecodeError:
                     pass
-            time.sleep(5)
+            # Wait up to 5s, but wake immediately on cancel. Using
+            # ``Event.wait`` instead of ``time.sleep`` cuts the
+            # worst-case cancellation latency in this loop from ~5s
+            # (next iteration's flag check) to ~0s (return as soon as
+            # cancel arrives). Net effect on PRs that get superseded
+            # mid-stage: orchestrator releases its executor slot and
+            # tears down the tmux window in <1s instead of up to 5s.
+            if self._cancelled.wait(5):
+                kill_window(pane_id)
+                with self._panes_lock:
+                    self._active_panes.pop(stage_name, None)
+                return StageResult(stage=stage_name, success=False, data={}, cancelled=True)
 
         kill_window(pane_id)
         with self._panes_lock:
@@ -932,9 +986,16 @@ class ReviewOrchestrator:
         vars_dict = prompt.build_vars(self.workspace, stage_name, self._env_vars(), self.config)
         assembled = prompt.safe_substitute(template, vars_dict, f"orchestrator-{stage_name}")
         return run_with_retry(
-            lambda: StructuredRunner().run(stage_name, assembled, self.workspace, self.config),
+            lambda: StructuredRunner().run(
+                stage_name,
+                assembled,
+                self.workspace,
+                self.config,
+                cancelled=self._cancelled,
+            ),
             stage_name,
             self.config,
+            cancelled=self._cancelled,
         )
 
     # ── Helpers ──────────────────────────────────────────────
@@ -996,14 +1057,22 @@ class ReviewOrchestrator:
         if not self.workspace or not result.data:
             return
         if self._cancelled.is_set() or not self.workspace.exists():
-            logger.info(f"Skipping {stage_name}.json write: review cancelled")
+            # Split the reason so the audit trail tells "operator/queue
+            # cancelled this review" apart from "the worktree got torn
+            # down out from under us mid-stage". Before this split the
+            # log line always said "review cancelled" regardless of
+            # which branch fired, which made the May 9 ~2h tails on
+            # PRs #326 / #330 look like a cancellation bug when the
+            # real cause was workspace teardown.
+            reason = "review cancelled" if self._cancelled.is_set() else "workspace gone"
+            logger.info(f"Skipping {stage_name}.json write: {reason}")
             return
         path = self.workspace / f"{stage_name}.json"
         try:
             path.write_text(json.dumps(result.data, indent=2))
         except (FileNotFoundError, OSError) as e:
-            if self._cancelled.is_set():
-                logger.info(f"{stage_name}.json write failed after cancel: {e}")
+            if self._cancelled.is_set() or not self.workspace.exists():
+                logger.info(f"{stage_name}.json write failed after cancel/teardown: {e}")
                 return
             raise
 

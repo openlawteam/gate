@@ -188,6 +188,44 @@ class TestLogFixResult:
             ):
                 assert key not in entry
 
+    def test_fix_result_skipped_writes_fix_skipped_decision(self, tmp_path):
+        """Audit P3.1: ``status="skipped"`` maps to ``decision: "fix_skipped"``.
+
+        Cooldown / soft-limit / lifetime-limit / cancellation outcomes
+        previously logged as ``fix_failed`` (PR #340 nit on May 13).
+        After the fix, downstream consumers see them as a distinct
+        decision excluded from the success-rate denominator.
+        """
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+        jsonl = logs_dir / "reviews.jsonl"
+
+        with _patch_logs(logs_dir):
+            log_fix_result(
+                340, False, "Fix cooldown active (268s remaining)",
+                "approve_with_notes",
+                repo="org/repo",
+                fix_elapsed_seconds=1,
+                status="skipped",
+            )
+            entry = json.loads(jsonl.read_text().strip())
+            assert entry["decision"] == "fix_skipped"
+            assert entry["is_fix_followup"] is True
+            assert entry["fix_summary"].startswith("Fix cooldown")
+
+    def test_fix_result_no_op_unchanged_after_skipped_added(self, tmp_path):
+        """Regression: adding ``skipped`` to the decision map must not
+        silently change the legacy ``no_op`` mapping.
+        """
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+        jsonl = logs_dir / "reviews.jsonl"
+
+        with _patch_logs(logs_dir):
+            log_fix_result(7, True, "no mechanical work", "approve_with_notes", status="no_op")
+            entry = json.loads(jsonl.read_text().strip())
+            assert entry["decision"] == "fix_no_op"
+
 
 class TestWriteSidecarMeta:
     def test_writes_meta_file(self, tmp_path):

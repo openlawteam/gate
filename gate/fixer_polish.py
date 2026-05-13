@@ -511,10 +511,16 @@ def _run_fix_polish_audit(pipeline: "FixPipeline") -> dict | None:
 
     def _run() -> StageResult:
         return StructuredRunner().run(
-            "fix-polish", assembled, pipeline.workspace, pipeline.config
+            "fix-polish",
+            assembled,
+            pipeline.workspace,
+            pipeline.config,
+            cancelled=pipeline._cancelled,
         )
 
-    result = run_with_retry(_run, "fix-polish", pipeline.config)
+    result = run_with_retry(
+        _run, "fix-polish", pipeline.config, cancelled=pipeline._cancelled
+    )
     data = result.data or {}
     (pipeline.workspace / "fix-polish.json").write_text(json.dumps(data, indent=2))
     clean = data.get("clean", True)

@@ -171,6 +171,47 @@ class TestSummarize:
         report = summarize(rows)
         assert report.fix_success_rate == 1.0
 
+    def test_fix_skipped_excluded_from_rate_denominator(self):
+        """Audit P3.1: ``fix_skipped`` (cooldown / cancellation / limit)
+        is not a real fix attempt and must not drag the success rate
+        down. Same treatment as ``fix_no_op``.
+        """
+        rows = [
+            _fix("fix_succeeded"),
+            _fix("fix_skipped"),
+            _fix("fix_skipped"),
+            _fix("fix_skipped"),
+        ]
+        report = summarize(rows)
+        assert report.fix_success_rate == 1.0
+        assert report.fix_outcomes.get("fix_skipped") == 3
+
+    def test_fix_skipped_classified_as_fix_followup(self):
+        """``_is_fix_followup`` must recognise the new ``fix_skipped``
+        decision so the row goes into the fix-outcomes bucket rather
+        than ``decisions_by_repo``.
+        """
+        rows = [_review("approve"), _fix("fix_skipped")]
+        report = summarize(rows)
+        assert report.total_reviews == 1
+        assert report.total_fix_followups == 1
+        assert report.fix_outcomes.get("fix_skipped") == 1
+
+    def test_fix_rate_with_mixed_outcomes_excludes_skipped_and_no_op(self):
+        """Belt-and-suspenders: explicitly verify rate = 2/3, not 2/6,
+        when fix_succeeded=2, fix_failed=1, fix_no_op=2, fix_skipped=1.
+        """
+        rows = [
+            _fix("fix_succeeded"),
+            _fix("fix_succeeded"),
+            _fix("fix_failed"),
+            _fix("fix_no_op"),
+            _fix("fix_no_op"),
+            _fix("fix_skipped"),
+        ]
+        report = summarize(rows)
+        assert report.fix_success_rate == 2 / 3
+
     def test_review_time_avg_and_p95(self):
         rows = [_review("approve", seconds=10), _review("approve", seconds=20),
                 _review("approve", seconds=30)]

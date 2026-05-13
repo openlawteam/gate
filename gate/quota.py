@@ -122,8 +122,21 @@ def _fail_open(reason: str, auth_drift: bool = False) -> dict:
     and the operator can tell "Anthropic is down" apart from "the token
     expired". A one-shot ntfy alert is fired at most once per 24h so we
     don't spam the operator (Group 4A).
+
+    Auth-drift WARNINGs are gated on the same 24h marker as the ntfy
+    alert: the first fail-open in a 24h window logs at WARNING (with a
+    re-auth hint); subsequent calls in the same window log at DEBUG.
+    Without this, an expired token produces one WARNING per PR review
+    indefinitely (audit observed 201 WARNs over 30 days).
     """
-    logger.warning(f"Quota check fail-open: {reason}")
+    if auth_drift and _auth_drift_marker_fresh():
+        logger.debug(f"Quota check fail-open: {reason}")
+    else:
+        suffix = (
+            " — run `claude auth login --method browser` to refresh"
+            if auth_drift else ""
+        )
+        logger.warning(f"Quota check fail-open: {reason}{suffix}")
     if auth_drift:
         _maybe_alert_auth_drift(reason)
     return {
@@ -141,6 +154,21 @@ _AUTH_DRIFT_ALERT_COOLDOWN_S = 24 * 60 * 60  # once per day
 
 def _auth_drift_marker_path() -> Path:
     return state_dir() / "quota-auth-drift-alerted.txt"
+
+
+def _auth_drift_marker_fresh() -> bool:
+    """True if the auth-drift marker was written within the alert cooldown.
+
+    Used by ``_fail_open`` to gate the WARNING-vs-DEBUG decision so an
+    operator with an expired token doesn't see one WARNING per PR
+    review. File-based so the gate survives process restarts.
+    """
+    marker = _auth_drift_marker_path()
+    try:
+        last = float(marker.read_text().strip() or "0")
+    except (OSError, ValueError):
+        return False
+    return (datetime.now(timezone.utc).timestamp() - last) < _AUTH_DRIFT_ALERT_COOLDOWN_S
 
 
 def _maybe_alert_auth_drift(reason: str) -> None:

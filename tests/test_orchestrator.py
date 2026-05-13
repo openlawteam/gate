@@ -374,6 +374,55 @@ class TestSaveStageResult:
         orchestrator._save_stage_result("triage", result)
         assert (tmp_path / "triage.json").exists()
 
+    # ── Misleading-message split (audit P2.2b) ───────────────
+
+    def test_log_message_says_cancelled_when_cancel_set(
+        self, orchestrator, tmp_path, caplog
+    ):
+        """Cancel-set branch logs ``review cancelled``."""
+        import logging
+
+        from gate.schemas import StageResult
+
+        orchestrator.workspace = tmp_path
+        orchestrator._cancelled.set()
+        result = StageResult(stage="triage", success=True, data={"ok": True})
+
+        with caplog.at_level(logging.INFO, logger="gate.orchestrator"):
+            orchestrator._save_stage_result("triage", result)
+
+        skip_msgs = [
+            r.message for r in caplog.records
+            if "Skipping" in r.message and "triage.json" in r.message
+        ]
+        assert any("review cancelled" in m for m in skip_msgs)
+
+    def test_log_message_says_workspace_gone_when_only_workspace_missing(
+        self, orchestrator, tmp_path, caplog
+    ):
+        """Workspace-missing branch logs ``workspace gone`` — the
+        misleading ``review cancelled`` message is what made the May 9
+        2-hour tails on PR #326/#330 look like a cancellation bug when
+        the real cause was workspace teardown.
+        """
+        import logging
+
+        from gate.schemas import StageResult
+
+        # Workspace path that doesn't exist; cancel flag stays UNSET.
+        orchestrator.workspace = tmp_path / "ghost"
+        result = StageResult(stage="triage", success=True, data={"ok": True})
+
+        with caplog.at_level(logging.INFO, logger="gate.orchestrator"):
+            orchestrator._save_stage_result("triage", result)
+
+        skip_msgs = [
+            r.message for r in caplog.records
+            if "Skipping" in r.message and "triage.json" in r.message
+        ]
+        assert any("workspace gone" in m for m in skip_msgs)
+        assert not any("review cancelled" in m for m in skip_msgs)
+
 
 # ── Gate 1: Labels ───────────────────────────────────────────
 

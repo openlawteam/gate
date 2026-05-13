@@ -1014,7 +1014,9 @@ class FixPipeline:
     def run(self) -> FixResult:
         """Execute the fix pipeline."""
         if self._cancelled.is_set():
-            return FixResult(success=False, summary="Cancelled before start")
+            return FixResult(
+                success=False, skipped=True, summary="Cancelled before start"
+            )
 
         self._fix_start_monotonic = time.monotonic()
         self._start_watchdog()
@@ -1046,15 +1048,21 @@ class FixPipeline:
         )
         finding_count = len(actionable)
 
-        # Check fix attempt limits
+        # Check fix attempt limits — cooldown / soft / lifetime caps
+        # are policy decisions, not failures, so the result is marked
+        # ``skipped`` so reviews.jsonl can distinguish "we chose not to
+        # try" from "we tried and failed". ``log_fix_result`` maps that
+        # to ``decision: "fix_skipped"`` (audit P3.1, May 13).
         allowed, reason = state.check_fix_limits(self.pr_number, self.config, repo=self.repo)
         if not allowed:
             github.comment_pr(
                 self.repo,
                 self.pr_number,
-                f"**Gate Auto-Fix: Attempt limit reached** — {reason}",
+                f"**Gate Auto-Fix: skipped** — {reason}",
             )
-            return FixResult(success=False, reason=reason, summary=reason)
+            return FixResult(
+                success=False, skipped=True, reason=reason, summary=reason
+            )
 
         triage = self._read_json("triage.json") or {}
         risk_level = triage.get("risk_level", "medium")
@@ -1140,7 +1148,9 @@ class FixPipeline:
 
             for iteration in range(1, MAX_ITERATIONS + 1):
                 if self._cancelled.is_set():
-                    return FixResult(success=False, summary="Cancelled")
+                    return FixResult(
+                        success=False, skipped=True, summary="Cancelled"
+                    )
 
                 write_live_log(
                     self.pr_number,
@@ -1290,7 +1300,12 @@ class FixPipeline:
 
         except FileNotFoundError as e:
             logger.warning(f"Fix pipeline aborted (workspace deleted): {e}")
-            return FixResult(success=False, summary="Workspace deleted (cancelled)")
+            # Worktree teardown is the cancellation cascade — not a
+            # real failure. Mark skipped so reviews.jsonl distinguishes
+            # this from iteration-exhausted / crash failures.
+            return FixResult(
+                success=False, skipped=True, summary="Workspace deleted (cancelled)"
+            )
         except Exception as e:
             logger.exception(f"Fix pipeline failed for PR #{self.pr_number}")
             notify.fix_failed(self.pr_number, str(e), 0, self.repo)
@@ -1607,10 +1622,15 @@ class FixPipeline:
 
         result = run_with_retry(
             lambda: StructuredRunner().run(
-                "fix-rereview", assembled, self.workspace, self.config
+                "fix-rereview",
+                assembled,
+                self.workspace,
+                self.config,
+                cancelled=self._cancelled,
             ),
             "fix-rereview",
             self.config,
+            cancelled=self._cancelled,
         )
 
         # Write result

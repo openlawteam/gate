@@ -319,6 +319,13 @@ class FixResult:
     sub_scope_empty: int = 0
     wall_clock_seconds: int = 0
     runaway_guard_hit: bool = False
+    # True when the fix pipeline intentionally short-circuited without
+    # attempting any real work — cancellation (supersede / operator
+    # cancel / workspace teardown) or policy block (cooldown, soft /
+    # lifetime limit). Loggers and check-run emitters treat these as
+    # ``fix_skipped`` rather than ``fix_failed`` so reviews.jsonl
+    # success-rate is not distorted by non-failures.
+    skipped: bool = False
     # Senior-authored commit message telemetry. ``"senior"`` when Gate
     # accepted the hopper-mode ``final_commit_message``, ``"synth"`` when
     # validation rejected it and Gate's template was used instead. Empty

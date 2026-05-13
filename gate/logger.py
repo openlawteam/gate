@@ -162,13 +162,23 @@ def log_fix_result(
 ) -> None:
     """Append a fix result entry to reviews.jsonl.
 
-    ``status`` may be one of ``"succeeded"``, ``"failed"``, or ``"no_op"``.
-    When not provided it is derived from ``fix_success`` (legacy callers
-    that have not been updated yet). ``no_op`` lets log consumers
-    distinguish "the fix pipeline intentionally did nothing" (e.g. a
-    graceful no-op on an approve_with_notes PR with no mechanical work)
-    from "the fix pipeline landed commits" and from "the fix pipeline
-    failed" (audit A10).
+    ``status`` may be one of ``"succeeded"``, ``"failed"``, ``"no_op"``,
+    or ``"skipped"``. When not provided it is derived from
+    ``fix_success`` (legacy callers that have not been updated yet).
+
+    The four statuses let log consumers distinguish:
+
+    - ``no_op`` — the pipeline intentionally did nothing (e.g. graceful
+      no-op on an approve_with_notes PR with no mechanical work)
+    - ``succeeded`` — the pipeline landed commits
+    - ``failed`` — the pipeline attempted real work and could not
+      produce a valid diff (iteration exhaustion, crash)
+    - ``skipped`` — the pipeline short-circuited before attempting any
+      work because of cancellation (supersede / operator cancel /
+      workspace teardown) or policy (cooldown, soft / lifetime limit).
+      ``fix_skipped`` is excluded from the success-rate denominator in
+      ``gate.reports`` the same way ``fix_no_op`` is, since neither
+      represents an actual fix attempt with an outcome.
 
     Hopper-mode kwargs (``pipeline_mode``, ``sub_scope_*``,
     ``wall_clock_seconds``, ``runaway_guard_hit``, ``fixed_count``,
@@ -177,12 +187,13 @@ def log_fix_result(
     """
     if status is None:
         status = "succeeded" if fix_success else "failed"
-    if status == "no_op":
-        decision = "fix_no_op"
-    elif status == "succeeded":
-        decision = "fix_succeeded"
-    else:
-        decision = "fix_failed"
+    decision_map = {
+        "succeeded": "fix_succeeded",
+        "no_op": "fix_no_op",
+        "skipped": "fix_skipped",
+        "failed": "fix_failed",
+    }
+    decision = decision_map.get(status, "fix_failed")
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "repo": repo,

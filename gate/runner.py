@@ -512,8 +512,22 @@ class StructuredRunner:
         prompt_text: str,
         workspace: Path,
         config: dict,
+        cancelled: threading.Event | None = None,
     ) -> StageResult:
-        """Run Claude with --print and capture structured JSON output."""
+        """Run Claude with --print and capture structured JSON output.
+
+        When ``cancelled`` is provided, a watchdog thread polls the event
+        and terminates the Claude subprocess if cancellation is requested
+        mid-flight. Without this, a structured stage that took up to
+        ``timeouts.structured_stage_s`` (600s in production) seconds to
+        complete would block cancellation that long. With ``cancelled``
+        the worst-case cancel latency is the watchdog poll interval
+        (~0.5s) plus the subprocess teardown grace period.
+
+        Back-compat: callers passing ``cancelled=None`` (the default) get
+        the legacy blocking behavior — no watchdog thread, no
+        ``cancelled=True`` on the result.
+        """
         cmd = ["claude", "--dangerously-skip-permissions", "--print"]
 
         model_key = stage.replace("-", "_")
@@ -545,36 +559,15 @@ class StructuredRunner:
         timeout = config.get("timeouts", {}).get("structured_stage_s", 120)
 
         try:
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
-                input=prompt_text,
-                capture_output=True,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 env=env,
                 cwd=str(workspace),
-                timeout=timeout,
             )
-
-            if proc.returncode != 0:
-                stderr = proc.stderr or ""
-                if _is_rate_limited(stderr):
-                    return StageResult(
-                        stage=stage, success=False, data={}, is_rate_limited=True
-                    )
-                if _is_transient(stderr):
-                    return StageResult(
-                        stage=stage, success=False, data={}, is_transient=True
-                    )
-                return StageResult.fallback(stage)
-
-            # Parse structured output from stdout
-            result = self._parse_output(proc.stdout, stage)
-            if not result:
-                return StageResult.fallback(stage)
-            return StageResult(stage=stage, success=True, data=result)
-
-        except subprocess.TimeoutExpired:
-            return StageResult.fallback(stage)
         except FileNotFoundError:
             return StageResult(
                 stage=stage,
@@ -582,6 +575,68 @@ class StructuredRunner:
                 data=build_fallback(stage),
                 error="claude command not found",
             )
+
+        # Watchdog thread: terminate the subprocess if cancel arrives
+        # mid-flight. Only spawned when ``cancelled`` is provided so
+        # legacy call sites (no event) keep their cheaper code path.
+        stop_watchdog = threading.Event()
+
+        def _watch() -> None:
+            while not stop_watchdog.wait(0.5):
+                if (
+                    cancelled is not None
+                    and cancelled.is_set()
+                    and proc.poll() is None
+                ):
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    return
+
+        watchdog: threading.Thread | None = None
+        if cancelled is not None:
+            watchdog = threading.Thread(
+                target=_watch, name=f"struct-watch-{stage}", daemon=True
+            )
+            watchdog.start()
+
+        try:
+            try:
+                stdout, stderr = proc.communicate(input=prompt_text, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                stdout, stderr = proc.communicate()
+                return StageResult.fallback(stage)
+        finally:
+            stop_watchdog.set()
+            if watchdog is not None:
+                watchdog.join(timeout=1.0)
+
+        # If cancellation set the watchdog to terminate the process, the
+        # return code will be non-zero with truncated output. Distinguish
+        # this from a real failure so callers don't retry.
+        if cancelled is not None and cancelled.is_set():
+            return StageResult(stage=stage, success=False, data={}, cancelled=True)
+
+        if proc.returncode != 0:
+            stderr_text = stderr or ""
+            if _is_rate_limited(stderr_text):
+                return StageResult(
+                    stage=stage, success=False, data={}, is_rate_limited=True
+                )
+            if _is_transient(stderr_text):
+                return StageResult(
+                    stage=stage, success=False, data={}, is_transient=True
+                )
+            return StageResult.fallback(stage)
+
+        # Parse structured output from stdout
+        result = self._parse_output(stdout, stage)
+        if not result:
+            return StageResult.fallback(stage)
+        return StageResult(stage=stage, success=True, data=result)
 
     def _parse_output(self, stdout: str, stage: str) -> dict | None:
         """Parse Claude's structured output.
@@ -611,6 +666,7 @@ def run_with_retry(
     stage: str,
     config: dict,
     max_retries: int | None = None,
+    cancelled: threading.Event | None = None,
 ) -> StageResult:
     """Retry a stage with exponential backoff on rate limits/transient errors.
 
@@ -621,13 +677,35 @@ def run_with_retry(
         stage: Stage name for fallback generation.
         config: Config dict with retry settings.
         max_retries: Override max retries (defaults to config value).
+        cancelled: Optional threading.Event. When provided, the retry
+            loop short-circuits between attempts and the back-off
+            sleeps wake immediately on ``set()``, so a supersede that
+            arrives during the exponential back-off doesn't burn the
+            full sleep (worst case today is ~5 min when stacked across
+            attempts). Back-compat: ``cancelled=None`` preserves the
+            legacy blocking ``time.sleep`` behavior exactly.
     """
     retry_config = config.get("retry", {})
     max_retries = max_retries or retry_config.get("max_retries", 4)
     base_delay = retry_config.get("base_delay_s", 60)
     transient_delay = retry_config.get("transient_base_delay_s", 10)
 
+    def _sleep_or_cancel(delay: float) -> bool:
+        """Sleep for ``delay`` seconds, returning True if cancelled.
+
+        Uses ``Event.wait(delay)`` when a cancellation event is wired in
+        so the sleep can be interrupted; falls back to ``time.sleep``
+        otherwise so legacy callers see byte-identical behavior.
+        """
+        if cancelled is not None:
+            return cancelled.wait(delay)
+        time.sleep(delay)
+        return False
+
     for attempt in range(1, max_retries + 1):
+        if cancelled is not None and cancelled.is_set():
+            return StageResult(stage=stage, success=False, cancelled=True)
+
         result = run_fn()
 
         if result.success:
@@ -642,7 +720,8 @@ def run_with_retry(
                 f"[{stage}] Rate limited, attempt {attempt}/{max_retries}, "
                 f"waiting {delay:.0f}s"
             )
-            time.sleep(delay)
+            if _sleep_or_cancel(delay):
+                return StageResult(stage=stage, success=False, cancelled=True)
             continue
 
         if result.is_transient and attempt < max_retries:
@@ -651,7 +730,8 @@ def run_with_retry(
                 f"[{stage}] Transient error, attempt {attempt}/{max_retries}, "
                 f"waiting {delay:.0f}s"
             )
-            time.sleep(delay)
+            if _sleep_or_cancel(delay):
+                return StageResult(stage=stage, success=False, cancelled=True)
             continue
 
         # Non-retryable error

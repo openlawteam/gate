@@ -463,6 +463,23 @@ def _build_comment(verdict: dict, build: dict | None) -> str:
     return md
 
 
+def _is_own_pr(pr_author: str, config: dict | None) -> bool:
+    """True when the PR was opened by the configured bot account.
+
+    Used by ``post_review`` / ``approve_pr`` to short-circuit the
+    ``gh pr review`` round-trip that GitHub rejects with
+    ``GraphQL: Review Can not approve / request changes on your own
+    pull request``. The existing stderr-fallback (parse the error,
+    re-post as a comment) still acts as belt-and-suspenders for the
+    case where ``bot_account`` is misconfigured or ``pr_author`` is
+    empty (e.g. health.py orphan-cleanup paths).
+    """
+    if not pr_author or not config:
+        return False
+    bot = (config.get("repo") or {}).get("bot_account") or ""
+    return bool(bot) and pr_author.lower() == bot.lower()
+
+
 def post_review(
     repo: str,
     pr_number: int,
@@ -470,6 +487,7 @@ def post_review(
     build: dict | None,
     sha: str,
     config: dict | None = None,
+    pr_author: str = "",
 ) -> None:
     """Post a review to the PR. Always enforcement mode.
 
@@ -478,12 +496,29 @@ def post_review(
     Also upserts a sticky human-readable summary comment (separate from
     the GitHub review object) so the team always has one canonical
     place to read Gate's verdict for this PR.
+
+    ``pr_author`` (when supplied) plus ``config["repo"]["bot_account"]``
+    let us detect bot-authored PRs up front and route directly to
+    ``comment_pr`` instead of making the ``gh pr review`` call that
+    GitHub rejects for self-reviews. The legacy stderr fallback is
+    preserved for the misconfigured / unknown-author case.
     """
     comment = _build_comment(verdict, build)
     decision = verdict.get("decision", "approve")
     findings = verdict.get("findings", [])
 
-    if decision in ("approve", "approve_with_notes"):
+    own_pr = _is_own_pr(pr_author, config)
+
+    if own_pr:
+        # Bot opened this PR — GitHub forbids self-reviews. Post the
+        # verdict as a comment instead of trying (and failing) the
+        # ``gh pr review`` call. No WARNING, no wasted round-trip, no
+        # race with the sticky-comment update.
+        comment_pr(repo, pr_number, comment)
+        logger.info(
+            f"PR #{pr_number}: bot-authored PR, posted review as comment ({decision})"
+        )
+    elif decision in ("approve", "approve_with_notes"):
         try:
             _gh(["pr", "review", str(pr_number), "--repo", repo, "--approve", "--body", comment])
             logger.info(f"PR #{pr_number} approved ({decision})")
@@ -509,6 +544,11 @@ def post_review(
             else:
                 raise
 
+    # Escalation runs for any non-approve verdict regardless of who
+    # opened the PR — humans still need to be paged when there's a
+    # critical finding or low-confidence verdict, and the label /
+    # reviewer assignment paths work the same on bot-authored PRs.
+    if decision not in ("approve", "approve_with_notes"):
         has_critical = any(
             f.get("severity") == "critical" and f.get("introduced_by_pr") is not False
             for f in findings
@@ -631,8 +671,28 @@ def complete_check_run(
 # ── Simple PR Operations ────────────────────────────────────
 
 
-def approve_pr(repo: str, pr_number: int, body: str) -> None:
-    """Approve a PR, falling back to a comment if we own the PR."""
+def approve_pr(
+    repo: str,
+    pr_number: int,
+    body: str,
+    pr_author: str = "",
+    config: dict | None = None,
+) -> None:
+    """Approve a PR, falling back to a comment if we own the PR.
+
+    ``pr_author`` + ``config["repo"]["bot_account"]`` let us detect
+    bot-authored PRs and route directly to ``comment_pr`` without
+    incurring the failing ``gh pr review --approve`` round-trip. The
+    legacy stderr fallback below is retained as belt-and-suspenders
+    for the case where one or both args are unavailable (e.g.
+    health.py orphan-cleanup paths that don't have a config in hand).
+    """
+    if _is_own_pr(pr_author, config):
+        comment_pr(repo, pr_number, body)
+        logger.info(
+            f"PR #{pr_number}: bot-authored PR, posted approval as comment"
+        )
+        return
     try:
         _gh(["pr", "review", str(pr_number), "--repo", repo, "--approve", "--body", body])
     except subprocess.CalledProcessError as e:

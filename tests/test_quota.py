@@ -1,8 +1,11 @@
 """Tests for gate.quota module."""
 
+import logging
+import time
 from unittest.mock import patch
 
 from gate.quota import (
+    _AUTH_DRIFT_ALERT_COOLDOWN_S,
     _fail_open,
     _read_cache,
     _write_cache,
@@ -16,6 +19,107 @@ class TestFailOpen:
         result = _fail_open("test reason")
         assert result["quota_ok"] is True
         assert "fail-open" in result["reason"]
+
+    # ── Auth-drift 401 noise gating (audit P1.2) ─────────────
+
+    def test_auth_drift_first_401_logs_warning_with_reauth_hint(
+        self, tmp_path, caplog
+    ):
+        """First 401 in a 24h window logs at WARNING with re-auth hint."""
+        marker = tmp_path / "quota-auth-drift-alerted.txt"
+        with (
+            patch("gate.quota._auth_drift_marker_path", lambda: marker),
+            # Skip the actual notify so caplog only captures our log.
+            patch("gate.quota._maybe_alert_auth_drift"),
+            caplog.at_level(logging.WARNING, logger="gate.quota"),
+        ):
+            result = _fail_open("HTTP 401 from usage API", auth_drift=True)
+
+        assert result["auth_drift"] is True
+        warnings = [
+            r for r in caplog.records
+            if r.levelname == "WARNING" and "fail-open" in r.message
+        ]
+        assert len(warnings) == 1
+        assert "claude auth login" in warnings[0].message
+
+    def test_auth_drift_repeat_401_within_cooldown_logs_debug(
+        self, tmp_path, caplog
+    ):
+        """Second+ 401 within 24h logs at DEBUG, not WARNING.
+
+        Prevents the 200+ identical WARNINGs observed in production
+        (audit, May 13 2026: 201 fail-open lines in 30 days).
+        """
+        marker = tmp_path / "quota-auth-drift-alerted.txt"
+        # Pretend we already alerted 5 minutes ago.
+        marker.write_text(str(time.time() - 300))
+
+        with (
+            patch("gate.quota._auth_drift_marker_path", lambda: marker),
+            patch("gate.quota._maybe_alert_auth_drift"),
+            caplog.at_level(logging.DEBUG, logger="gate.quota"),
+        ):
+            _fail_open("HTTP 401 from usage API", auth_drift=True)
+
+        # No WARNING for the fail-open line; the message landed at DEBUG.
+        warnings = [
+            r for r in caplog.records
+            if r.levelname == "WARNING" and "fail-open" in r.message
+        ]
+        assert warnings == []
+        debugs = [
+            r for r in caplog.records
+            if r.levelname == "DEBUG" and "fail-open" in r.message
+        ]
+        assert len(debugs) == 1
+
+    def test_auth_drift_after_marker_expires_logs_warning_again(
+        self, tmp_path, caplog
+    ):
+        """When the marker is older than the 24h cooldown, the next 401
+        is WARNING again. Ensures the operator still gets a daily ping.
+        """
+        marker = tmp_path / "quota-auth-drift-alerted.txt"
+        # Marker is stale (older than the cooldown).
+        marker.write_text(str(time.time() - _AUTH_DRIFT_ALERT_COOLDOWN_S - 60))
+
+        with (
+            patch("gate.quota._auth_drift_marker_path", lambda: marker),
+            patch("gate.quota._maybe_alert_auth_drift"),
+            caplog.at_level(logging.WARNING, logger="gate.quota"),
+        ):
+            _fail_open("HTTP 401 from usage API", auth_drift=True)
+
+        warnings = [
+            r for r in caplog.records
+            if r.levelname == "WARNING" and "fail-open" in r.message
+        ]
+        assert len(warnings) == 1
+
+    def test_non_auth_failure_always_warns_regardless_of_marker(
+        self, tmp_path, caplog
+    ):
+        """The marker only gates auth-drift fail-opens. Non-auth
+        failures (network errors, JSON parse errors, etc.) should still
+        log at WARNING every time so the operator can see them.
+        """
+        marker = tmp_path / "quota-auth-drift-alerted.txt"
+        marker.write_text(str(time.time()))
+
+        with (
+            patch("gate.quota._auth_drift_marker_path", lambda: marker),
+            caplog.at_level(logging.WARNING, logger="gate.quota"),
+        ):
+            _fail_open("network error", auth_drift=False)
+
+        warnings = [
+            r for r in caplog.records
+            if r.levelname == "WARNING" and "fail-open" in r.message
+        ]
+        assert len(warnings) == 1
+        # No re-auth hint on non-auth failures.
+        assert "claude auth login" not in warnings[0].message
 
 
 class TestCache:

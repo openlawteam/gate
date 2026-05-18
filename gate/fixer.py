@@ -26,7 +26,7 @@ __all__ = ["compute_finding_id"]
 
 logger = logging.getLogger(__name__)
 
-MAX_ITERATIONS = 2
+MAX_ITERATIONS = 3
 FIX_SESSION_MAX_TURNS = 300
 RESUME_MAX_TURNS = 100
 
@@ -246,6 +246,8 @@ def build_verify(
     if not typecheck_cmds and not lint_cmds and not test_cmds:
         return {
             "pass": True,
+            "strict_pass": True,
+            "build_result": None,
             "typecheck_errors": 0,
             "lint_errors": 0,
             "test_failures": 0,
@@ -293,7 +295,8 @@ def build_verify(
     fix_build_path = workspace / "fix-build.json"
     fix_build_path.write_text(json.dumps(build_result, indent=2))
 
-    passed = build_result.get("overall_pass", False)
+    strict_pass = build_result.get("overall_pass", False)
+    passed = strict_pass
 
     if not passed and original_build:
         compared = builder.compare_builds(original_build, build_result)
@@ -303,12 +306,202 @@ def build_verify(
 
     return {
         "pass": passed,
+        "strict_pass": strict_pass,
+        "build_result": build_result,
         "typecheck_errors": build_result.get("typecheck", {}).get("error_count", 0),
         "lint_errors": build_result.get("lint", {}).get("error_count", 0),
         "test_failures": build_result.get("tests", {}).get("failed", 0),
         "typecheck_log": tc_out[:5000],
         "lint_log": lint_out[:5000],
         "typecheck_tool": typecheck_tool,
+    }
+
+
+# Project types whose test parser cannot produce a reliable per-test
+# failed-count delta (see gate.builder._parse_generic_test, which returns
+# 0 or 1). Used by _classify_pre_push to fall back to the safer-side
+# "regression" classification rather than mis-attributing failures to
+# pre-existing baseline.
+_GENERIC_TEST_PROJECT_TYPES: frozenset[str] = frozenset({
+    "go", "rust", "java", "ruby", "csharp", "kotlin", "swift", "none",
+})
+
+
+def _classify_pre_push(
+    after_failed: int,
+    baseline_failed: int,
+    project_type: str,
+    has_parse_failure: bool,
+    has_original_build: bool,
+) -> str:
+    """Return ``"regression"`` or ``"pre_existing"`` for a failing build.
+
+    Uncertainty (missing baseline, parse failure, project type whose test
+    parser is exit-code-only) collapses to ``"regression"`` so Codex
+    still gets a chance to attempt a fix. Worst case: one extra
+    iteration is consumed.
+    """
+    if not has_original_build:
+        return "regression"
+    if has_parse_failure:
+        return "regression"
+    if project_type in _GENERIC_TEST_PROJECT_TYPES:
+        return "regression"
+    if after_failed > baseline_failed:
+        return "regression"
+    return "pre_existing"
+
+
+def pre_push_verify(
+    workspace: Path,
+    last_build_verify: dict,
+    original_build: dict | None,
+    config: dict | None,
+) -> dict:
+    """Strict verification before ``commit_and_push``.
+
+    Mirrors what a client-side pre-push hook (e.g. ``.husky/pre-push``)
+    will face at the remote — strict pass/fail with no "pre-existing
+    failures accepted" tolerance.
+
+    Default path: reuses the test result already computed in
+    :func:`build_verify` via its ``strict_pass`` field, with zero
+    subprocess cost on the happy path. When ``pre_push_verify_cmds``
+    is set in repo config, runs those commands explicitly (used when
+    the pre-push hook does more than test_cmds — e.g. contract drift
+    checks).
+
+    Returns:
+        {
+            "pass": bool,                 # True = OK to push
+            "kind": "pass" | "regression" | "pre_existing" | "disabled",
+            "test_failures": int,         # post-fix failed count
+            "baseline_failures": int,     # pre-fix failed count, or -1 if unknown
+            "ran_commands": bool,         # False = reused build_verify
+            "logs": str,                  # 2000-char tail when commands ran
+            "failed_cmd": str,            # which pre_push_verify_cmd tripped
+        }
+    """
+    from gate import profiles
+    from gate.config import get_pre_push_config
+
+    pp_cfg = get_pre_push_config(config or {})
+
+    if pp_cfg["disable"] or not pp_cfg["strict"]:
+        return {
+            "pass": True,
+            "kind": "disabled",
+            "test_failures": 0,
+            "baseline_failures": -1,
+            "ran_commands": False,
+            "logs": "",
+            "failed_cmd": "",
+        }
+
+    repo_cfg = (config or {}).get("repo", {})
+    profile = profiles.resolve_profile(repo_cfg, workspace)
+    project_type = profile.get("project_type", "none")
+
+    baseline_failed = (
+        (original_build or {}).get("tests", {}).get("failed", 0)
+        if original_build is not None else -1
+    )
+
+    # --- Default path: reuse cached build_verify result ---
+    if not pp_cfg["cmds"]:
+        if last_build_verify.get("strict_pass", False):
+            return {
+                "pass": True,
+                "kind": "pass",
+                "test_failures": last_build_verify.get("test_failures", 0),
+                "baseline_failures": baseline_failed,
+                "ran_commands": False,
+                "logs": "",
+                "failed_cmd": "",
+            }
+        raw = last_build_verify.get("build_result") or {}
+        test_block = raw.get("tests", {}) if isinstance(raw, dict) else {}
+        after_failed = last_build_verify.get("test_failures", 0)
+        parse_failure = bool(test_block.get("parse_failure", False))
+        kind = _classify_pre_push(
+            after_failed=after_failed,
+            baseline_failed=baseline_failed if baseline_failed >= 0 else 0,
+            project_type=project_type,
+            has_parse_failure=parse_failure,
+            has_original_build=original_build is not None,
+        )
+        # Surface a tail of the raw test output so the resume prompt
+        # has enough context. Falls back to the typecheck log when the
+        # strict failure was typecheck/lint rather than tests.
+        logs = (test_block.get("raw_output_tail") or "")[-2000:]
+        if not logs:
+            logs = (last_build_verify.get("typecheck_log") or "")[-2000:]
+        return {
+            "pass": False,
+            "kind": kind,
+            "test_failures": after_failed,
+            "baseline_failures": baseline_failed,
+            "ran_commands": False,
+            "logs": logs,
+            "failed_cmd": "",
+        }
+
+    # --- Explicit cmds path: run them, parse, classify ---
+    cmds = pp_cfg["cmds"]
+    timeout = pp_cfg["timeout_s"]
+    cwd = str(workspace)
+    logger.info(f"pre_push_verify: running {len(cmds)} command(s)")
+    overall_exit = 0
+    combined_output: list[str] = []
+    failed_cmd = ""
+    for cmd in cmds:
+        result = builder.run_command_group([cmd], cwd, timeout, "pre-push")
+        out = (result.stdout or "") + (result.stderr or "")
+        combined_output.append(out)
+        if result.returncode != 0 and overall_exit == 0:
+            overall_exit = result.returncode
+            failed_cmd = cmd
+            # Short-circuit on first failure so we surface the precise
+            # command that tripped rather than a wall of mixed output.
+            break
+    log_text = "\n".join(combined_output)
+
+    if overall_exit == 0:
+        return {
+            "pass": True,
+            "kind": "pass",
+            "test_failures": 0,
+            "baseline_failures": baseline_failed,
+            "ran_commands": True,
+            "logs": log_text[-2000:],
+            "failed_cmd": "",
+        }
+
+    # Use the project_type's test parser to extract a failed count.
+    # The parser may report 1 for non-Node/Python types — that's OK,
+    # _classify_pre_push handles the uncertainty by routing to regression.
+    if project_type == "node":
+        parsed = builder._parse_test(log_text, overall_exit)
+    elif project_type == "python":
+        parsed = builder._parse_pytest(log_text, overall_exit)
+    else:
+        parsed = builder._parse_generic_test(log_text, overall_exit)
+    after_failed = int(parsed.get("failed", 1))
+    kind = _classify_pre_push(
+        after_failed=after_failed,
+        baseline_failed=baseline_failed if baseline_failed >= 0 else 0,
+        project_type=project_type,
+        has_parse_failure=False,
+        has_original_build=original_build is not None,
+    )
+    return {
+        "pass": False,
+        "kind": kind,
+        "test_failures": after_failed,
+        "baseline_failures": baseline_failed,
+        "ran_commands": True,
+        "logs": log_text[-2000:],
+        "failed_cmd": failed_cmd,
     }
 
 
@@ -507,6 +700,51 @@ def _build_build_error_prompt(build_result: dict) -> str:
         parts.append("```")
         parts.append("")
     parts.append("Use `gate-code implement` to fix these errors. Then run verification again.")
+    return "\n".join(parts)
+
+
+def _build_pre_push_error_prompt(pp_result: dict) -> str:
+    """Build the resume prompt for pre-push test regressions.
+
+    Called when the strict pre-push gate trips after re-review has
+    already passed. The fix passed Gate's review but introduced (or
+    failed to fix) test failures that the remote pre-push hook will
+    reject. The session is resumed with the failing-test context so
+    Codex can target the regressions specifically without disturbing
+    the changes that already passed review.
+    """
+    after = pp_result.get("test_failures", 0)
+    baseline = pp_result.get("baseline_failures", -1)
+    failed_cmd = pp_result.get("failed_cmd", "")
+    logs = pp_result.get("logs", "")
+    parts = [
+        "# Pre-Push Verification Failed",
+        "",
+        "Your fix passed re-review, but the strict pre-push gate detected",
+        "test regressions. The remote pre-push hook will reject this push",
+        "unless these failures are addressed.",
+        "",
+    ]
+    if baseline >= 0:
+        parts.append(
+            f"Baseline (before fix): {baseline} test failure(s)  →  "
+            f"After fix: {after} test failure(s)"
+        )
+    else:
+        parts.append(f"Test failures after fix: {after}")
+    parts.append("")
+    if failed_cmd:
+        parts.append(f"Failing command: `{failed_cmd}`")
+        parts.append("")
+    parts.append("## Test Output (last 2000 chars)")
+    parts.append("```")
+    parts.append(logs or "(no output captured)")
+    parts.append("```")
+    parts.append("")
+    parts.append("Fix ONLY the test regressions introduced by your changes.")
+    parts.append("Do not touch pre-existing failures or unrelated tests.")
+    parts.append("")
+    parts.append("Use `gate-code implement` to make the targeted fix.")
     return "\n".join(parts)
 
 
@@ -1146,7 +1384,10 @@ class FixPipeline:
             ):
                 return self._run_polish_path(tagged_findings, finding_count)
 
-            for iteration in range(1, MAX_ITERATIONS + 1):
+            from gate.config import get_fix_max_iterations
+            max_iter = get_fix_max_iterations(self.config)
+
+            for iteration in range(1, max_iter + 1):
                 if self._cancelled.is_set():
                     return FixResult(
                         success=False, skipped=True, summary="Cancelled"
@@ -1154,7 +1395,7 @@ class FixPipeline:
 
                 write_live_log(
                     self.pr_number,
-                    f"Fix iteration {iteration}/{MAX_ITERATIONS}",
+                    f"Fix iteration {iteration}/{max_iter}",
                     prefix="fix",
                     repo=self.repo,
                 )
@@ -1226,7 +1467,7 @@ class FixPipeline:
                     # into iter 2 with empty re-review feedback.
                     if iteration == 1 and self._is_graceful_noop_case():
                         return self._graceful_noop_result(finding_count)
-                    if iteration >= MAX_ITERATIONS:
+                    if iteration >= max_iter:
                         state.record_fix_attempt(self.pr_number, repo=self.repo)
                         return FixResult(
                             success=False,
@@ -1264,7 +1505,7 @@ class FixPipeline:
                 if not build_result["pass"]:
                     logger.info(f"Build still failing after iteration {iteration}")
                     self._revert_to_baseline()
-                    if iteration >= MAX_ITERATIONS:
+                    if iteration >= max_iter:
                         state.record_fix_attempt(self.pr_number, repo=self.repo)
                         notify.fix_failed(self.pr_number, "build failures", iteration, self.repo)
                         return FixResult(
@@ -1281,13 +1522,78 @@ class FixPipeline:
                 rereview_pass = self._run_rereview()
 
                 if rereview_pass:
-                    return self._commit_and_finish(
-                        iteration, all_fixed, last_fix_json, finding_count
+                    # Strict pre-push gate (PR #399): the legacy
+                    # ``build_verify`` path accepts pre-existing test
+                    # failures (count not worse than baseline), which
+                    # diverges from what a remote pre-push hook will
+                    # face at ``git push`` time. Catch the divergence
+                    # here so we never push something the remote will
+                    # reject 60s later.
+                    pp = pre_push_verify(
+                        self.workspace, build_result, self.build, self.config,
                     )
+                    if pp["pass"]:
+                        return self._commit_and_finish(
+                            iteration, all_fixed, last_fix_json, finding_count
+                        )
+
+                    if pp["kind"] == "pre_existing":
+                        # Pre-existing tests on baseline: Gate does NOT
+                        # auto-fix work it didn't break. Fail fast with
+                        # a clear "fix manually" message so the
+                        # operator isn't blocked on a confusing push
+                        # rejection later.
+                        return self._fail_pre_existing_tests(pp, iteration)
+
+                    # Regression introduced by Gate's fix — resume
+                    # session with the failing-test context so Codex
+                    # can repair just the regressions. Mirrors the
+                    # build_verify same-iteration retry pattern.
+                    write_live_log(
+                        self.pr_number,
+                        f"Pre-push regression: {pp['test_failures']} failure(s); resuming",
+                        prefix="fix", repo=self.repo,
+                    )
+                    self._resume_fix_session(_build_pre_push_error_prompt(pp))
+
+                    enforce_blocklist(self.workspace, config=self.config)
+                    cleanup_gate_tests(self.workspace)
+                    retry_build = build_verify(
+                        self.workspace, self.build, config=self.config,
+                    )
+                    pp2 = pre_push_verify(
+                        self.workspace, retry_build, self.build, self.config,
+                    )
+                    if pp2["pass"]:
+                        return self._commit_and_finish(
+                            iteration, all_fixed, last_fix_json, finding_count
+                        )
+                    if pp2["kind"] == "pre_existing":
+                        return self._fail_pre_existing_tests(pp2, iteration)
+
+                    # Still failing after retry — fall through to the
+                    # next iteration. Crucially we do NOT revert here:
+                    # the partial fix is review-approved code and gives
+                    # iter N+1 context to repair the remaining test
+                    # failures instead of starting from scratch.
+                    if iteration >= max_iter:
+                        state.record_fix_attempt(self.pr_number, repo=self.repo)
+                        notify.fix_failed(
+                            self.pr_number, "pre-push regression",
+                            iteration, self.repo,
+                        )
+                        return FixResult(
+                            success=False,
+                            summary=(
+                                f"Pre-push test regressions unresolved "
+                                f"after {iteration} iterations"
+                            ),
+                        )
+                    continue
 
                 logger.info(f"Re-review rejected iteration {iteration}")
                 self._revert_to_baseline()
-                if iteration >= MAX_ITERATIONS:
+                if iteration >= max_iter:
                     state.record_fix_attempt(self.pr_number, repo=self.repo)
                     notify.fix_failed(self.pr_number, "re-review rejected", iteration, self.repo)
                     return FixResult(
@@ -1801,6 +2107,49 @@ class FixPipeline:
         write_live_log(self.pr_number, summary, prefix="fix", repo=self.repo)
         state.record_fix_attempt(self.pr_number, repo=self.repo, no_op=True)
         return FixResult(success=True, pushed=False, summary=summary)
+
+    def _fail_pre_existing_tests(
+        self,
+        pp_result: dict,
+        iteration: int,
+        fixed_count: int = 0,
+        not_fixed_count: int = 0,
+    ) -> FixResult:
+        """Fail-fast path when the strict pre-push gate detects pre-existing
+        test failures on the baseline.
+
+        Mirrors :pyclass:`push_failed` semantics from
+        :meth:`_commit_and_finish`. Gate does NOT attempt to fix tests
+        it didn't break — that's user-scope work. Records the attempt
+        and notifies so the operator sees a clear "fix manually" prompt
+        instead of a confusing "push rejected" surfaced 60 seconds
+        later from the remote hook.
+        """
+        state.record_fix_attempt(self.pr_number, repo=self.repo)
+        baseline = pp_result.get("baseline_failures", 0)
+        after = pp_result.get("test_failures", baseline)
+        failed_cmd = pp_result.get("failed_cmd", "")
+        cmd_suffix = f" (failing command: {failed_cmd})" if failed_cmd else ""
+        msg = (
+            f"Fix blocked: {baseline} pre-existing test failure(s) on baseline "
+            f"(after fix: {after}){cmd_suffix}. The remote pre-push hook will "
+            f"reject this push. Fix the failing tests on the branch manually, "
+            f"then re-trigger Gate."
+        )
+        write_live_log(self.pr_number, msg, prefix="fix", repo=self.repo)
+        notify.fix_failed(
+            self.pr_number,
+            f"pre-existing test failures (baseline={baseline})",
+            iteration,
+            self.repo,
+        )
+        return FixResult(
+            success=False,
+            pushed=False,
+            summary=msg,
+            fixed_count=fixed_count,
+            not_fixed_count=not_fixed_count,
+        )
 
     def _commit_and_finish(
         self,

@@ -7,12 +7,15 @@ from unittest.mock import MagicMock, patch
 from gate.fixer import (
     FixPipeline,
     _build_build_error_prompt,
+    _build_pre_push_error_prompt,
     _build_rereview_feedback_prompt,
+    _classify_pre_push,
     _match_glob,
     build_verify,
     cleanup_artifacts,
     cleanup_gate_tests,
     enforce_blocklist,
+    pre_push_verify,
     sort_findings_by_severity,
     write_diff,
 )
@@ -1870,3 +1873,324 @@ class TestFixResultSkipped:
         from gate.schemas import FixResult
         result = FixResult(success=False, summary="something bad")
         assert result.skipped is False
+
+
+# ─────────────────────────────────────────────────────────────
+# Strict pre-push gate (PR #399)
+# ─────────────────────────────────────────────────────────────
+
+
+class TestBuildVerifyStrictPass:
+    """``build_verify`` now exposes ``strict_pass`` alongside ``pass`` so
+    callers can distinguish "really clean" from "clean after applying
+    pre-existing-failure tolerance"."""
+
+    def test_skip_path_returns_strict_pass_true(self, tmp_path):
+        """Empty-cmds path: both pass and strict_pass are True (nothing ran)."""
+        result = build_verify(tmp_path)
+        assert result["pass"] is True
+        assert result["strict_pass"] is True
+        assert result["build_result"] is None
+
+
+class TestClassifyPrePush:
+    """Classification helper distinguishes a regression we should fix
+    from a pre-existing failure we should NOT auto-fix.
+    """
+
+    def test_regression_when_count_increases(self):
+        assert _classify_pre_push(
+            after_failed=3, baseline_failed=1, project_type="node",
+            has_parse_failure=False, has_original_build=True,
+        ) == "regression"
+
+    def test_pre_existing_when_count_same(self):
+        assert _classify_pre_push(
+            after_failed=1, baseline_failed=1, project_type="node",
+            has_parse_failure=False, has_original_build=True,
+        ) == "pre_existing"
+
+    def test_pre_existing_when_count_lower(self):
+        """Gate fixed some failures but others remain — still
+        pre-existing because no new failure was introduced."""
+        assert _classify_pre_push(
+            after_failed=1, baseline_failed=3, project_type="node",
+            has_parse_failure=False, has_original_build=True,
+        ) == "pre_existing"
+
+    def test_missing_baseline_treated_as_regression(self):
+        """No ``original_build`` snapshot → can't tell pre-existing
+        from new, so default to safer side (Codex tries to fix)."""
+        assert _classify_pre_push(
+            after_failed=1, baseline_failed=0, project_type="node",
+            has_parse_failure=False, has_original_build=False,
+        ) == "regression"
+
+    def test_parse_failure_treated_as_regression(self):
+        """Parser returned 0 findings on a non-zero exit — synthetic
+        count is unreliable. Don't fail-fast; let Codex try."""
+        assert _classify_pre_push(
+            after_failed=1, baseline_failed=1, project_type="node",
+            has_parse_failure=True, has_original_build=True,
+        ) == "regression"
+
+    def test_generic_project_type_treated_as_regression(self):
+        """Go/Rust/etc. use ``_parse_generic_test`` which returns 0 or 1
+        — delta detection is meaningless. Safer side."""
+        for project_type in ("go", "rust", "java", "none"):
+            assert _classify_pre_push(
+                after_failed=1, baseline_failed=1, project_type=project_type,
+                has_parse_failure=False, has_original_build=True,
+            ) == "regression", f"{project_type} should route to regression"
+
+
+class TestPrePushVerifyDefaultPath:
+    """Default path (no ``pre_push_verify_cmds``): reuse cached
+    ``build_verify`` result without re-running."""
+
+    def test_strict_pass_short_circuits(self, tmp_path):
+        last_bv = {
+            "pass": True, "strict_pass": True, "build_result": None,
+            "test_failures": 0,
+        }
+        result = pre_push_verify(tmp_path, last_bv, None, {})
+        assert result["pass"] is True
+        assert result["kind"] == "pass"
+        assert result["ran_commands"] is False
+
+    def test_strict_fail_with_regression(self, tmp_path):
+        """Baseline had 0 failures, after-fix has 2 → regression."""
+        last_bv = {
+            "pass": True,           # tolerance accepted
+            "strict_pass": False,   # but strict says no
+            "test_failures": 2,
+            "build_result": {
+                "project_type": "node",
+                "tests": {"failed": 2, "raw_output_tail": "FAIL test"},
+            },
+        }
+        baseline = {"tests": {"failed": 0}}
+        result = pre_push_verify(
+            tmp_path, last_bv, baseline,
+            {"repo": {"project_type": "node"}},
+        )
+        assert result["pass"] is False
+        assert result["kind"] == "regression"
+        assert result["test_failures"] == 2
+        assert result["baseline_failures"] == 0
+        assert result["ran_commands"] is False
+
+    def test_strict_fail_pre_existing(self, tmp_path):
+        """Baseline had 3 failures, after-fix has 3 → pre-existing."""
+        last_bv = {
+            "pass": True, "strict_pass": False,
+            "test_failures": 3,
+            "build_result": {
+                "project_type": "node",
+                "tests": {"failed": 3, "raw_output_tail": "still failing"},
+            },
+        }
+        baseline = {"tests": {"failed": 3}}
+        result = pre_push_verify(
+            tmp_path, last_bv, baseline,
+            {"repo": {"project_type": "node"}},
+        )
+        assert result["pass"] is False
+        assert result["kind"] == "pre_existing"
+        assert result["test_failures"] == 3
+        assert result["baseline_failures"] == 3
+
+    def test_missing_baseline_routes_to_regression(self, tmp_path):
+        """``original_build=None`` should be treated as regression
+        (safer side), not pre_existing."""
+        last_bv = {
+            "pass": False, "strict_pass": False,
+            "test_failures": 1,
+            "build_result": {
+                "project_type": "node",
+                "tests": {"failed": 1, "raw_output_tail": ""},
+            },
+        }
+        result = pre_push_verify(
+            tmp_path, last_bv, None,
+            {"repo": {"project_type": "node"}},
+        )
+        assert result["kind"] == "regression"
+
+    def test_parse_failure_routes_to_regression(self, tmp_path):
+        last_bv = {
+            "pass": False, "strict_pass": False,
+            "test_failures": 1,
+            "build_result": {
+                "project_type": "node",
+                "tests": {"failed": 1, "parse_failure": True, "raw_output_tail": ""},
+            },
+        }
+        baseline = {"tests": {"failed": 1}}
+        # Would normally be pre_existing (counts match) but parse failure
+        # bumps it to regression on the safer side.
+        result = pre_push_verify(
+            tmp_path, last_bv, baseline,
+            {"repo": {"project_type": "node"}},
+        )
+        assert result["kind"] == "regression"
+
+    def test_generic_project_type_routes_to_regression(self, tmp_path):
+        """Go/Rust/etc. — counts are unreliable, treat as regression."""
+        last_bv = {
+            "pass": False, "strict_pass": False, "test_failures": 1,
+            "build_result": {
+                "project_type": "go",
+                "tests": {"failed": 1, "raw_output_tail": ""},
+            },
+        }
+        baseline = {"tests": {"failed": 1}}
+        result = pre_push_verify(
+            tmp_path, last_bv, baseline,
+            {"repo": {"project_type": "go"}},
+        )
+        assert result["kind"] == "regression"
+
+
+class TestPrePushVerifyDisabled:
+    def test_disable_flag_short_circuits(self, tmp_path):
+        """``pre_push_disable = true`` bypasses everything."""
+        # Even with a strict-fail cached result, gate should pass.
+        last_bv = {
+            "pass": False, "strict_pass": False, "test_failures": 99,
+            "build_result": {"tests": {"failed": 99}},
+        }
+        result = pre_push_verify(
+            tmp_path, last_bv, {"tests": {"failed": 0}},
+            {"repo": {"build": {"pre_push_disable": True}}},
+        )
+        assert result["pass"] is True
+        assert result["kind"] == "disabled"
+        assert result["ran_commands"] is False
+
+    def test_strict_false_short_circuits(self, tmp_path):
+        """``pre_push_strict = false`` also bypasses (legacy behavior)."""
+        last_bv = {
+            "pass": False, "strict_pass": False, "test_failures": 99,
+            "build_result": {"tests": {"failed": 99}},
+        }
+        result = pre_push_verify(
+            tmp_path, last_bv, {"tests": {"failed": 0}},
+            {"repo": {"build": {"pre_push_strict": False}}},
+        )
+        assert result["pass"] is True
+        assert result["kind"] == "disabled"
+
+
+class TestPrePushVerifyExplicitCmds:
+    """When ``pre_push_verify_cmds`` is set, commands run explicitly."""
+
+    @patch("gate.fixer.builder.run_command_group")
+    def test_runs_provided_commands_when_set(self, mock_run, tmp_path):
+        """Subprocess called for each command; happy path returns pass."""
+        mock_run.return_value = subprocess.CompletedProcess(
+            [], 0, stdout="all green", stderr="",
+        )
+        cfg = {
+            "repo": {
+                "project_type": "node",
+                "build": {
+                    "pre_push_verify_cmds": ["npm test", "npm run drift"],
+                    "pre_push_timeout_s": 120,
+                },
+            },
+        }
+        result = pre_push_verify(tmp_path, {}, None, cfg)
+        assert result["pass"] is True
+        assert result["kind"] == "pass"
+        assert result["ran_commands"] is True
+        # Each command invoked once with the configured timeout.
+        assert mock_run.call_count == 2
+        for call in mock_run.call_args_list:
+            assert call.args[2] == 120  # timeout argument
+
+    @patch("gate.fixer.builder.run_command_group")
+    def test_first_failing_command_short_circuits(self, mock_run, tmp_path):
+        """Stop on first non-zero exit; surface the precise command."""
+        mock_run.side_effect = [
+            subprocess.CompletedProcess([], 0, stdout="ok", stderr=""),
+            subprocess.CompletedProcess(
+                [], 1,
+                stdout="Tests  3 passed | 2 failed (5)",
+                stderr="",
+            ),
+        ]
+        cfg = {
+            "repo": {
+                "project_type": "node",
+                "build": {
+                    "pre_push_verify_cmds": ["npm run drift", "npm test"],
+                },
+            },
+        }
+        baseline = {"tests": {"failed": 0}}
+        result = pre_push_verify(tmp_path, {}, baseline, cfg)
+        assert result["pass"] is False
+        assert result["failed_cmd"] == "npm test"
+        assert result["kind"] == "regression"
+        assert mock_run.call_count == 2  # short-circuited on second
+
+
+class TestBuildPrePushErrorPrompt:
+    def test_includes_delta_and_logs(self):
+        prompt = _build_pre_push_error_prompt({
+            "test_failures": 2,
+            "baseline_failures": 0,
+            "failed_cmd": "npm -w apps/web run test:run",
+            "logs": "FAIL src/foo.test.ts\n  expected 1, got 2",
+        })
+        assert "Pre-Push Verification Failed" in prompt
+        assert "Baseline (before fix): 0" in prompt
+        assert "After fix: 2" in prompt
+        assert "npm -w apps/web run test:run" in prompt
+        assert "FAIL src/foo.test.ts" in prompt
+        assert "ONLY the test regressions" in prompt
+
+    def test_handles_missing_baseline(self):
+        prompt = _build_pre_push_error_prompt({
+            "test_failures": 1, "baseline_failures": -1,
+            "failed_cmd": "", "logs": "",
+        })
+        assert "Test failures after fix: 1" in prompt
+        # No baseline → don't claim a comparison
+        assert "Baseline" not in prompt
+
+
+class TestFailPreExistingTests:
+    """Pre-existing-tests fail-fast path — mirrors ``push_failed``."""
+
+    def _make_pipeline(self, sample_config, tmp_path):
+        verdict = {"decision": "approve_with_notes", "findings": []}
+        (tmp_path / "verdict.json").write_text("{}")
+        (tmp_path / "triage.json").write_text("{}")
+        return FixPipeline(
+            pr_number=399, repo="a/b", workspace=tmp_path,
+            verdict=verdict, build={}, config=sample_config,
+        )
+
+    @patch("gate.fixer.notify")
+    @patch("gate.fixer.state.record_fix_attempt")
+    def test_records_attempt_and_notifies(
+        self, mock_record, mock_notify, sample_config, tmp_path,
+    ):
+        pipe = self._make_pipeline(sample_config, tmp_path)
+        pp = {
+            "kind": "pre_existing",
+            "test_failures": 3, "baseline_failures": 3,
+            "failed_cmd": "npm test",
+        }
+        result = pipe._fail_pre_existing_tests(pp, iteration=2)
+        assert result.success is False
+        assert result.pushed is False
+        assert "pre-existing" in result.summary.lower()
+        assert "baseline" in result.summary.lower()
+        mock_record.assert_called_once()
+        mock_notify.fix_failed.assert_called_once()
+        # Notify reason carries the baseline count for easy triage.
+        reason_arg = mock_notify.fix_failed.call_args.args[1]
+        assert "baseline=3" in reason_arg

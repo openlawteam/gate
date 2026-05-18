@@ -206,3 +206,41 @@ postconditions_max_functions = 10
 #
 # Use singular *_cmd keys for one command, or plural *_cmds arrays when a
 # monorepo needs several runtimes checked in sequence.
+
+# --- Strict pre-push verification (per-repo) ---
+# After a fix passes review, Gate runs a strict pass/fail gate to mirror
+# what a client-side pre-push hook (e.g. .husky/pre-push) will face at
+# `git push` time. Without this, ``build_verify``'s "pre-existing
+# failures accepted" tolerance can let Gate push a fix that the remote
+# pre-push hook then rejects 60 seconds later (PR #399).
+#
+# Default behavior (with no config keys): the gate uses the test result
+# already computed by build_verify — zero extra subprocess cost. When
+# pre_push_verify_cmds is set, runs those commands explicitly, used to
+# cover repo-specific checks not in test_cmds (e.g. contract drift).
+#
+# IMPORTANT: pre_push_verify_cmds REPLACES test_cmds for the gate when
+# set. Include everything you want verified, including the test commands
+# themselves.
+#
+# [repos.build]
+# pre_push_strict = true       # default; flip to false to keep legacy tolerance
+# pre_push_disable = false     # default; set true to skip the gate entirely
+# pre_push_timeout_s = 600     # per-command timeout when cmds run explicitly
+# pre_push_verify_cmds = [
+#     "npm -w apps/web run test:run",
+#     "npm run contracts:check",
+# ]
+
+# --- Outer fix-loop iteration budget ---
+# Number of outer fix iterations before the pipeline gives up. Worst-case
+# spend: iter1 fixes build errors, iter2 fixes re-review feedback, iter3
+# fixes a pre-push test regression. Default 3.
+#
+# [fix_pipeline]
+# max_iterations = 3
+#
+# Per-repo override (takes precedence when [fix_pipeline].max_iterations
+# is unset):
+# [[repos]]
+# max_fix_iterations = 3

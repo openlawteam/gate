@@ -248,6 +248,72 @@ def get_fix_pipeline_max_subscope_iterations(config: dict) -> int:
     return default
 
 
+def get_fix_max_iterations(config: dict) -> int:
+    """Outer fix loop iteration budget (default 3).
+
+    Resolution order (first non-empty wins):
+      1. ``[fix_pipeline].max_iterations``
+      2. ``[repo].max_fix_iterations``
+      3. Default ``3`` — bumped from the historical 2 to absorb a third
+         iteration when the strict pre-push gate trips on a test
+         regression introduced by Gate's own fix.
+    """
+    default = 3
+    if not isinstance(config, dict):
+        return default
+    fp = config.get("fix_pipeline")
+    if isinstance(fp, dict) and fp.get("max_iterations") is not None:
+        try:
+            return int(fp["max_iterations"])
+        except (TypeError, ValueError):
+            pass
+    repo = config.get("repo", {}) or {}
+    raw = repo.get("max_fix_iterations")
+    if raw is not None:
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            pass
+    return default
+
+
+def get_pre_push_config(config: dict) -> dict:
+    """Resolve strict pre-push verification config from ``[repos.build]``.
+
+    Returns a dict with:
+
+    - ``strict`` (bool, default ``True``) — when True, Gate enforces strict
+      build verification (no "pre-existing failures accepted" tolerance)
+      right before ``commit_and_push``. Flip to False to restore the
+      pre-#399 behavior.
+    - ``disable`` (bool, default ``False``) — when True, the pre-push
+      gate is skipped entirely. Escape hatch for projects whose tests
+      are non-deterministic or remote-only.
+    - ``cmds`` (list[str], default ``[]``) — explicit replacement of
+      ``test_cmds`` for the pre-push gate. When non-empty, Gate runs
+      these commands instead of reusing the cached build_verify result.
+      Used for repos with pre-push hooks that do more than just tests
+      (e.g. contract-drift checks).
+    - ``timeout_s`` (int, default ``600``) — per-group timeout when
+      ``cmds`` are run explicitly.
+    """
+    build = ((config or {}).get("repo", {}) or {}).get("build", {}) or {}
+    strict_raw = build.get("pre_push_strict", True)
+    disable_raw = build.get("pre_push_disable", False)
+    cmds_raw = build.get("pre_push_verify_cmds", []) or []
+    timeout_raw = build.get("pre_push_timeout_s", 600)
+    try:
+        timeout = int(timeout_raw)
+    except (TypeError, ValueError):
+        timeout = 600
+    return {
+        "strict": bool(strict_raw),
+        "disable": bool(disable_raw),
+        "cmds": list(cmds_raw) if isinstance(cmds_raw, (list, tuple)) else [],
+        "timeout_s": timeout,
+    }
+
+
 def build_claude_env() -> dict[str, str]:
     """Build the sandboxed environment dict for Claude subprocesses.
 

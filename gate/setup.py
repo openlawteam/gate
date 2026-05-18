@@ -27,12 +27,13 @@ _PLACEHOLDER_REPO = "your-org/your-repo"
 
 _MODELS_DEFAULTS = {
     "triage": "sonnet",
-    "architecture": "sonnet",
+    "postconditions": "opus",
+    "architecture": "opus",
     "security": "opus",
     "logic": "opus",
-    "verdict": "sonnet",
+    "verdict": "opus",
     "fix_senior": "opus",
-    "fix_rereview": "sonnet",
+    "fix_rereview": "opus",
 }
 
 _TIMEOUTS_DEFAULTS = {

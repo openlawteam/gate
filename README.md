@@ -145,12 +145,13 @@ worktree_base = "/tmp/gate-worktrees"
 
 [models]
 triage = "sonnet"
-architecture = "sonnet"
+postconditions = "opus"
+architecture = "opus"
 security = "opus"
 logic = "opus"
-verdict = "sonnet"
+verdict = "opus"
 fix_senior = "opus"
-fix_rereview = "sonnet"
+fix_rereview = "opus"
 
 [timeouts]
 agent_stage_s = 900

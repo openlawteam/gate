@@ -301,7 +301,7 @@ class TestFormatFullConfig:
         parsed = tomllib.loads(content)
         assert parsed["models"]["triage"] == "opus"
         assert parsed["timeouts"]["agent_stage_s"] == 1800
-        assert parsed["models"]["verdict"] == "sonnet"
+        assert parsed["models"]["verdict"] == "opus"
 
     def test_single_repo_includes_multi_repo_docs(self):
         repos = [{"name": "org/repo", "clone_path": "~/repo",

@@ -92,13 +92,13 @@ project_type = "node"   # node | python | go | rust | none
 
 [models]
 triage = "sonnet"
-postconditions = "sonnet"
-architecture = "sonnet"
+postconditions = "opus"
+architecture = "opus"
 security = "opus"
 logic = "opus"
-verdict = "sonnet"
+verdict = "opus"
 fix_senior = "opus"
-fix_rereview = "sonnet"
+fix_rereview = "opus"
 
 [timeouts]
 agent_stage_s = 900

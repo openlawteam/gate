@@ -487,11 +487,23 @@ def pre_push_verify(
     else:
         parsed = builder._parse_generic_test(log_text, overall_exit)
     after_failed = int(parsed.get("failed", 1))
+    # Detect parse failure symmetrically with the default path so a
+    # crashed test runner (segfault, OOM, syntax error in setup) that
+    # exits non-zero with no parseable failure count is treated as a
+    # regression rather than mis-classified as pre_existing. The
+    # default path picks up ``parse_failure`` from ``compile_build``'s
+    # synthesized block; that block doesn't run on this code path so
+    # we synthesize the same signal here from the parser output.
+    parse_failure = (
+        overall_exit != 0
+        and int(parsed.get("failed", 0)) == 0
+        and int(parsed.get("total", 0)) == 0
+    )
     kind = _classify_pre_push(
         after_failed=after_failed,
         baseline_failed=baseline_failed if baseline_failed >= 0 else 0,
         project_type=project_type,
-        has_parse_failure=False,
+        has_parse_failure=parse_failure,
         has_original_build=original_build is not None,
     )
     return {

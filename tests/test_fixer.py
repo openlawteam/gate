@@ -2135,6 +2135,64 @@ class TestPrePushVerifyExplicitCmds:
         assert result["kind"] == "regression"
         assert mock_run.call_count == 2  # short-circuited on second
 
+    @patch("gate.fixer.builder.run_command_group")
+    def test_unparseable_crash_routes_to_regression(self, mock_run, tmp_path):
+        """Regression guard (review of PR #35): when the explicit-cmds
+        path runs a test command that crashes (segfault / OOM / setup
+        syntax error) — exits non-zero but produces no parseable
+        failure count — the parse-failure heuristic must route the
+        classification to ``regression`` rather than ``pre_existing``.
+
+        Without the heuristic, ``after.failed == 0`` and ``baseline ==
+        0`` would compare as count-not-worse and trigger fail-fast,
+        which is wrong: we genuinely don't know whether the original
+        broke or whether Gate's edit did, and the safer side is
+        regression (let Codex try once).
+        """
+        mock_run.return_value = subprocess.CompletedProcess(
+            [], 134,  # SIGSEGV-style exit
+            stdout="Segmentation fault (core dumped)\n", stderr="",
+        )
+        cfg = {
+            "repo": {
+                "project_type": "node",
+                "build": {"pre_push_verify_cmds": ["npm test"]},
+            },
+        }
+        baseline = {"tests": {"failed": 0}}
+        result = pre_push_verify(tmp_path, {}, baseline, cfg)
+        assert result["pass"] is False
+        assert result["kind"] == "regression", (
+            "Unparseable crash must be regression (safer side), not "
+            "pre_existing — see review of PR #35"
+        )
+        assert result["failed_cmd"] == "npm test"
+
+    @patch("gate.fixer.builder.run_command_group")
+    def test_explicit_cmds_pre_existing_when_counts_match(self, mock_run, tmp_path):
+        """Counterfactual to the crash test above: when the parser DOES
+        extract a count and it matches baseline, classify as
+        pre_existing. Confirms the parse-failure heuristic is precise
+        (only triggers when total + failed are both zero), not
+        over-broad.
+        """
+        mock_run.return_value = subprocess.CompletedProcess(
+            [], 1,
+            stdout="Tests  4 passed | 2 failed (6)",
+            stderr="",
+        )
+        cfg = {
+            "repo": {
+                "project_type": "node",
+                "build": {"pre_push_verify_cmds": ["npm test"]},
+            },
+        }
+        baseline = {"tests": {"failed": 2}}
+        result = pre_push_verify(tmp_path, {}, baseline, cfg)
+        assert result["pass"] is False
+        assert result["kind"] == "pre_existing"
+        assert result["test_failures"] == 2
+
 
 class TestBuildPrePushErrorPrompt:
     def test_includes_delta_and_logs(self):

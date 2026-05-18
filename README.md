@@ -304,7 +304,12 @@ Ad-hoc:
 - `gate prune --aggressive` — also removes worktrees that have no
   active review marker regardless of age.
 
-### LaunchAgent
+### LaunchAgent (optional)
+
+By default Gate runs interactively inside tmux (`tmux new 'gate up'`,
+or `tmux new -d -s gate 'gate up'` for a detached session). If you want
+the server to auto-start on login and survive reboots, install it as a
+LaunchAgent instead:
 
 ```bash
 # Install (auto-start on login)
@@ -312,9 +317,15 @@ cp config/com.gate.server.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.gate.server.plist
 
 # Control
-launchctl unload ~/Library/LaunchAgents/com.gate.server.plist  # stop
-launchctl list | grep gate                                      # check
+launchctl unload ~/Library/LaunchAgents/com.gate.server.plist        # stop
+launchctl kickstart -k "gui/$(id -u)/com.gate.server"                # restart
+launchctl list | grep gate                                           # check
 ```
+
+If you're running directly in tmux instead, restart by sending `q` to
+the TUI (or `tmux send-keys -t gate q`) and re-running
+`tmux new -d -s gate 'gate up'`. Either path works; pick whichever
+matches how you launched Gate originally.
 
 ### Remote Access
 

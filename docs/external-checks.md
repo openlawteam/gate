@@ -276,10 +276,13 @@ check-runs endpoint:
 6. `_schedule_post_hoc_recheck` keeps polling (its statuses half still
    works); the check-runs half is now free.
 
-Restart the gate server (`launchctl kickstart -k gui/$(id -u)
-com.gate.server`) to re-detect after a token swap — the flag is
+Restart the gate server to re-detect after a token swap — the flag is
 process-scoped on purpose so a token rotation requires an explicit
-bounce.
+bounce. Restart command depends on how Gate is running:
+
+- LaunchAgent: `launchctl kickstart -k "gui/$(id -u)/com.gate.server"`
+- Direct tmux (`tmux new 'gate up'`): send `q` to the TUI (or
+  `tmux send-keys -t gate q`), then re-run `tmux new -d -s gate 'gate up'`.
 
 Programmatic introspection is available via
 `external_checks.check_runs_available()` (returns `True` until the
@@ -332,7 +335,11 @@ export GATE_PAT="ghp_<new_classic_pat>"
 
 # Apply and re-detect:
 source ~/.zshrc
+
+# Then restart the server. LaunchAgent setup:
 launchctl kickstart -k "gui/$(id -u)/com.gate.server"
+# Or, if running directly in tmux: quit the TUI with `q`, then
+# `tmux new -d -s gate 'gate up'`.
 ```
 
 No code changes required — `_paginate_check_runs` will start returning

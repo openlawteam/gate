@@ -296,9 +296,7 @@ def notify(
     _send_ntfy(topic, title, message, tags, priority, click_url)
 
 
-def notify_discord(
-    title: str, description: str, color: int = 3066993, url: str = ""
-) -> None:
+def notify_discord(title: str, description: str, color: int = 3066993, url: str = "") -> None:
     """Send Discord embed. No-op if GATE_DISCORD_WEBHOOK not set."""
     webhook = os.environ.get("GATE_DISCORD_WEBHOOK")
     if not webhook:
@@ -387,7 +385,9 @@ def review_complete(
 
 
 def review_failed(
-    pr_number: int, error: str, repo: str = "",
+    pr_number: int,
+    error: str,
+    repo: str = "",
     *,
     author: str | None = None,
 ) -> None:
@@ -407,7 +407,8 @@ def review_failed(
 
 
 def circuit_breaker(
-    pr_number: int, repo: str = "",
+    pr_number: int,
+    repo: str = "",
     *,
     author: str | None = None,
 ) -> None:
@@ -427,7 +428,9 @@ def circuit_breaker(
 
 
 def fix_started(
-    pr_number: int, finding_count: int, risk_level: str,
+    pr_number: int,
+    finding_count: int,
+    risk_level: str,
     repo: str = "",
     *,
     author: str | None = None,
@@ -447,7 +450,10 @@ def fix_started(
 
 
 def fix_complete(
-    pr_number: int, fixed: int, total: int, iterations: int,
+    pr_number: int,
+    fixed: int,
+    total: int,
+    iterations: int,
     repo: str = "",
     *,
     author: str | None = None,
@@ -467,7 +473,9 @@ def fix_complete(
 
 
 def fix_failed(
-    pr_number: int, reason: str, iterations: int,
+    pr_number: int,
+    reason: str,
+    iterations: int,
     repo: str = "",
     *,
     author: str | None = None,

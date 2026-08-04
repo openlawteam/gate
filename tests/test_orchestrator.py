@@ -62,21 +62,31 @@ def mocks():
     patches = _mocks()
     started, values = _enter_all(patches)
     (
-        workspace_mod, github, notify, state, builder, prompt,
-        spawn_review_stage, write_live_log, log_review, read_recent_decisions,
+        workspace_mod,
+        github,
+        notify,
+        state,
+        builder,
+        prompt,
+        spawn_review_stage,
+        write_live_log,
+        log_review,
+        read_recent_decisions,
         quota_mod,
     ) = values
     # Defaults that let run() get through gates
     github._wait_for_connectivity.return_value = True
     github.create_check_run.return_value = 1
-    github.get_pr_info.return_value = {
-        "title": "test", "body": "body", "user": {"login": "author"}
-    }
+    github.get_pr_info.return_value = {"title": "test", "body": "body", "user": {"login": "author"}}
     state.load_prior_review.return_value = {
-        "has_prior": False, "review_count": 0, "fix_attempts": 0
+        "has_prior": False,
+        "review_count": 0,
+        "fix_attempts": 0,
     }
     quota_mod.check_quota.return_value = {
-        "quota_ok": True, "five_hour_pct": 10, "seven_day_pct": 10,
+        "quota_ok": True,
+        "five_hour_pct": 10,
+        "seven_day_pct": 10,
     }
     try:
         yield {
@@ -137,8 +147,13 @@ class TestOrchestratorInit:
             conn = MagicMock()
             conn_cls.return_value = conn
             o = ReviewOrchestrator(
-                pr_number=1, repo="a/b", head_sha="x", event="s",
-                branch="m", labels=[], config=sample_config,
+                pr_number=1,
+                repo="a/b",
+                head_sha="x",
+                event="s",
+                branch="m",
+                labels=[],
+                config=sample_config,
                 socket_path=tmp_path / "sock",
             )
             conn_cls.assert_called_once()
@@ -155,8 +170,13 @@ class TestReviewId:
 
     def test_review_id_no_slash(self, sample_config):
         o = ReviewOrchestrator(
-            pr_number=7, repo="myorg/myrepo", head_sha="abc", event="s",
-            branch="feat", labels=[], config=sample_config,
+            pr_number=7,
+            repo="myorg/myrepo",
+            head_sha="abc",
+            event="s",
+            branch="feat",
+            labels=[],
+            config=sample_config,
         )
         assert "/" not in o._review_id()
         assert o._review_id() == "myorg-myrepo-pr7"
@@ -173,8 +193,13 @@ class TestClonePath:
     def test_missing_clone_path_raises(self, sample_config):
         cfg = {**sample_config, "repo": {**sample_config["repo"], "clone_path": ""}}
         o = ReviewOrchestrator(
-            pr_number=1, repo="a/b", head_sha="x", event="s",
-            branch="m", labels=[], config=cfg,
+            pr_number=1,
+            repo="a/b",
+            head_sha="x",
+            event="s",
+            branch="m",
+            labels=[],
+            config=cfg,
         )
         with pytest.raises(RuntimeError, match="clone_path"):
             o._clone_path()
@@ -214,7 +239,12 @@ class TestCancel:
     @patch("gate.orchestrator.kill_window")
     @patch("gate.orchestrator.github")
     def test_cancel_does_not_remove_worktree(
-        self, mock_github, mock_kill, mock_ws, orchestrator, tmp_path,
+        self,
+        mock_github,
+        mock_kill,
+        mock_ws,
+        orchestrator,
+        tmp_path,
     ):
         """Group 2B: cancel() must not call remove_worktree — that is
         owned by run()'s finally block so stages see a live worktree
@@ -232,7 +262,10 @@ class TestCancelReasons:
     @patch("gate.orchestrator.kill_window")
     @patch("gate.orchestrator.github")
     def test_superseded_default_reports_cancelled(
-        self, mock_github, _mock_kill, orchestrator,
+        self,
+        mock_github,
+        _mock_kill,
+        orchestrator,
     ):
         orchestrator.check_run_id = 42
         orchestrator.cancel()  # default reason = "superseded"
@@ -244,7 +277,10 @@ class TestCancelReasons:
     @patch("gate.orchestrator.kill_window")
     @patch("gate.orchestrator.github")
     def test_manual_reports_neutral(
-        self, mock_github, _mock_kill, orchestrator,
+        self,
+        mock_github,
+        _mock_kill,
+        orchestrator,
     ):
         orchestrator.check_run_id = 42
         orchestrator.cancel(reason="manual")
@@ -257,7 +293,10 @@ class TestCancelReasons:
     @patch("gate.orchestrator.kill_window")
     @patch("gate.orchestrator.github")
     def test_timeout_reports_cancelled(
-        self, mock_github, _mock_kill, orchestrator,
+        self,
+        mock_github,
+        _mock_kill,
+        orchestrator,
     ):
         orchestrator.check_run_id = 42
         orchestrator.cancel(reason="timeout")
@@ -268,7 +307,10 @@ class TestCancelReasons:
     @patch("gate.orchestrator.kill_window")
     @patch("gate.orchestrator.github")
     def test_unknown_reason_raises_keyerror(
-        self, _mock_github, _mock_kill, orchestrator,
+        self,
+        _mock_github,
+        _mock_kill,
+        orchestrator,
     ):
         """Typos in reason strings should surface loudly, not silently
         route to a default payload (which is how we ended up with
@@ -284,7 +326,10 @@ class TestCancelReasons:
     @patch("gate.orchestrator.kill_window")
     @patch("gate.orchestrator.github")
     def test_cancel_is_idempotent_on_concurrent_calls(
-        self, mock_github, _mock_kill, orchestrator,
+        self,
+        mock_github,
+        _mock_kill,
+        orchestrator,
     ):
         """Server.py echoes the orchestrator's own ``review_cancelled``
         event back into ``queue.cancel_pr``. Without the idempotency
@@ -306,7 +351,10 @@ class TestCancelReasons:
     @patch("gate.orchestrator.kill_window")
     @patch("gate.orchestrator.github")
     def test_cancel_concurrent_threads_single_writer(
-        self, mock_github, _mock_kill, orchestrator,
+        self,
+        mock_github,
+        _mock_kill,
+        orchestrator,
     ):
         """Race the lock: N threads all call ``cancel()`` simultaneously.
         Exactly one must win the check-then-set and invoke
@@ -376,9 +424,7 @@ class TestSaveStageResult:
 
     # ── Misleading-message split (audit P2.2b) ───────────────
 
-    def test_log_message_says_cancelled_when_cancel_set(
-        self, orchestrator, tmp_path, caplog
-    ):
+    def test_log_message_says_cancelled_when_cancel_set(self, orchestrator, tmp_path, caplog):
         """Cancel-set branch logs ``review cancelled``."""
         import logging
 
@@ -392,7 +438,8 @@ class TestSaveStageResult:
             orchestrator._save_stage_result("triage", result)
 
         skip_msgs = [
-            r.message for r in caplog.records
+            r.message
+            for r in caplog.records
             if "Skipping" in r.message and "triage.json" in r.message
         ]
         assert any("review cancelled" in m for m in skip_msgs)
@@ -417,7 +464,8 @@ class TestSaveStageResult:
             orchestrator._save_stage_result("triage", result)
 
         skip_msgs = [
-            r.message for r in caplog.records
+            r.message
+            for r in caplog.records
             if "Skipping" in r.message and "triage.json" in r.message
         ]
         assert any("workspace gone" in m for m in skip_msgs)
@@ -430,8 +478,12 @@ class TestSaveStageResult:
 class TestLabelGates:
     def test_skip_label_approves(self, sample_config, mocks):
         orch = ReviewOrchestrator(
-            pr_number=10, repo="test-org/test-repo", head_sha="abc123",
-            event="synchronize", branch="main", labels=["gate-skip"],
+            pr_number=10,
+            repo="test-org/test-repo",
+            head_sha="abc123",
+            event="synchronize",
+            branch="main",
+            labels=["gate-skip"],
             config=sample_config,
         )
         orch.run()
@@ -440,8 +492,12 @@ class TestLabelGates:
 
     def test_skip_label_short_circuits_before_stages(self, sample_config, mocks):
         orch = ReviewOrchestrator(
-            pr_number=10, repo="test-org/test-repo", head_sha="abc123",
-            event="synchronize", branch="main", labels=["gate-skip"],
+            pr_number=10,
+            repo="test-org/test-repo",
+            head_sha="abc123",
+            event="synchronize",
+            branch="main",
+            labels=["gate-skip"],
             config=sample_config,
         )
         orch.run()
@@ -450,9 +506,13 @@ class TestLabelGates:
 
     def test_emergency_bypass_label(self, sample_config, mocks):
         orch = ReviewOrchestrator(
-            pr_number=11, repo="test-org/test-repo", head_sha="def456",
-            event="synchronize", branch="hotfix",
-            labels=["gate-emergency-bypass"], config=sample_config,
+            pr_number=11,
+            repo="test-org/test-repo",
+            head_sha="def456",
+            event="synchronize",
+            branch="hotfix",
+            labels=["gate-emergency-bypass"],
+            config=sample_config,
         )
         orch.run()
         mocks["github"].approve_pr.assert_called_once()
@@ -461,21 +521,23 @@ class TestLabelGates:
 
     def test_gate_rerun_label_removed_on_labeled_event(self, sample_config, mocks):
         orch = ReviewOrchestrator(
-            pr_number=12, repo="test-org/test-repo", head_sha="xyz",
-            event="labeled", branch="feature",
-            labels=["gate-rerun"], config=sample_config,
+            pr_number=12,
+            repo="test-org/test-repo",
+            head_sha="xyz",
+            event="labeled",
+            branch="feature",
+            labels=["gate-rerun"],
+            config=sample_config,
         )
         # Pre-emptively force a non-fix-rerun path by having no prior review
-        with patch("gate.orchestrator.builder.run_build",
-                   return_value={"overall_pass": True}):
+        with patch("gate.orchestrator.builder.run_build", return_value={"overall_pass": True}):
             try:
                 orch.run()
             except Exception:
                 pass
         # remove_label should be called with gate-rerun
         removed = any(
-            call.args[2] == "gate-rerun"
-            for call in mocks["github"].remove_label.call_args_list
+            call.args[2] == "gate-rerun" for call in mocks["github"].remove_label.call_args_list
         )
         assert removed
 
@@ -487,8 +549,13 @@ class TestCircuitBreakerGate:
     def test_three_errors_trips_breaker(self, sample_config, mocks):
         mocks["read_recent_decisions"].return_value = ["error", "error", "error"]
         orch = ReviewOrchestrator(
-            pr_number=20, repo="test-org/test-repo", head_sha="x",
-            event="synchronize", branch="m", labels=[], config=sample_config,
+            pr_number=20,
+            repo="test-org/test-repo",
+            head_sha="x",
+            event="synchronize",
+            branch="m",
+            labels=[],
+            config=sample_config,
         )
         orch.run()
         mocks["github"].approve_pr.assert_called_once()
@@ -499,8 +566,13 @@ class TestCircuitBreakerGate:
     def test_mixed_decisions_does_not_trip(self, sample_config, mocks):
         mocks["read_recent_decisions"].return_value = ["approve", "error", "error"]
         orch = ReviewOrchestrator(
-            pr_number=21, repo="test-org/test-repo", head_sha="x",
-            event="synchronize", branch="m", labels=[], config=sample_config,
+            pr_number=21,
+            repo="test-org/test-repo",
+            head_sha="x",
+            event="synchronize",
+            branch="m",
+            labels=[],
+            config=sample_config,
         )
         # Just make sure we progress past the breaker; mock rest to keep it simple
         with patch("gate.orchestrator.builder.run_build", return_value={"overall_pass": True}):
@@ -518,12 +590,19 @@ class TestCircuitBreakerGate:
 class TestQuotaGate:
     def test_quota_not_ok_approves_and_defers(self, sample_config, mocks):
         mocks["quota_mod"].check_quota.return_value = {
-            "quota_ok": False, "five_hour_pct": 95, "seven_day_pct": 90,
+            "quota_ok": False,
+            "five_hour_pct": 95,
+            "seven_day_pct": 90,
             "reason": "quota low",
         }
         orch = ReviewOrchestrator(
-            pr_number=30, repo="test-org/test-repo", head_sha="x",
-            event="synchronize", branch="m", labels=[], config=sample_config,
+            pr_number=30,
+            repo="test-org/test-repo",
+            head_sha="x",
+            event="synchronize",
+            branch="m",
+            labels=[],
+            config=sample_config,
         )
         orch.run()
         # Should approve and comment, no stages run
@@ -540,12 +619,19 @@ class TestQuotaGate:
 class TestCycleLimitGate:
     def test_cycle_limit_reached_approves(self, sample_config, mocks):
         mocks["state"].load_prior_review.return_value = {
-            "has_prior": True, "prior_decision": "approve",
-            "review_count": 5, "fix_attempts": 0,
+            "has_prior": True,
+            "prior_decision": "approve",
+            "review_count": 5,
+            "fix_attempts": 0,
         }
         orch = ReviewOrchestrator(
-            pr_number=40, repo="test-org/test-repo", head_sha="x",
-            event="synchronize", branch="m", labels=[], config=sample_config,
+            pr_number=40,
+            repo="test-org/test-repo",
+            head_sha="x",
+            event="synchronize",
+            branch="m",
+            labels=[],
+            config=sample_config,
         )
         orch.run()
         mocks["github"].approve_pr.assert_called_once()
@@ -561,12 +647,19 @@ class TestCycleLimitGate:
         the one emitted.
         """
         mocks["state"].load_prior_review.return_value = {
-            "has_prior": True, "prior_decision": "approve",
-            "review_count": 2, "fix_attempts": 0,
+            "has_prior": True,
+            "prior_decision": "approve",
+            "review_count": 2,
+            "fix_attempts": 0,
         }
         orch = ReviewOrchestrator(
-            pr_number=41, repo="test-org/test-repo", head_sha="x",
-            event="synchronize", branch="m", labels=[], config=sample_config,
+            pr_number=41,
+            repo="test-org/test-repo",
+            head_sha="x",
+            event="synchronize",
+            branch="m",
+            labels=[],
+            config=sample_config,
         )
         try:
             orch.run()
@@ -585,8 +678,13 @@ class TestFailOpen:
     def test_exception_approves_fail_open(self, sample_config, mocks):
         mocks["github"].get_pr_info.side_effect = RuntimeError("API exploded")
         orch = ReviewOrchestrator(
-            pr_number=99, repo="test-org/test-repo", head_sha="fff999",
-            event="synchronize", branch="boom", labels=[], config=sample_config,
+            pr_number=99,
+            repo="test-org/test-repo",
+            head_sha="fff999",
+            event="synchronize",
+            branch="boom",
+            labels=[],
+            config=sample_config,
         )
         orch.run()
         mocks["github"].approve_pr.assert_called_once()
@@ -597,23 +695,31 @@ class TestFailOpen:
     def test_exception_completes_check_run_cancelled(self, sample_config, mocks):
         mocks["github"].get_pr_info.side_effect = RuntimeError("boom")
         orch = ReviewOrchestrator(
-            pr_number=99, repo="test-org/test-repo", head_sha="f",
-            event="synchronize", branch="b", labels=[], config=sample_config,
+            pr_number=99,
+            repo="test-org/test-repo",
+            head_sha="f",
+            event="synchronize",
+            branch="b",
+            labels=[],
+            config=sample_config,
         )
         orch.run()
         # check run should be completed with cancelled
         calls = mocks["github"].complete_check_run.call_args_list
-        assert any(
-            call.kwargs.get("conclusion") == "cancelled" for call in calls
-        )
+        assert any(call.kwargs.get("conclusion") == "cancelled" for call in calls)
 
     def test_exception_removes_workspace(self, sample_config, mocks):
         mocks["github"].get_pr_info.side_effect = RuntimeError("boom")
         ws = MagicMock()
         mocks["workspace_mod"].create_worktree.return_value = ws
         orch = ReviewOrchestrator(
-            pr_number=99, repo="test-org/test-repo", head_sha="f",
-            event="synchronize", branch="b", labels=[], config=sample_config,
+            pr_number=99,
+            repo="test-org/test-repo",
+            head_sha="f",
+            event="synchronize",
+            branch="b",
+            labels=[],
+            config=sample_config,
         )
         orch.run()
         # The exception happens before create_worktree, so no remove needed.
@@ -722,9 +828,13 @@ class TestActiveMarker:
         """Skip path writes and removes the active marker."""
         mocks["state"].get_pr_state_dir.return_value = tmp_path
         orch = ReviewOrchestrator(
-            pr_number=50, repo="test-org/test-repo", head_sha="x",
-            event="synchronize", branch="m",
-            labels=["gate-skip"], config=sample_config,
+            pr_number=50,
+            repo="test-org/test-repo",
+            head_sha="x",
+            event="synchronize",
+            branch="m",
+            labels=["gate-skip"],
+            config=sample_config,
         )
         orch.run()
         # Marker was written and then removed (state dir empty of marker)
@@ -744,18 +854,19 @@ class TestEmit:
             conn = MagicMock()
             conn_cls.return_value = conn
             o = ReviewOrchestrator(
-                pr_number=1, repo="a/b", head_sha="x", event="s",
-                branch="m", labels=[], config=sample_config,
+                pr_number=1,
+                repo="a/b",
+                head_sha="x",
+                event="s",
+                branch="m",
+                labels=[],
+                config=sample_config,
                 socket_path=tmp_path / "sock",
             )
             o._emit("review_started", review={"id": "x"})
-            conn.emit.assert_called_once_with(
-                "review_started", review={"id": "x"}, head_sha="x"
-            )
+            conn.emit.assert_called_once_with("review_started", review={"id": "x"}, head_sha="x")
 
-    def test_emit_stamps_head_sha_for_race_disambiguation(
-        self, sample_config, tmp_path
-    ):
+    def test_emit_stamps_head_sha_for_race_disambiguation(self, sample_config, tmp_path):
         """Every lifecycle event is stamped with this orchestrator's
         ``head_sha`` so the server can drop late events from a superseded
         orchestrator on the same PR (both share ``review_id``)."""
@@ -763,8 +874,13 @@ class TestEmit:
             conn = MagicMock()
             conn_cls.return_value = conn
             o = ReviewOrchestrator(
-                pr_number=1, repo="a/b", head_sha="deadbeef", event="s",
-                branch="m", labels=[], config=sample_config,
+                pr_number=1,
+                repo="a/b",
+                head_sha="deadbeef",
+                event="s",
+                branch="m",
+                labels=[],
+                config=sample_config,
                 socket_path=tmp_path / "sock",
             )
             o._emit("review_cancelled", review_id="a-b-pr1")
@@ -772,15 +888,18 @@ class TestEmit:
                 "review_cancelled", review_id="a-b-pr1", head_sha="deadbeef"
             )
 
-    def test_emit_preserves_explicit_head_sha_if_caller_provides(
-        self, sample_config, tmp_path
-    ):
+    def test_emit_preserves_explicit_head_sha_if_caller_provides(self, sample_config, tmp_path):
         with patch("gate.client.GateConnection") as conn_cls:
             conn = MagicMock()
             conn_cls.return_value = conn
             o = ReviewOrchestrator(
-                pr_number=1, repo="a/b", head_sha="deadbeef", event="s",
-                branch="m", labels=[], config=sample_config,
+                pr_number=1,
+                repo="a/b",
+                head_sha="deadbeef",
+                event="s",
+                branch="m",
+                labels=[],
+                config=sample_config,
                 socket_path=tmp_path / "sock",
             )
             o._emit("review_cancelled", review_id="a-b-pr1", head_sha="override")
@@ -795,9 +914,7 @@ class TestExternalChecksHook:
     def _cfg_with_required(self, sample_config, names):
         cfg = dict(sample_config)
         cfg["repo"] = dict(cfg.get("repo") or {})
-        cfg["repo"]["required_external_checks"] = [
-            {"name": n, "policy": "blocking"} for n in names
-        ]
+        cfg["repo"]["required_external_checks"] = [{"name": n, "policy": "blocking"} for n in names]
         cfg["external_checks"] = {"enabled": True, "wait_seconds_default": 1}
         return cfg
 
@@ -817,54 +934,67 @@ class TestExternalChecksHook:
         assert orchestrator._consult_external_checks(verdict) is False
 
     def test_blocking_failure_flips_to_request_changes(
-        self, orchestrator, sample_config,
+        self,
+        orchestrator,
+        sample_config,
     ):
         from gate import external_checks as ec
+
         orchestrator.config = self._cfg_with_required(sample_config, ["Vercel"])
-        fake = {"Vercel – Preview": ec.CheckState(
-            name="Vercel – Preview",
-            conclusion=ec.CONCLUSION_FAILURE,
-            status="completed",
-            url="https://vercel.example/u",
-        )}
+        fake = {
+            "Vercel – Preview": ec.CheckState(
+                name="Vercel – Preview",
+                conclusion=ec.CONCLUSION_FAILURE,
+                status="completed",
+                url="https://vercel.example/u",
+            )
+        }
         verdict = {"decision": "approve", "findings": []}
         with patch("gate.external_checks.fetch_check_state", return_value=fake):
             mutated = orchestrator._consult_external_checks(verdict)
         assert mutated is True
         assert verdict["decision"] == "request_changes"
         assert any(
-            f.get("source_stage") == "external_checks" and
-            "Vercel – Preview" in f.get("message", "")
+            f.get("source_stage") == "external_checks"
+            and "Vercel – Preview" in f.get("message", "")
             for f in verdict["findings"]
         )
         assert all("finding_id" in f for f in verdict["findings"])
 
     def test_blocking_pending_fail_closed_after_wait(
-        self, orchestrator, sample_config,
+        self,
+        orchestrator,
+        sample_config,
     ):
         from gate import external_checks as ec
+
         orchestrator.config = self._cfg_with_required(sample_config, ["tests"])
         orchestrator.config["external_checks"]["wait_seconds_default"] = 0
-        pending = {"tests": ec.CheckState(
-            name="tests", conclusion=ec.CONCLUSION_PENDING, status="in_progress",
-        )}
+        pending = {
+            "tests": ec.CheckState(
+                name="tests",
+                conclusion=ec.CONCLUSION_PENDING,
+                status="in_progress",
+            )
+        }
         verdict = {"decision": "approve", "findings": []}
         with patch("gate.external_checks.fetch_check_state", return_value=pending):
             mutated = orchestrator._consult_external_checks(verdict)
         assert mutated is True
         assert verdict["decision"] == "request_changes"
-        assert any(
-            "pending" in f["message"].lower() for f in verdict["findings"]
-        )
+        assert any("pending" in f["message"].lower() for f in verdict["findings"])
 
     def test_success_is_noop(self, orchestrator, sample_config):
         from gate import external_checks as ec
+
         orchestrator.config = self._cfg_with_required(sample_config, ["Vercel"])
-        green = {"Vercel – Preview": ec.CheckState(
-            name="Vercel – Preview",
-            conclusion=ec.CONCLUSION_SUCCESS,
-            status="completed",
-        )}
+        green = {
+            "Vercel – Preview": ec.CheckState(
+                name="Vercel – Preview",
+                conclusion=ec.CONCLUSION_SUCCESS,
+                status="completed",
+            )
+        }
         verdict = {"decision": "approve", "findings": []}
         with patch("gate.external_checks.fetch_check_state", return_value=green):
             mutated = orchestrator._consult_external_checks(verdict)
@@ -883,9 +1013,13 @@ class TestExternalChecksHook:
         assert verdict["decision"] == "approve"
 
     def test_record_contradiction_writes_file(
-        self, orchestrator, sample_config, tmp_path,
+        self,
+        orchestrator,
+        sample_config,
+        tmp_path,
     ):
         from gate import external_checks as ec
+
         orchestrator.config = sample_config
         failure = ec.CheckState(
             name="vercel/preview",
@@ -900,13 +1034,20 @@ class TestExternalChecksHook:
         )
         # Find the contradiction file in the isolated state dir.
         from gate.state import get_pr_state_dir
-        cdir = get_pr_state_dir(
-            orchestrator.pr_number, orchestrator.repo, create=False,
-        ) / "contradictions"
+
+        cdir = (
+            get_pr_state_dir(
+                orchestrator.pr_number,
+                orchestrator.repo,
+                create=False,
+            )
+            / "contradictions"
+        )
         assert cdir.exists()
         files = list(cdir.glob("*.json"))
         assert len(files) == 1
         import json as _json
+
         payload = _json.loads(files[0].read_text())
         assert payload["check"]["name"] == "vercel/preview"
         assert payload["check"]["conclusion"] == ec.CONCLUSION_FAILURE

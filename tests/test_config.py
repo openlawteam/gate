@@ -106,6 +106,7 @@ class TestGetRepoConfig:
 
     def test_not_found(self, sample_config):
         import pytest
+
         with pytest.raises(ValueError, match="No config found"):
             get_repo_config("nonexistent/repo", sample_config)
 
@@ -127,6 +128,7 @@ class TestResolveRepoConfig:
 
     def test_not_found_raises(self, sample_config):
         import pytest
+
         with pytest.raises(ValueError):
             resolve_repo_config("nonexistent/repo", sample_config)
 

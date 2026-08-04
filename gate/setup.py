@@ -116,7 +116,9 @@ def check_prerequisites() -> tuple[list[tuple[str, bool, str]], bool]:
 
 
 def _check_tool(
-    name: str, cmd: list[str], checks: list[tuple[str, bool, str]],
+    name: str,
+    cmd: list[str],
+    checks: list[tuple[str, bool, str]],
 ) -> None:
     path = shutil.which(cmd[0])
     if not path:
@@ -131,10 +133,13 @@ def _check_tool(
         version = result.stdout.strip().split("\n")[0]
         checks.append((name, True, version))
     except subprocess.TimeoutExpired:
-        checks.append((
-            name, False,
-            f"hung after 10s{_gatekeeper_hint(cmd[0], path)}",
-        ))
+        checks.append(
+            (
+                name,
+                False,
+                f"hung after 10s{_gatekeeper_hint(cmd[0], path)}",
+            )
+        )
     except (subprocess.SubprocessError, OSError) as e:
         checks.append((name, False, str(e)))
 
@@ -151,7 +156,9 @@ def _gatekeeper_hint(cmd_name: str, binary_path: str) -> str:
     try:
         xattr_out = subprocess.run(
             ["xattr", "-l", binary_path],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if "com.apple.quarantine" in (xattr_out.stdout or ""):
             hints.append("quarantine xattr present")
@@ -160,7 +167,9 @@ def _gatekeeper_hint(cmd_name: str, binary_path: str) -> str:
     try:
         spctl_out = subprocess.run(
             ["spctl", "-a", "-v", binary_path],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         combined = (spctl_out.stdout or "") + (spctl_out.stderr or "")
         if "rejected" in combined.lower():
@@ -197,7 +206,9 @@ def detect_gh_user() -> str | None:
     try:
         result = subprocess.run(
             ["gh", "api", "user", "--jq", ".login"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
@@ -214,7 +225,8 @@ def validate_clone_path(path_str: str) -> tuple[bool, str]:
     try:
         result = subprocess.run(
             ["git", "-C", str(expanded), "rev-parse", "--git-dir"],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
         )
         if result.returncode != 0:
             return False, f"{expanded} is not a git repository"
@@ -264,9 +276,9 @@ def prompt_repo_config(defaults: dict | None = None) -> dict:
         if type_answer in ("", "y", "yes"):
             project_type = detected_type
         elif type_answer in ("n", "no"):
-            project_type = input(
-                "  Enter project type (node/python/go/rust/none): "
-            ).strip() or "none"
+            project_type = (
+                input("  Enter project type (node/python/go/rust/none): ").strip() or "none"
+            )
         else:
             project_type = type_answer
     else:
@@ -284,9 +296,15 @@ def prompt_repo_config(defaults: dict | None = None) -> dict:
 
 
 _REPO_KEY_ORDER = [
-    "name", "clone_path", "worktree_base", "bot_account",
-    "escalation_reviewers", "default_branch", "project_type",
-    "cursor_rules", "fix_blocklist",
+    "name",
+    "clone_path",
+    "worktree_base",
+    "bot_account",
+    "escalation_reviewers",
+    "default_branch",
+    "project_type",
+    "cursor_rules",
+    "fix_blocklist",
 ]
 
 
@@ -301,7 +319,7 @@ def _emit_value(lines: list[str], key: str, val) -> None:
     elif isinstance(val, str):
         lines.append(f'{key} = "{val}"')
     elif isinstance(val, bool):
-        lines.append(f'{key} = {"true" if val else "false"}')
+        lines.append(f"{key} = {'true' if val else 'false'}")
     else:
         lines.append(f"{key} = {val}")
 
@@ -339,7 +357,8 @@ def _format_section(name: str, data: dict, defaults: dict) -> str:
 
 
 def format_full_config(
-    repos: list[dict], globals_config: dict | None = None,
+    repos: list[dict],
+    globals_config: dict | None = None,
 ) -> str:
     """Generate a complete gate.toml from repo list and global config."""
     globals_config = globals_config or {}
@@ -356,17 +375,15 @@ def format_full_config(
             parts.append("")
 
     parts.append("")
-    parts.append(_format_section(
-        "models", globals_config.get("models", {}), _MODELS_DEFAULTS))
+    parts.append(_format_section("models", globals_config.get("models", {}), _MODELS_DEFAULTS))
     parts.append("")
-    parts.append(_format_section(
-        "timeouts", globals_config.get("timeouts", {}), _TIMEOUTS_DEFAULTS))
+    parts.append(
+        _format_section("timeouts", globals_config.get("timeouts", {}), _TIMEOUTS_DEFAULTS)
+    )
     parts.append("")
-    parts.append(_format_section(
-        "retry", globals_config.get("retry", {}), _RETRY_DEFAULTS))
+    parts.append(_format_section("retry", globals_config.get("retry", {}), _RETRY_DEFAULTS))
     parts.append("")
-    parts.append(_format_section(
-        "limits", globals_config.get("limits", {}), _LIMITS_DEFAULTS))
+    parts.append(_format_section("limits", globals_config.get("limits", {}), _LIMITS_DEFAULTS))
     parts.append("")
 
     return "\n".join(parts)
@@ -388,6 +405,7 @@ def validate_env_vars() -> list[tuple[str, bool, str]]:
     elif sys.platform == "darwin":
         try:
             from gate.quota import read_keychain_token
+
             token = read_keychain_token()
             if token:
                 checks.append(("CLAUDE_CODE_OAUTH_TOKEN", True, f"Keychain ({len(token)} chars)"))

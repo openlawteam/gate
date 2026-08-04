@@ -92,8 +92,11 @@ class TestCreateSpecPr:
 
     def test_returns_none_without_spec_files(self):
         result = spec_pr.create_spec_pr(
-            repo="o/r", pr_number=1, spec_files=[],
-            base_sha="deadbeef", clone_path="/tmp/clone",
+            repo="o/r",
+            pr_number=1,
+            spec_files=[],
+            base_sha="deadbeef",
+            clone_path="/tmp/clone",
             config=_make_config(),
         )
         assert result is None
@@ -101,11 +104,16 @@ class TestCreateSpecPr:
     def test_idempotent_when_branch_exists(self, tmp_path):
         spec = tmp_path / "__gate_test_foo.ts"
         spec.write_text("test('x', ...)")
-        with patch.object(spec_pr.github, "branch_exists", return_value=True) as be, \
-             patch.object(spec_pr.workspace, "create_auxiliary_worktree") as cwt:
+        with (
+            patch.object(spec_pr.github, "branch_exists", return_value=True) as be,
+            patch.object(spec_pr.workspace, "create_auxiliary_worktree") as cwt,
+        ):
             result = spec_pr.create_spec_pr(
-                repo="o/r", pr_number=42, spec_files=[spec],
-                base_sha="abc12345", clone_path="/tmp/clone",
+                repo="o/r",
+                pr_number=42,
+                spec_files=[spec],
+                base_sha="abc12345",
+                clone_path="/tmp/clone",
                 config=_make_config(),
             )
         assert result is None
@@ -119,11 +127,16 @@ class TestCreateSpecPr:
         config["repo"]["fix_blocklist"] = str(blocklist)
         spec = tmp_path / "__gate_test_foo.ts"
         spec.write_text("")
-        with patch.object(spec_pr.github, "branch_exists") as be, \
-             patch.object(spec_pr.workspace, "create_auxiliary_worktree") as cwt:
+        with (
+            patch.object(spec_pr.github, "branch_exists") as be,
+            patch.object(spec_pr.workspace, "create_auxiliary_worktree") as cwt,
+        ):
             result = spec_pr.create_spec_pr(
-                repo="o/r", pr_number=1, spec_files=[spec],
-                base_sha="deadbeef", clone_path="/tmp/clone",
+                repo="o/r",
+                pr_number=1,
+                spec_files=[spec],
+                base_sha="deadbeef",
+                clone_path="/tmp/clone",
                 config=config,
             )
         assert result is None
@@ -135,15 +148,23 @@ class TestCreateSpecPr:
         spec.write_text("test('it works', () => expect(1).toBe(1))")
         wt = self._setup_worktree(tmp_path)
 
-        with patch.object(spec_pr.github, "branch_exists", return_value=False), \
-             patch.object(spec_pr.workspace, "create_auxiliary_worktree", return_value=wt), \
-             patch.object(spec_pr.workspace, "remove_worktree") as rm, \
-             patch.object(spec_pr.github, "commit_and_push",
-                          return_value=CommitResult(status="pushed", sha="new_sha")) as cap, \
-             patch.object(spec_pr.github, "create_pr", return_value=101) as cp:
+        with (
+            patch.object(spec_pr.github, "branch_exists", return_value=False),
+            patch.object(spec_pr.workspace, "create_auxiliary_worktree", return_value=wt),
+            patch.object(spec_pr.workspace, "remove_worktree") as rm,
+            patch.object(
+                spec_pr.github,
+                "commit_and_push",
+                return_value=CommitResult(status="pushed", sha="new_sha"),
+            ) as cap,
+            patch.object(spec_pr.github, "create_pr", return_value=101) as cp,
+        ):
             result = spec_pr.create_spec_pr(
-                repo="o/r", pr_number=42, spec_files=[spec],
-                base_sha="abc12345", clone_path="/tmp/clone",
+                repo="o/r",
+                pr_number=42,
+                spec_files=[spec],
+                base_sha="abc12345",
+                clone_path="/tmp/clone",
                 config=_make_config(),
             )
 
@@ -169,17 +190,24 @@ class TestCreateSpecPr:
         spec.write_text("")
         wt = self._setup_worktree(tmp_path)
 
-        with patch.object(spec_pr.github, "branch_exists", return_value=False), \
-             patch.object(spec_pr.workspace, "create_auxiliary_worktree", return_value=wt), \
-             patch.object(spec_pr.workspace, "remove_worktree") as rm, \
-             patch.object(spec_pr.github, "commit_and_push",
-                          return_value=CommitResult(status="pushed", sha="s")), \
-             patch.object(spec_pr.github, "create_pr",
-                          side_effect=RuntimeError("network down")):
+        with (
+            patch.object(spec_pr.github, "branch_exists", return_value=False),
+            patch.object(spec_pr.workspace, "create_auxiliary_worktree", return_value=wt),
+            patch.object(spec_pr.workspace, "remove_worktree") as rm,
+            patch.object(
+                spec_pr.github,
+                "commit_and_push",
+                return_value=CommitResult(status="pushed", sha="s"),
+            ),
+            patch.object(spec_pr.github, "create_pr", side_effect=RuntimeError("network down")),
+        ):
             with pytest.raises(RuntimeError):
                 spec_pr.create_spec_pr(
-                    repo="o/r", pr_number=42, spec_files=[spec],
-                    base_sha="abc12345", clone_path="/tmp/clone",
+                    repo="o/r",
+                    pr_number=42,
+                    spec_files=[spec],
+                    base_sha="abc12345",
+                    clone_path="/tmp/clone",
                     config=_make_config(),
                 )
         rm.assert_called_once_with(wt)
@@ -188,15 +216,23 @@ class TestCreateSpecPr:
         spec = tmp_path / "__gate_test_foo.ts"
         spec.write_text("")
         wt = self._setup_worktree(tmp_path)
-        with patch.object(spec_pr.github, "branch_exists", return_value=False), \
-             patch.object(spec_pr.workspace, "create_auxiliary_worktree", return_value=wt), \
-             patch.object(spec_pr.workspace, "remove_worktree"), \
-             patch.object(spec_pr.github, "commit_and_push",
-                          return_value=CommitResult(status="push_failed", error="e")), \
-             patch.object(spec_pr.github, "create_pr") as cp:
+        with (
+            patch.object(spec_pr.github, "branch_exists", return_value=False),
+            patch.object(spec_pr.workspace, "create_auxiliary_worktree", return_value=wt),
+            patch.object(spec_pr.workspace, "remove_worktree"),
+            patch.object(
+                spec_pr.github,
+                "commit_and_push",
+                return_value=CommitResult(status="push_failed", error="e"),
+            ),
+            patch.object(spec_pr.github, "create_pr") as cp,
+        ):
             result = spec_pr.create_spec_pr(
-                repo="o/r", pr_number=1, spec_files=[spec],
-                base_sha="deadbeef", clone_path="/tmp/clone",
+                repo="o/r",
+                pr_number=1,
+                spec_files=[spec],
+                base_sha="deadbeef",
+                clone_path="/tmp/clone",
                 config=_make_config(),
             )
         assert result is None
@@ -209,15 +245,23 @@ class TestCreateSpecPr:
             p.write_text("")
             files.append(p)
         wt = self._setup_worktree(tmp_path)
-        with patch.object(spec_pr.github, "branch_exists", return_value=False), \
-             patch.object(spec_pr.workspace, "create_auxiliary_worktree", return_value=wt), \
-             patch.object(spec_pr.workspace, "remove_worktree"), \
-             patch.object(spec_pr.github, "commit_and_push",
-                          return_value=CommitResult(status="pushed", sha="s")), \
-             patch.object(spec_pr.github, "create_pr", return_value=5):
+        with (
+            patch.object(spec_pr.github, "branch_exists", return_value=False),
+            patch.object(spec_pr.workspace, "create_auxiliary_worktree", return_value=wt),
+            patch.object(spec_pr.workspace, "remove_worktree"),
+            patch.object(
+                spec_pr.github,
+                "commit_and_push",
+                return_value=CommitResult(status="pushed", sha="s"),
+            ),
+            patch.object(spec_pr.github, "create_pr", return_value=5),
+        ):
             spec_pr.create_spec_pr(
-                repo="o/r", pr_number=1, spec_files=files,
-                base_sha="deadbeef", clone_path="/tmp/clone",
+                repo="o/r",
+                pr_number=1,
+                spec_files=files,
+                base_sha="deadbeef",
+                clone_path="/tmp/clone",
                 config=_make_config(max_files=3),
             )
         copied = list((wt / "tests" / "gate-specs").iterdir())
@@ -227,15 +271,23 @@ class TestCreateSpecPr:
         spec = tmp_path / "__gate_test_foo.ts"
         spec.write_text("")
         wt = self._setup_worktree(tmp_path)
-        with patch.object(spec_pr.github, "branch_exists", return_value=False), \
-             patch.object(spec_pr.workspace, "create_auxiliary_worktree", return_value=wt), \
-             patch.object(spec_pr.workspace, "remove_worktree"), \
-             patch.object(spec_pr.github, "commit_and_push",
-                          return_value=CommitResult(status="pushed", sha="s")), \
-             patch.object(spec_pr.github, "create_pr", return_value=7) as cp:
+        with (
+            patch.object(spec_pr.github, "branch_exists", return_value=False),
+            patch.object(spec_pr.workspace, "create_auxiliary_worktree", return_value=wt),
+            patch.object(spec_pr.workspace, "remove_worktree"),
+            patch.object(
+                spec_pr.github,
+                "commit_and_push",
+                return_value=CommitResult(status="pushed", sha="s"),
+            ),
+            patch.object(spec_pr.github, "create_pr", return_value=7) as cp,
+        ):
             spec_pr.create_spec_pr(
-                repo="o/r", pr_number=1, spec_files=[spec],
-                base_sha="deadbeef", clone_path="/tmp/clone",
+                repo="o/r",
+                pr_number=1,
+                spec_files=[spec],
+                base_sha="deadbeef",
+                clone_path="/tmp/clone",
                 config=_make_config(base_branch="develop"),
             )
         assert cp.call_args.kwargs["base"] == "develop"
@@ -256,7 +308,8 @@ class TestGithubCreatePr:
         from gate import github
 
         with patch.object(
-            github, "_gh",
+            github,
+            "_gh",
             side_effect=sp.CalledProcessError(1, "gh", stderr="boom"),
         ):
             assert github.create_pr("o/r", "t", "b", "head", "main") is None
@@ -281,7 +334,8 @@ class TestGithubBranchExists:
         from gate import github
 
         with patch.object(
-            github, "_gh",
+            github,
+            "_gh",
             side_effect=sp.CalledProcessError(1, "gh", stderr=""),
         ):
             assert github.branch_exists("o/r", "gate/specs/pr1-abc") is False
@@ -327,9 +381,7 @@ class TestOrchestratorPromoteSpecTests:
             orch._promote_spec_tests(MagicMock(data={"decision": "approve"}))
         csp.assert_not_called()
 
-    def test_qualifying_tests_copied_and_spec_pr_invoked(
-        self, tmp_path, monkeypatch
-    ):
+    def test_qualifying_tests_copied_and_spec_pr_invoked(self, tmp_path, monkeypatch):
         config = _make_config(persist=True)
         orch = self._make_orchestrator(tmp_path, config)
         spec_src = tmp_path / "__gate_test_foo.ts"
@@ -343,6 +395,7 @@ class TestOrchestratorPromoteSpecTests:
         sidecar_dir.mkdir()
 
         import gate.state as state_mod
+
         monkeypatch.setattr(state_mod, "get_pr_state_dir", lambda *a, **kw: sidecar_dir)
 
         with patch("gate.spec_pr.create_spec_pr", return_value=99) as csp:
@@ -364,9 +417,9 @@ class TestOrchestratorPromoteSpecTests:
         sidecar_dir = tmp_path / "state"
         sidecar_dir.mkdir()
         import gate.state as state_mod
+
         monkeypatch.setattr(state_mod, "get_pr_state_dir", lambda *a, **kw: sidecar_dir)
-        with patch("gate.spec_pr.create_spec_pr",
-                   side_effect=RuntimeError("gh 500")):
+        with patch("gate.spec_pr.create_spec_pr", side_effect=RuntimeError("gh 500")):
             # MUST NOT raise
             orch._promote_spec_tests(MagicMock(data={"decision": "approve"}))
 
@@ -396,6 +449,7 @@ class TestCleanupUnderscoreGateTests:
 
     def test_no_workspace_is_noop(self):
         from gate.orchestrator import ReviewOrchestrator
+
         orch = ReviewOrchestrator.__new__(ReviewOrchestrator)
         orch.workspace = None
         orch._cleanup_underscore_gate_tests()  # no crash

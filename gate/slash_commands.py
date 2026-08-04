@@ -189,9 +189,7 @@ def _format_status(reviews: list[dict], queue: list[dict], pr_number: int) -> st
         stage = active.get("stage", "?")
         status = active.get("status", "?")
         return f"PR #{pr_number}: **{status}** at stage `{stage}`."
-    queued = next(
-        (i for i, q in enumerate(queue) if q.get("pr_number") == pr_number), None
-    )
+    queued = next((i for i, q in enumerate(queue) if q.get("pr_number") == pr_number), None)
     if queued is not None:
         return f"PR #{pr_number}: queued at position #{queued + 1} of {len(queue)}."
     return f"PR #{pr_number}: not currently active or queued. Push to re-trigger."
@@ -243,9 +241,13 @@ def dispatch_command(
     authorised, reject_reason = _is_authorised(cmd, repo_config)
     if not authorised:
         record_action(
-            verb=cmd.verb, actor=cmd.commenter, repo=cmd.repo,
-            pr_number=cmd.pr_number, args={"raw_args": cmd.args},
-            outcome="rejected", detail=reject_reason,
+            verb=cmd.verb,
+            actor=cmd.commenter,
+            repo=cmd.repo,
+            pr_number=cmd.pr_number,
+            args={"raw_args": cmd.args},
+            outcome="rejected",
+            detail=reject_reason,
         )
         if reject_reason.startswith("no_allowed_commanders_configured"):
             return "rejected", (
@@ -264,8 +266,12 @@ def dispatch_command(
         queue = gate_client.list_queue(socket_path)
         reply = _format_status(reviews, queue, cmd.pr_number)
         record_action(
-            verb=cmd.verb, actor=cmd.commenter, repo=cmd.repo,
-            pr_number=cmd.pr_number, args={}, outcome="ok",
+            verb=cmd.verb,
+            actor=cmd.commenter,
+            repo=cmd.repo,
+            pr_number=cmd.pr_number,
+            args={},
+            outcome="ok",
         )
         return "ok", reply
 
@@ -276,8 +282,11 @@ def dispatch_command(
         verdict = _latest_verdict_for_pr(cmd.repo, cmd.pr_number)
         reply = _format_explain(verdict, finding_id)
         record_action(
-            verb=cmd.verb, actor=cmd.commenter, repo=cmd.repo,
-            pr_number=cmd.pr_number, args={"finding_id": finding_id},
+            verb=cmd.verb,
+            actor=cmd.commenter,
+            repo=cmd.repo,
+            pr_number=cmd.pr_number,
+            args={"finding_id": finding_id},
             outcome="ok",
         )
         return "ok", reply
@@ -291,21 +300,26 @@ def dispatch_command(
             pr_info = get_pr_info(cmd.repo, cmd.pr_number)
         except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
             record_action(
-                verb=cmd.verb, actor=cmd.commenter, repo=cmd.repo,
-                pr_number=cmd.pr_number, args={}, outcome="error",
+                verb=cmd.verb,
+                actor=cmd.commenter,
+                repo=cmd.repo,
+                pr_number=cmd.pr_number,
+                args={},
+                outcome="error",
                 detail=f"get_pr_info failed: {e}",
             )
-            return "error", (
-                f":x: Could not fetch PR #{cmd.pr_number} head info; "
-                "rerun aborted."
-            )
+            return "error", (f":x: Could not fetch PR #{cmd.pr_number} head info; rerun aborted.")
 
         head_sha = str(pr_info.get("headRefOid") or "")
         branch = str(pr_info.get("headRefName") or "")
         if not head_sha or not branch:
             record_action(
-                verb=cmd.verb, actor=cmd.commenter, repo=cmd.repo,
-                pr_number=cmd.pr_number, args={}, outcome="rejected",
+                verb=cmd.verb,
+                actor=cmd.commenter,
+                repo=cmd.repo,
+                pr_number=cmd.pr_number,
+                args={},
+                outcome="rejected",
                 detail="missing_head_sha_or_branch",
             )
             return "rejected", (
@@ -326,36 +340,41 @@ def dispatch_command(
             wait_for_response=False,
         )
         record_action(
-            verb=cmd.verb, actor=cmd.commenter, repo=cmd.repo,
-            pr_number=cmd.pr_number, args={}, outcome="ok",
+            verb=cmd.verb,
+            actor=cmd.commenter,
+            repo=cmd.repo,
+            pr_number=cmd.pr_number,
+            args={},
+            outcome="ok",
         )
-        return "ok", (
-            ":arrows_counterclockwise: Re-running review for PR "
-            f"#{cmd.pr_number}."
-        )
+        return "ok", (f":arrows_counterclockwise: Re-running review for PR #{cmd.pr_number}.")
 
     if cmd.verb == "skip":
         reason = " ".join(cmd.args).strip()
         if not reason:
-            return "rejected", (
-                "`/gate skip` requires a reason: `/gate skip <reason>`."
-            )
+            return "rejected", ("`/gate skip` requires a reason: `/gate skip <reason>`.")
         try:
             _add_label(cmd.repo, cmd.pr_number, "gate-skip")
         except subprocess.CalledProcessError as e:
             record_action(
-                verb=cmd.verb, actor=cmd.commenter, repo=cmd.repo,
-                pr_number=cmd.pr_number, args={"reason": reason},
-                outcome="error", detail=str(e),
+                verb=cmd.verb,
+                actor=cmd.commenter,
+                repo=cmd.repo,
+                pr_number=cmd.pr_number,
+                args={"reason": reason},
+                outcome="error",
+                detail=str(e),
             )
             return "error", f":x: Failed to add `gate-skip` label: {e}"
         record_action(
-            verb=cmd.verb, actor=cmd.commenter, repo=cmd.repo,
-            pr_number=cmd.pr_number, args={"reason": reason}, outcome="ok",
+            verb=cmd.verb,
+            actor=cmd.commenter,
+            repo=cmd.repo,
+            pr_number=cmd.pr_number,
+            args={"reason": reason},
+            outcome="ok",
         )
-        return "ok", (
-            f":fast_forward: Added `gate-skip` label. Reason: _{reason}_"
-        )
+        return "ok", (f":fast_forward: Added `gate-skip` label. Reason: _{reason}_")
 
     if cmd.verb == "bypass":
         if not cmd.args:
@@ -375,14 +394,22 @@ def dispatch_command(
             _add_label(cmd.repo, cmd.pr_number, "gate-emergency-bypass")
         except subprocess.CalledProcessError as e:
             record_action(
-                verb=cmd.verb, actor=cmd.commenter, repo=cmd.repo,
-                pr_number=cmd.pr_number, args={"link": link},
-                outcome="error", detail=str(e),
+                verb=cmd.verb,
+                actor=cmd.commenter,
+                repo=cmd.repo,
+                pr_number=cmd.pr_number,
+                args={"link": link},
+                outcome="error",
+                detail=str(e),
             )
             return "error", f":x: Failed to add `gate-emergency-bypass` label: {e}"
         record_action(
-            verb=cmd.verb, actor=cmd.commenter, repo=cmd.repo,
-            pr_number=cmd.pr_number, args={"link": link}, outcome="ok",
+            verb=cmd.verb,
+            actor=cmd.commenter,
+            repo=cmd.repo,
+            pr_number=cmd.pr_number,
+            args={"link": link},
+            outcome="ok",
         )
         return "ok", (
             f":rotating_light: Bypass recorded for `@{cmd.commenter}`: {link}\n"
@@ -397,21 +424,33 @@ def _add_label(repo: str, pr_number: int, label: str) -> None:
     """Add a label to a PR via gh. Imported lazily to keep tests fast."""
     from gate.github import _gh
 
-    _gh([
-        "pr", "edit", str(pr_number),
-        "--repo", repo,
-        "--add-label", label,
-    ])
+    _gh(
+        [
+            "pr",
+            "edit",
+            str(pr_number),
+            "--repo",
+            repo,
+            "--add-label",
+            label,
+        ]
+    )
 
 
 def _post_reply(repo: str, pr_number: int, body: str) -> None:
     from gate.github import _gh
 
-    _gh([
-        "pr", "comment", str(pr_number),
-        "--repo", repo,
-        "--body", body,
-    ])
+    _gh(
+        [
+            "pr",
+            "comment",
+            str(pr_number),
+            "--repo",
+            repo,
+            "--body",
+            body,
+        ]
+    )
 
 
 # ── Poller ────────────────────────────────────────────────────
@@ -473,9 +512,7 @@ class CommentPoller:
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
-        self._thread = threading.Thread(
-            target=self._run, name="slash-poller", daemon=True
-        )
+        self._thread = threading.Thread(target=self._run, name="slash-poller", daemon=True)
         self._thread.start()
         logger.info(
             f"Slash command poller started for {len(self._repos)} repo(s); "
@@ -495,9 +532,7 @@ class CommentPoller:
                 try:
                     self._poll_repo(repo_cfg)
                 except Exception:
-                    logger.exception(
-                        f"Slash poll failed for {repo_cfg.get('name', '?')}"
-                    )
+                    logger.exception(f"Slash poll failed for {repo_cfg.get('name', '?')}")
             self._stop.wait(timeout=self._interval_s)
 
     def _poll_repo(self, repo_cfg: dict) -> None:
@@ -511,11 +546,13 @@ class CommentPoller:
         if last_seen:
             params += ["-F", f"since={last_seen}"]
         try:
-            out = _gh([
-                "api",
-                f"repos/{repo}/issues/comments",
-                *params,
-            ])
+            out = _gh(
+                [
+                    "api",
+                    f"repos/{repo}/issues/comments",
+                    *params,
+                ]
+            )
         except subprocess.CalledProcessError as e:
             logger.warning(f"Slash poll: {repo} API call failed: {e}")
             return
@@ -580,9 +617,7 @@ class CommentPoller:
             _post_reply(repo, pr_number, reply)
         except subprocess.CalledProcessError:
             logger.exception(f"Slash reply post failed for {repo}#{pr_number}")
-        logger.info(
-            f"slash {repo}#{pr_number} /{cmd.verb} from @{commenter}: {outcome}"
-        )
+        logger.info(f"slash {repo}#{pr_number} /{cmd.verb} from @{commenter}: {outcome}")
 
 
 _ISSUE_URL_PR_RE = re.compile(r"/repos/[^/]+/[^/]+/issues/(\d+)$")

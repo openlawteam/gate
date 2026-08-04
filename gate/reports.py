@@ -65,9 +65,7 @@ def parse_since(spec: str) -> _dt.timedelta:
         raise ValueError(f"--since requires non-empty value, got {spec!r}")
     m = _RELATIVE_DURATION_RE.match(spec)
     if not m:
-        raise ValueError(
-            f"--since must look like '7d', '24h', '30m', got {spec!r}"
-        )
+        raise ValueError(f"--since must look like '7d', '24h', '30m', got {spec!r}")
     n = int(m.group(1))
     unit = m.group(2).lower()
     return _dt.timedelta(seconds=n * _DURATION_UNIT_S[unit])
@@ -76,13 +74,17 @@ def parse_since(spec: str) -> _dt.timedelta:
 # ── Loading ─────────────────────────────────────────────────
 
 
-_REVIEW_DECISIONS = frozenset({
-    "approve", "approve_with_notes", "request_changes",
-    "error", "skip", "cancelled",
-})
-_FIX_DECISIONS = frozenset(
-    {"fix_succeeded", "fix_failed", "fix_no_op", "fix_skipped"}
+_REVIEW_DECISIONS = frozenset(
+    {
+        "approve",
+        "approve_with_notes",
+        "request_changes",
+        "error",
+        "skip",
+        "cancelled",
+    }
 )
+_FIX_DECISIONS = frozenset({"fix_succeeded", "fix_failed", "fix_no_op", "fix_skipped"})
 
 
 def _is_review(row: dict) -> bool:
@@ -202,18 +204,12 @@ def summarize(
     review_rows = [r for r in rows if _is_review(r)]
     fix_rows = [r for r in rows if _is_fix_followup(r)]
 
-    decisions: Counter[str] = Counter(
-        str(r.get("decision", "unknown")) for r in review_rows
-    )
+    decisions: Counter[str] = Counter(str(r.get("decision", "unknown")) for r in review_rows)
     by_repo: dict[str, Counter[str]] = defaultdict(Counter)
     for r in review_rows:
-        by_repo[str(r.get("repo", "") or "(unknown)")][
-            str(r.get("decision", "unknown"))
-        ] += 1
+        by_repo[str(r.get("repo", "") or "(unknown)")][str(r.get("decision", "unknown"))] += 1
 
-    fix_outcomes: Counter[str] = Counter(
-        str(r.get("decision", "unknown")) for r in fix_rows
-    )
+    fix_outcomes: Counter[str] = Counter(str(r.get("decision", "unknown")) for r in fix_rows)
     succeeded = fix_outcomes.get("fix_succeeded", 0)
     failed = fix_outcomes.get("fix_failed", 0)
     # Exclude ``fix_no_op`` and ``fix_skipped`` from the rate
@@ -263,9 +259,7 @@ def summarize(
             if isinstance(cat, str):
                 category_totals[cat] += 1
 
-    fast_track = sum(
-        1 for r in review_rows if r.get("fast_track_eligible") is True
-    )
+    fast_track = sum(1 for r in review_rows if r.get("fast_track_eligible") is True)
 
     return Report(
         since=since_label,
@@ -316,8 +310,7 @@ def format_json(report: Report) -> dict[str, Any]:
         },
         "findings_by_severity": report.findings_by_severity,
         "top_finding_categories": [
-            {"category": cat, "count": count}
-            for cat, count in report.top_finding_categories
+            {"category": cat, "count": count} for cat, count in report.top_finding_categories
         ],
     }
 
@@ -358,13 +351,9 @@ def format_text(report: Report) -> str:
     lines.append("")
     lines.append("Decisions")
     if report.decisions:
-        for decision, count in sorted(
-            report.decisions.items(), key=lambda kv: (-kv[1], kv[0])
-        ):
+        for decision, count in sorted(report.decisions.items(), key=lambda kv: (-kv[1], kv[0])):
             pct = (count / report.total_reviews) if report.total_reviews else 0
-            lines.append(
-                f"  {decision:<20} {_fmt_int(count):>6}   {pct * 100:5.1f}%"
-            )
+            lines.append(f"  {decision:<20} {_fmt_int(count):>6}   {pct * 100:5.1f}%")
     else:
         lines.append("  (none)")
 
@@ -375,27 +364,24 @@ def format_text(report: Report) -> str:
             counts = report.decisions_by_repo[repo]
             total = sum(counts.values())
             inline = "  ".join(
-                f"{d}:{c}"
-                for d, c in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+                f"{d}:{c}" for d, c in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
             )
             lines.append(f"  {repo}  ({total} total) — {inline}")
 
     if report.fix_outcomes:
         lines.append("")
         lines.append("Fix pipeline")
-        for outcome, count in sorted(
-            report.fix_outcomes.items(), key=lambda kv: (-kv[1], kv[0])
-        ):
+        for outcome, count in sorted(report.fix_outcomes.items(), key=lambda kv: (-kv[1], kv[0])):
             lines.append(f"  {outcome:<20} {_fmt_int(count):>6}")
         if report.fix_success_rate is not None:
-            lines.append(
-                f"  success_rate         {_fmt_pct(report.fix_success_rate):>6}"
-            )
+            lines.append(f"  success_rate         {_fmt_pct(report.fix_success_rate):>6}")
 
     lines.append("")
     lines.append("Review time")
-    lines.append(f"  avg: {_fmt_seconds(report.avg_review_seconds):<10}"
-                 f"  p95: {_fmt_seconds(report.p95_review_seconds)}")
+    lines.append(
+        f"  avg: {_fmt_seconds(report.avg_review_seconds):<10}"
+        f"  p95: {_fmt_seconds(report.p95_review_seconds)}"
+    )
 
     if report.findings_by_severity:
         lines.append("")

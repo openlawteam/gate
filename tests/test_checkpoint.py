@@ -20,11 +20,15 @@ from gate import checkpoint
 def _git(*args: str, cwd: Path) -> None:
     subprocess.run(
         ["git", *args],
-        cwd=str(cwd), check=True, capture_output=True,
+        cwd=str(cwd),
+        check=True,
+        capture_output=True,
         env={
             **os.environ,
-            "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "t@e",
-            "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "t@e",
+            "GIT_AUTHOR_NAME": "test",
+            "GIT_AUTHOR_EMAIL": "t@e",
+            "GIT_COMMITTER_NAME": "test",
+            "GIT_COMMITTER_EMAIL": "t@e",
         },
     )
 
@@ -32,7 +36,10 @@ def _git(*args: str, cwd: Path) -> None:
 def _head(cwd: Path) -> str:
     r = subprocess.run(
         ["git", "rev-parse", "HEAD"],
-        cwd=str(cwd), capture_output=True, text=True, check=True,
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        check=True,
     )
     return r.stdout.strip()
 
@@ -60,9 +67,14 @@ def repo(tmp_path, monkeypatch):
 def stub_build_ok(monkeypatch):
     def _ok(_w, _touched, config=None):
         return {
-            "pass": True, "typecheck_exit": 0, "typecheck_tail": "",
-            "lint_exit": 0, "lint_tail": "", "files": [],
+            "pass": True,
+            "typecheck_exit": 0,
+            "typecheck_tail": "",
+            "lint_exit": 0,
+            "lint_tail": "",
+            "files": [],
         }
+
     monkeypatch.setattr(checkpoint, "scoped_build_verify", _ok)
 
 
@@ -70,9 +82,14 @@ def stub_build_ok(monkeypatch):
 def stub_build_fail(monkeypatch):
     def _fail(_w, _touched, config=None):
         return {
-            "pass": False, "typecheck_exit": 2, "typecheck_tail": "TS2304",
-            "lint_exit": 0, "lint_tail": "", "files": [],
+            "pass": False,
+            "typecheck_exit": 2,
+            "typecheck_tail": "TS2304",
+            "lint_exit": 0,
+            "lint_tail": "",
+            "files": [],
         }
+
     monkeypatch.setattr(checkpoint, "scoped_build_verify", _fail)
 
 
@@ -121,9 +138,7 @@ class TestSave:
         assert rc == 0
         assert len(captured.out.strip()) == 40  # git sha
 
-    def test_build_failure_exits_5_and_keeps_commit(
-        self, repo, stub_build_fail, capsys
-    ):
+    def test_build_failure_exits_5_and_keeps_commit(self, repo, stub_build_fail, capsys):
         baseline = _head(repo)
         (repo / "a.txt").write_text("1")
         rc = checkpoint.cli_main(["save", "--name", "scope1"])
@@ -177,21 +192,28 @@ class TestFinalize:
         (repo / "b.txt").write_text("2")
         assert checkpoint.cli_main(["save", "--name", "s2"]) == 0
 
-        assert (
-            checkpoint.cli_main(["finalize", "--message", "fix(gate): done"])
-            == 0
-        )
+        assert checkpoint.cli_main(["finalize", "--message", "fix(gate): done"]) == 0
 
         # One commit now sits between baseline and HEAD.
-        log = subprocess.run(
-            ["git", "log", "--pretty=%H %s", f"{baseline}..HEAD"],
-            cwd=str(repo), capture_output=True, text=True, check=True,
-        ).stdout.strip().splitlines()
+        log = (
+            subprocess.run(
+                ["git", "log", "--pretty=%H %s", f"{baseline}..HEAD"],
+                cwd=str(repo),
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            .stdout.strip()
+            .splitlines()
+        )
         assert len(log) == 1
         assert log[0].endswith("fix(gate): done")
 
     def test_finalize_reports_correct_checkpoint_count(
-        self, repo, stub_build_ok, monkeypatch,
+        self,
+        repo,
+        stub_build_ok,
+        monkeypatch,
     ):
         """Regression guard for PR #222 triage confusion.
 
@@ -215,10 +237,7 @@ class TestFinalize:
             lambda _ws, msg: progress.append(msg),
         )
 
-        assert (
-            checkpoint.cli_main(["finalize", "--message", "fix(gate): done"])
-            == 0
-        )
+        assert checkpoint.cli_main(["finalize", "--message", "fix(gate): done"]) == 0
 
         finalize_lines = [m for m in progress if "finalized" in m]
         assert finalize_lines, f"no finalize progress message seen in {progress}"
@@ -230,31 +249,46 @@ class TestFinalize:
         (repo / "gate-commit-message.md").write_text("fix(gate): from file\n")
 
         assert (
-            checkpoint.cli_main([
-                "finalize", "--message-file", "gate-commit-message.md",
-            ])
+            checkpoint.cli_main(
+                [
+                    "finalize",
+                    "--message-file",
+                    "gate-commit-message.md",
+                ]
+            )
             == 0
         )
 
         log = subprocess.run(
             ["git", "log", "--pretty=%s", "-1"],
-            cwd=str(repo), capture_output=True, text=True, check=True,
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout.strip()
         assert log == "fix(gate): from file"
-        assert not (repo / "gate-commit-message.md").exists(), \
+        assert not (repo / "gate-commit-message.md").exists(), (
             "message file should be deleted after finalize consumes it"
+        )
 
     def test_missing_message_file_exits_2(self, repo, stub_build_ok):
         (repo / "a.txt").write_text("1")
         assert checkpoint.cli_main(["save", "--name", "s1"]) == 0
 
-        rc = checkpoint.cli_main([
-            "finalize", "--message-file", "nonexistent.md",
-        ])
+        rc = checkpoint.cli_main(
+            [
+                "finalize",
+                "--message-file",
+                "nonexistent.md",
+            ]
+        )
         assert rc == 2
 
     def test_finalize_reports_single_checkpoint(
-        self, repo, stub_build_ok, monkeypatch,
+        self,
+        repo,
+        stub_build_ok,
+        monkeypatch,
     ):
         """Count stays accurate for the edge case of exactly one sub-scope."""
         (repo / "a.txt").write_text("1")
@@ -267,10 +301,7 @@ class TestFinalize:
             lambda _ws, msg: progress.append(msg),
         )
 
-        assert (
-            checkpoint.cli_main(["finalize", "--message", "fix(gate): once"])
-            == 0
-        )
+        assert checkpoint.cli_main(["finalize", "--message", "fix(gate): once"]) == 0
 
         finalize_lines = [m for m in progress if "finalized" in m]
         assert finalize_lines
@@ -291,6 +322,7 @@ class TestScopedBuildVerifyConfigContract:
         raise ``TypeError`` from Python rather than silently triggering
         an implicit ``load_config()``."""
         import inspect
+
         sig = inspect.signature(checkpoint.scoped_build_verify)
         cfg_param = sig.parameters["config"]
         # Required (no default) — a reversion to ``config=None`` would
@@ -301,11 +333,14 @@ class TestScopedBuildVerifyConfigContract:
         )
 
     def test_cmd_save_threads_config_into_scoped_build_verify(
-        self, repo, monkeypatch,
+        self,
+        repo,
+        monkeypatch,
     ):
         """_cmd_save should resolve config once and pass it positionally
         to scoped_build_verify — not leave the helper to load it."""
         from gate import config as gate_config
+
         sentinel = {"repo": {"default_branch": "main"}, "fix_pipeline": {}}
         monkeypatch.setattr(gate_config, "load_config", lambda: sentinel)
 
@@ -314,8 +349,12 @@ class TestScopedBuildVerifyConfigContract:
         def _spy(_w, _touched, cfg):
             received.append(cfg)
             return {
-                "pass": True, "typecheck_exit": 0, "typecheck_tail": "",
-                "lint_exit": 0, "lint_tail": "", "files": [],
+                "pass": True,
+                "typecheck_exit": 0,
+                "typecheck_tail": "",
+                "lint_exit": 0,
+                "lint_tail": "",
+                "files": [],
             }
 
         monkeypatch.setattr(checkpoint, "scoped_build_verify", _spy)
@@ -348,6 +387,7 @@ class TestScopedBuildVerifyConfigContract:
 class TestHopperModeSectionPromptFile:
     def test_fix_senior_hopper_prompt_exists(self):
         from gate import prompt as prompt_mod
+
         text = prompt_mod.load("fix-senior-hopper")
         assert "HOPPER MODE" in text
         assert "gate checkpoint save" in text
@@ -357,13 +397,15 @@ class TestHopperModeSectionPromptFile:
         """``_build_hopper_mode_section("hopper")`` must return the
         on-disk prompt, not a Python constant."""
         from gate import prompt as prompt_mod
+
         expected = prompt_mod.load("fix-senior-hopper")
-        assert (
-            prompt_mod._build_hopper_mode_section("hopper") == expected
-        ), "hopper-mode addendum drifted from prompts/fix-senior-hopper.md"
+        assert prompt_mod._build_hopper_mode_section("hopper") == expected, (
+            "hopper-mode addendum drifted from prompts/fix-senior-hopper.md"
+        )
 
     def test_hopper_constant_removed_from_prompt_module(self):
         from gate import prompt as prompt_mod
+
         assert not hasattr(prompt_mod, "_HOPPER_MODE_SECTION"), (
             "_HOPPER_MODE_SECTION should live in "
             "prompts/fix-senior-hopper.md, not as a Python constant."
@@ -372,6 +414,7 @@ class TestHopperModeSectionPromptFile:
     def test_polish_legacy_mode_returns_empty(self):
         """Back-compat: flipping ``fix_pipeline.mode`` off returns ''."""
         from gate import prompt as prompt_mod
+
         assert prompt_mod._build_hopper_mode_section("polish_legacy") == ""
         assert prompt_mod._build_hopper_mode_section("") == ""
 
@@ -384,14 +427,13 @@ class TestScopedLintExtensionFilter:
     artifacts (``*.codex.log``, ``postconditions.json`` …) to ruff/eslint.
     """
 
-    def _fake_profile(
-        self, monkeypatch: pytest.MonkeyPatch, lint_cmd: str
-    ) -> list[list[str]]:
+    def _fake_profile(self, monkeypatch: pytest.MonkeyPatch, lint_cmd: str) -> list[list[str]]:
         """Stub ``profiles.resolve_profile`` and capture what the runner saw."""
         from gate import profiles
 
         monkeypatch.setattr(
-            profiles, "resolve_profile",
+            profiles,
+            "resolve_profile",
             lambda _cfg, _ws: {"lint_cmd": lint_cmd, "project_type": "python"},
         )
         calls: list[list[str]] = []
@@ -433,9 +475,7 @@ class TestScopedLintExtensionFilter:
 
     def test_unknown_linter_falls_back_to_full_command(self, tmp_path, monkeypatch):
         calls = self._fake_profile(monkeypatch, "mylint --fix")
-        exit_code, _ = checkpoint._scoped_lint(
-            tmp_path, {}, ["postconditions.json", "a.py"]
-        )
+        exit_code, _ = checkpoint._scoped_lint(tmp_path, {}, ["postconditions.json", "a.py"])
         assert exit_code == 0
         # Unknown linter path: full command string passed through, no files appended.
         assert calls[0] == ["mylint --fix"]
@@ -445,7 +485,8 @@ class TestScopedLintExtensionFilter:
         from gate import profiles
 
         monkeypatch.setattr(
-            profiles, "resolve_profile",
+            profiles,
+            "resolve_profile",
             lambda _cfg, _ws: {
                 "lint_cmd": "npm run lint:check",
                 "scoped_lint_cmd": "npm exec eslint --",

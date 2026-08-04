@@ -458,12 +458,11 @@ class ReviewRunner:
         # findings.json fast path or the raw-transcript fallback, so
         # the classifier guarantee holds uniformly. Skipped for stages
         # that don't emit findings in the expected shape (e.g. fix).
-        if (
-            isinstance(findings, dict)
-            and isinstance(findings.get("findings"), list)
-        ):
+        if isinstance(findings, dict) and isinstance(findings.get("findings"), list):
             findings["findings"] = validate_introduced_by_pr(
-                findings["findings"], self.workspace, self.stage,
+                findings["findings"],
+                self.workspace,
+                self.stage,
             )
 
         # Write the result envelope that the orchestrator polls for
@@ -583,11 +582,7 @@ class StructuredRunner:
 
         def _watch() -> None:
             while not stop_watchdog.wait(0.5):
-                if (
-                    cancelled is not None
-                    and cancelled.is_set()
-                    and proc.poll() is None
-                ):
+                if cancelled is not None and cancelled.is_set() and proc.poll() is None:
                     proc.terminate()
                     try:
                         proc.wait(timeout=5)
@@ -597,9 +592,7 @@ class StructuredRunner:
 
         watchdog: threading.Thread | None = None
         if cancelled is not None:
-            watchdog = threading.Thread(
-                target=_watch, name=f"struct-watch-{stage}", daemon=True
-            )
+            watchdog = threading.Thread(target=_watch, name=f"struct-watch-{stage}", daemon=True)
             watchdog.start()
 
         try:
@@ -623,13 +616,9 @@ class StructuredRunner:
         if proc.returncode != 0:
             stderr_text = stderr or ""
             if _is_rate_limited(stderr_text):
-                return StageResult(
-                    stage=stage, success=False, data={}, is_rate_limited=True
-                )
+                return StageResult(stage=stage, success=False, data={}, is_rate_limited=True)
             if _is_transient(stderr_text):
-                return StageResult(
-                    stage=stage, success=False, data={}, is_transient=True
-                )
+                return StageResult(stage=stage, success=False, data={}, is_transient=True)
             return StageResult.fallback(stage)
 
         # Parse structured output from stdout
@@ -717,8 +706,7 @@ def run_with_retry(
         if result.is_rate_limited and attempt < max_retries:
             delay = base_delay * (2 ** (attempt - 1)) * (0.5 + random.random())
             logger.info(
-                f"[{stage}] Rate limited, attempt {attempt}/{max_retries}, "
-                f"waiting {delay:.0f}s"
+                f"[{stage}] Rate limited, attempt {attempt}/{max_retries}, waiting {delay:.0f}s"
             )
             if _sleep_or_cancel(delay):
                 return StageResult(stage=stage, success=False, cancelled=True)
@@ -727,8 +715,7 @@ def run_with_retry(
         if result.is_transient and attempt < max_retries:
             delay = transient_delay * (2 ** (attempt - 1)) * (0.5 + random.random())
             logger.info(
-                f"[{stage}] Transient error, attempt {attempt}/{max_retries}, "
-                f"waiting {delay:.0f}s"
+                f"[{stage}] Transient error, attempt {attempt}/{max_retries}, waiting {delay:.0f}s"
             )
             if _sleep_or_cancel(delay):
                 return StageResult(stage=stage, success=False, cancelled=True)

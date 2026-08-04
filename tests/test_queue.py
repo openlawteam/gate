@@ -163,9 +163,7 @@ class TestConfigurableConcurrency:
 
     def test_defaults_to_three(self, sample_config, tmp_path):
         with patch("gate.queue.ReviewOrchestrator"):
-            q = ReviewQueue(
-                config=sample_config, socket_path=tmp_path / "s.sock"
-            )
+            q = ReviewQueue(config=sample_config, socket_path=tmp_path / "s.sock")
             assert q._pool._max_workers == DEFAULT_MAX_CONCURRENT
 
     def test_respects_config_override(self, sample_config, tmp_path):
@@ -213,11 +211,20 @@ class TestDispatchCancelsSupersededReview:
             token = q._enqueue_counter
             q._latest_token[key] = token
 
-        q._queue.put((
-            time.time(), 42, token,
-            {"repo": "test-org/test-repo", "head_sha": "sha",
-             "event": "sync", "branch": "main", "labels": []},
-        ))
+        q._queue.put(
+            (
+                time.time(),
+                42,
+                token,
+                {
+                    "repo": "test-org/test-repo",
+                    "head_sha": "sha",
+                    "event": "sync",
+                    "branch": "main",
+                    "labels": [],
+                },
+            )
+        )
 
         q.start()
         time.sleep(0.4)
@@ -270,9 +277,7 @@ class TestDuplicateEnqueueSupersede:
                 time.sleep(0.02)
             # Only one orchestrator should ever be constructed.
             time.sleep(0.1)
-            assert len(orchestrators) == 1, (
-                f"expected 1 orchestrator, got {len(orchestrators)}"
-            )
+            assert len(orchestrators) == 1, f"expected 1 orchestrator, got {len(orchestrators)}"
             # And it should be for the newer head_sha.
             call_kwargs = MockOrch.call_args_list[0].kwargs
             assert call_kwargs["head_sha"] == "sha2"
@@ -332,9 +337,7 @@ class TestRapidTriplePush:
 
     @patch("gate.queue.quota_mod")
     @patch("gate.queue.ReviewOrchestrator")
-    def test_only_latest_survives(
-        self, MockOrch, mock_quota, sample_config, tmp_path
-    ):
+    def test_only_latest_survives(self, MockOrch, mock_quota, sample_config, tmp_path):
         import threading
 
         mock_quota.check_quota.return_value = {"quota_ok": True}

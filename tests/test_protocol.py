@@ -97,10 +97,7 @@ def test_make_envelope_has_required_fields():
 
 def test_envelope_id_is_monotonic():
     server = GateServer(_short_sock_path())
-    ids = [
-        server._make_envelope({"type": "queue_updated", "queue": []})["id"]
-        for _ in range(50)
-    ]
+    ids = [server._make_envelope({"type": "queue_updated", "queue": []})["id"] for _ in range(50)]
     assert ids == list(range(1, 51))
 
 
@@ -115,13 +112,15 @@ def test_envelope_header_keys_come_first():
 def test_envelope_payload_type_overrides_collision():
     """If payload sneaks in v/id/ts they must not overwrite the envelope."""
     server = GateServer(_short_sock_path())
-    env = server._make_envelope({
-        "type": "review_updated",
-        "v": 999,
-        "id": 999,
-        "ts": 0,
-        "review": {},
-    })
+    env = server._make_envelope(
+        {
+            "type": "review_updated",
+            "v": 999,
+            "id": 999,
+            "ts": 0,
+            "review": {},
+        }
+    )
     assert env["v"] == 1
     assert env["id"] == 1
     assert env["ts"] != 0
@@ -166,8 +165,11 @@ def test_all_mutation_types_get_enveloped(running_server):
     server.broadcast({"type": "health_updated", "health": {}})
 
     expected = {
-        "review_updated", "review_completed", "review_cancelled",
-        "queue_updated", "health_updated",
+        "review_updated",
+        "review_completed",
+        "review_cancelled",
+        "queue_updated",
+        "health_updated",
     }
     msgs = _drain(conn, expected, timeout=3.0)
     by_type = {m["type"]: m for m in msgs if m.get("type") in expected}

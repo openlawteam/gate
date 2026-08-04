@@ -24,6 +24,7 @@ class TestCheckPrerequisites:
     def test_required_tool_missing(self, mock_which, mock_run):
         def which_side_effect(cmd):
             return None if cmd == "git" else "/usr/bin/tool"
+
         mock_which.side_effect = which_side_effect
         mock_run.return_value = MagicMock(stdout="v1.0\n", returncode=0)
 
@@ -37,6 +38,7 @@ class TestCheckPrerequisites:
     def test_optional_tool_missing(self, mock_which, mock_run):
         def which_side_effect(cmd):
             return None if cmd == "node" else "/usr/bin/tool"
+
         mock_which.side_effect = which_side_effect
         mock_run.return_value = MagicMock(stdout="v1.0\n", returncode=0)
 
@@ -103,14 +105,17 @@ class TestPromptRepoConfig:
     @patch("gate.setup.profiles.detect_project_type", return_value="node")
     @patch("gate.setup.detect_gh_user", return_value="testuser")
     @patch("gate.setup.validate_clone_path", return_value=(True, "/home/user/myrepo"))
-    @patch("builtins.input", side_effect=[
-        "myorg/myrepo",     # repo
-        "/home/user/myrepo",  # clone_path
-        "",                   # branch (default)
-        "",                   # bot (default)
-        "",                   # worktree_base (default)
-        "",                   # project type confirm (Y)
-    ])
+    @patch(
+        "builtins.input",
+        side_effect=[
+            "myorg/myrepo",  # repo
+            "/home/user/myrepo",  # clone_path
+            "",  # branch (default)
+            "",  # bot (default)
+            "",  # worktree_base (default)
+            "",  # project type confirm (Y)
+        ],
+    )
     def test_valid_inputs(self, _inp, _val, _gh, _detect):
         result = setup.prompt_repo_config()
         assert result["name"] == "myorg/myrepo"
@@ -124,15 +129,18 @@ class TestPromptRepoConfig:
     @patch("gate.setup.profiles.detect_project_type", return_value="none")
     @patch("gate.setup.detect_gh_user", return_value=None)
     @patch("gate.setup.validate_clone_path", return_value=(True, "/tmp/repo"))
-    @patch("builtins.input", side_effect=[
-        "noslash",        # invalid
-        "org/repo",       # valid
-        "/tmp/repo",      # clone_path
-        "develop",        # branch
-        "",               # bot (defaults to gate-bot since gh user is None)
-        "/tmp/wt",        # worktree_base
-        "python",         # project type (manual since detect returned "none")
-    ])
+    @patch(
+        "builtins.input",
+        side_effect=[
+            "noslash",  # invalid
+            "org/repo",  # valid
+            "/tmp/repo",  # clone_path
+            "develop",  # branch
+            "",  # bot (defaults to gate-bot since gh user is None)
+            "/tmp/wt",  # worktree_base
+            "python",  # project type (manual since detect returned "none")
+        ],
+    )
     def test_invalid_repo_then_valid(self, _inp, _val, _gh, _detect):
         result = setup.prompt_repo_config()
         assert result["name"] == "org/repo"
@@ -145,9 +153,12 @@ class TestPromptRepoConfig:
 class TestFormatRepoToml:
     def test_single_repo_header(self):
         cfg = {
-            "name": "org/repo", "clone_path": "~/repo",
-            "worktree_base": "/tmp/wt", "bot_account": "bot",
-            "escalation_reviewers": "", "default_branch": "main",
+            "name": "org/repo",
+            "clone_path": "~/repo",
+            "worktree_base": "/tmp/wt",
+            "bot_account": "bot",
+            "escalation_reviewers": "",
+            "default_branch": "main",
         }
         result = setup.format_repo_toml(cfg, header="[repo]")
         assert result.startswith("[repo]")
@@ -156,9 +167,12 @@ class TestFormatRepoToml:
 
     def test_multi_repo_header(self):
         cfg = {
-            "name": "org/repo", "clone_path": "~/repo",
-            "worktree_base": "/tmp/wt", "bot_account": "bot",
-            "escalation_reviewers": "", "default_branch": "main",
+            "name": "org/repo",
+            "clone_path": "~/repo",
+            "worktree_base": "/tmp/wt",
+            "bot_account": "bot",
+            "escalation_reviewers": "",
+            "default_branch": "main",
         }
         result = setup.format_repo_toml(cfg, header="[[repos]]")
         assert result.startswith("[[repos]]")
@@ -167,9 +181,12 @@ class TestFormatRepoToml:
 
     def test_values_with_special_chars(self):
         cfg = {
-            "name": "org/repo", "clone_path": "/path with spaces/repo",
-            "worktree_base": "/tmp/wt", "bot_account": "bot",
-            "escalation_reviewers": "", "default_branch": "main",
+            "name": "org/repo",
+            "clone_path": "/path with spaces/repo",
+            "worktree_base": "/tmp/wt",
+            "bot_account": "bot",
+            "escalation_reviewers": "",
+            "default_branch": "main",
         }
         result = setup.format_repo_toml(cfg, header="[repo]")
         parsed = tomllib.loads(result)
@@ -179,9 +196,12 @@ class TestFormatRepoToml:
 class TestFormatRepoTomlExtended:
     def test_project_type_key(self):
         cfg = {
-            "name": "org/repo", "clone_path": "~/repo",
-            "worktree_base": "/tmp/wt", "bot_account": "bot",
-            "escalation_reviewers": "", "default_branch": "main",
+            "name": "org/repo",
+            "clone_path": "~/repo",
+            "worktree_base": "/tmp/wt",
+            "bot_account": "bot",
+            "escalation_reviewers": "",
+            "default_branch": "main",
             "project_type": "python",
         }
         result = setup.format_repo_toml(cfg, header="[repo]")
@@ -190,7 +210,8 @@ class TestFormatRepoTomlExtended:
 
     def test_nested_build_overrides(self):
         cfg = {
-            "name": "org/repo", "clone_path": "~/repo",
+            "name": "org/repo",
+            "clone_path": "~/repo",
             "project_type": "python",
             "build": {
                 "lint_cmd": "ruff check gate/",
@@ -204,7 +225,8 @@ class TestFormatRepoTomlExtended:
 
     def test_list_values(self):
         cfg = {
-            "name": "org/repo", "clone_path": "~/repo",
+            "name": "org/repo",
+            "clone_path": "~/repo",
             "escalation_reviewers": ["user1", "user2"],
         }
         result = setup.format_repo_toml(cfg, header="[repo]")
@@ -213,7 +235,8 @@ class TestFormatRepoTomlExtended:
 
     def test_cursor_rules_key(self):
         cfg = {
-            "name": "org/repo", "clone_path": "~/repo",
+            "name": "org/repo",
+            "clone_path": "~/repo",
             "cursor_rules": "/path/to/rules.md",
             "fix_blocklist": "/path/to/blocklist.txt",
         }
@@ -224,7 +247,8 @@ class TestFormatRepoTomlExtended:
 
     def test_nested_limits_overrides(self):
         cfg = {
-            "name": "org/repo", "clone_path": "~/repo",
+            "name": "org/repo",
+            "clone_path": "~/repo",
             "limits": {"max_fix_attempts_total": 0},
         }
         result = setup.format_repo_toml(cfg, header="[repo]")
@@ -233,9 +257,12 @@ class TestFormatRepoTomlExtended:
 
     def test_round_trip_all_keys(self):
         cfg = {
-            "name": "org/repo", "clone_path": "~/repo",
-            "worktree_base": "/tmp/wt", "bot_account": "bot",
-            "escalation_reviewers": "", "default_branch": "main",
+            "name": "org/repo",
+            "clone_path": "~/repo",
+            "worktree_base": "/tmp/wt",
+            "bot_account": "bot",
+            "escalation_reviewers": "",
+            "default_branch": "main",
             "project_type": "node",
             "cursor_rules": "/path/to/rules.md",
             "fix_blocklist": "/path/to/blocklist.txt",
@@ -251,7 +278,8 @@ class TestFormatRepoTomlExtended:
 
     def test_boolean_values(self):
         cfg = {
-            "name": "org/repo", "clone_path": "~/repo",
+            "name": "org/repo",
+            "clone_path": "~/repo",
             "auto_fix": True,
         }
         result = setup.format_repo_toml(cfg, header="[repo]")
@@ -261,11 +289,16 @@ class TestFormatRepoTomlExtended:
 
 class TestFormatFullConfig:
     def test_single_repo(self):
-        repos = [{
-            "name": "org/repo", "clone_path": "~/repo",
-            "worktree_base": "/tmp/wt", "bot_account": "bot",
-            "escalation_reviewers": "", "default_branch": "main",
-        }]
+        repos = [
+            {
+                "name": "org/repo",
+                "clone_path": "~/repo",
+                "worktree_base": "/tmp/wt",
+                "bot_account": "bot",
+                "escalation_reviewers": "",
+                "default_branch": "main",
+            }
+        ]
         content = setup.format_full_config(repos)
         assert "\n[repo]\n" in content
         lines = [ln for ln in content.splitlines() if not ln.startswith("#")]
@@ -279,10 +312,22 @@ class TestFormatFullConfig:
 
     def test_two_repos(self):
         repos = [
-            {"name": "org/a", "clone_path": "~/a", "worktree_base": "/tmp/wt",
-             "bot_account": "bot", "escalation_reviewers": "", "default_branch": "main"},
-            {"name": "org/b", "clone_path": "~/b", "worktree_base": "/tmp/wt",
-             "bot_account": "bot", "escalation_reviewers": "", "default_branch": "develop"},
+            {
+                "name": "org/a",
+                "clone_path": "~/a",
+                "worktree_base": "/tmp/wt",
+                "bot_account": "bot",
+                "escalation_reviewers": "",
+                "default_branch": "main",
+            },
+            {
+                "name": "org/b",
+                "clone_path": "~/b",
+                "worktree_base": "/tmp/wt",
+                "bot_account": "bot",
+                "escalation_reviewers": "",
+                "default_branch": "develop",
+            },
         ]
         content = setup.format_full_config(repos)
         assert "[[repos]]" in content
@@ -293,9 +338,16 @@ class TestFormatFullConfig:
         assert parsed["repos"][1]["default_branch"] == "develop"
 
     def test_custom_globals_preserved(self):
-        repos = [{"name": "org/repo", "clone_path": "~/repo",
-                   "worktree_base": "/tmp/wt", "bot_account": "bot",
-                   "escalation_reviewers": "", "default_branch": "main"}]
+        repos = [
+            {
+                "name": "org/repo",
+                "clone_path": "~/repo",
+                "worktree_base": "/tmp/wt",
+                "bot_account": "bot",
+                "escalation_reviewers": "",
+                "default_branch": "main",
+            }
+        ]
         custom = {"models": {"triage": "opus"}, "timeouts": {"agent_stage_s": 1800}}
         content = setup.format_full_config(repos, globals_config=custom)
         parsed = tomllib.loads(content)
@@ -304,26 +356,52 @@ class TestFormatFullConfig:
         assert parsed["models"]["verdict"] == "opus"
 
     def test_single_repo_includes_multi_repo_docs(self):
-        repos = [{"name": "org/repo", "clone_path": "~/repo",
-                   "worktree_base": "/tmp/wt", "bot_account": "bot",
-                   "escalation_reviewers": "", "default_branch": "main"}]
+        repos = [
+            {
+                "name": "org/repo",
+                "clone_path": "~/repo",
+                "worktree_base": "/tmp/wt",
+                "bot_account": "bot",
+                "escalation_reviewers": "",
+                "default_branch": "main",
+            }
+        ]
         content = setup.format_full_config(repos)
         assert "Multi-repo format" in content
 
     def test_multi_repo_excludes_docs(self):
         repos = [
-            {"name": "org/a", "clone_path": "~/a", "worktree_base": "/tmp/wt",
-             "bot_account": "bot", "escalation_reviewers": "", "default_branch": "main"},
-            {"name": "org/b", "clone_path": "~/b", "worktree_base": "/tmp/wt",
-             "bot_account": "bot", "escalation_reviewers": "", "default_branch": "main"},
+            {
+                "name": "org/a",
+                "clone_path": "~/a",
+                "worktree_base": "/tmp/wt",
+                "bot_account": "bot",
+                "escalation_reviewers": "",
+                "default_branch": "main",
+            },
+            {
+                "name": "org/b",
+                "clone_path": "~/b",
+                "worktree_base": "/tmp/wt",
+                "bot_account": "bot",
+                "escalation_reviewers": "",
+                "default_branch": "main",
+            },
         ]
         content = setup.format_full_config(repos)
         assert "Multi-repo format" not in content
 
     def test_round_trip_correctness(self):
-        repos = [{"name": "org/repo", "clone_path": "~/repo",
-                   "worktree_base": "/tmp/wt", "bot_account": "bot",
-                   "escalation_reviewers": "", "default_branch": "main"}]
+        repos = [
+            {
+                "name": "org/repo",
+                "clone_path": "~/repo",
+                "worktree_base": "/tmp/wt",
+                "bot_account": "bot",
+                "escalation_reviewers": "",
+                "default_branch": "main",
+            }
+        ]
         content = setup.format_full_config(repos)
         parsed = tomllib.loads(content)
         assert parsed["repo"]["name"] == repos[0]["name"]

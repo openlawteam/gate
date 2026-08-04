@@ -74,9 +74,7 @@ def extract_from_transcript(raw_content: str) -> dict | None:
             if isinstance(content, str):
                 text = content
             elif isinstance(content, list):
-                text = "\n".join(
-                    b.get("text", "") for b in content if b.get("type") == "text"
-                )
+                text = "\n".join(b.get("text", "") for b in content if b.get("type") == "text")
             else:
                 text = ""
 
@@ -223,9 +221,7 @@ def parse_diff_hunks(diff_text: str) -> dict[str, list[tuple[int, int]]]:
     return hunks
 
 
-def validate_introduced_by_pr(
-    findings: list, workspace: Path, stage: str
-) -> list:
+def validate_introduced_by_pr(findings: list, workspace: Path, stage: str) -> list:
     """Downgrade ``introduced_by_pr: true`` claims that are unsupported.
 
     The architecture agent historically over-stamps ``introduced_by_pr:
@@ -401,9 +397,7 @@ def _dedupe_findings(findings: list) -> list:
             # inputs coming through a re-review).
             pre = src.get("locations") if isinstance(src.get("locations"), list) else None
             if pre:
-                candidates = [
-                    loc for loc in pre if isinstance(loc, dict) and loc.get("file")
-                ]
+                candidates = [loc for loc in pre if isinstance(loc, dict) and loc.get("file")]
             else:
                 loc = {}
                 if src.get("file"):

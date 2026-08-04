@@ -96,10 +96,7 @@ class TestReadRecentReviews:
 
     def test_reads_entries(self, tmp_path):
         jsonl_path = tmp_path / "reviews.jsonl"
-        entries = [
-            {"pr": i, "decision": "approve", "timestamp": 1713000000 + i}
-            for i in range(10)
-        ]
+        entries = [{"pr": i, "decision": "approve", "timestamp": 1713000000 + i} for i in range(10)]
         jsonl_path.write_text("\n".join(json.dumps(e) for e in entries))
 
         with patch("gate.tui.reviews_jsonl", lambda _p=jsonl_path: _p):
@@ -125,12 +122,27 @@ class TestComputeMetrics:
         jsonl_path = tmp_path / "reviews.jsonl"
         now = time.time()
         entries = [
-            {"pr": 1, "decision": "approve", "timestamp": now - 100,
-             "review_time_seconds": 60, "findings": 0},
-            {"pr": 2, "decision": "approve", "timestamp": now - 200,
-             "review_time_seconds": 120, "findings": 1},
-            {"pr": 3, "decision": "request_changes", "timestamp": now - 300,
-             "review_time_seconds": 180, "findings": 3},
+            {
+                "pr": 1,
+                "decision": "approve",
+                "timestamp": now - 100,
+                "review_time_seconds": 60,
+                "findings": 0,
+            },
+            {
+                "pr": 2,
+                "decision": "approve",
+                "timestamp": now - 200,
+                "review_time_seconds": 120,
+                "findings": 1,
+            },
+            {
+                "pr": 3,
+                "decision": "request_changes",
+                "timestamp": now - 300,
+                "review_time_seconds": 180,
+                "findings": 3,
+            },
         ]
         jsonl_path.write_text("\n".join(json.dumps(e) for e in entries))
 
@@ -267,18 +279,21 @@ class TestBuildFixInfo:
 
     def _render(self, entry: dict) -> str:
         from rich.text import Text
+
         screen = CompletedDetailScreen.__new__(CompletedDetailScreen)
         screen._entry = entry
         return screen._build_fix_info(entry, Text()).plain
 
     def test_legacy_entry_renders_core_fields(self):
-        out = self._render({
-            "decision": "fix_succeeded",
-            "original_decision": "approve_with_notes",
-            "review_time_seconds": 42,
-            "fix_summary": "auto-fix 1/1",
-            "is_fix_followup": True,
-        })
+        out = self._render(
+            {
+                "decision": "fix_succeeded",
+                "original_decision": "approve_with_notes",
+                "review_time_seconds": 42,
+                "fix_summary": "auto-fix 1/1",
+                "is_fix_followup": True,
+            }
+        )
         assert "fix succeeded" in out
         assert "approve_with_notes" in out
         assert "42s" in out
@@ -290,21 +305,23 @@ class TestBuildFixInfo:
         assert "Commit Message" not in out
 
     def test_hopper_entry_renders_subscopes(self):
-        out = self._render({
-            "decision": "fix_succeeded",
-            "original_decision": "approve_with_notes",
-            "review_time_seconds": 100,
-            "fix_summary": "auto-fix 3/4",
-            "pipeline_mode": "hopper",
-            "sub_scope_total": 4,
-            "sub_scope_committed": 3,
-            "sub_scope_reverted": 1,
-            "sub_scope_empty": 0,
-            "fixed_count": 3,
-            "not_fixed_count": 1,
-            "commit_message_source": "senior",
-            "is_fix_followup": True,
-        })
+        out = self._render(
+            {
+                "decision": "fix_succeeded",
+                "original_decision": "approve_with_notes",
+                "review_time_seconds": 100,
+                "fix_summary": "auto-fix 3/4",
+                "pipeline_mode": "hopper",
+                "sub_scope_total": 4,
+                "sub_scope_committed": 3,
+                "sub_scope_reverted": 1,
+                "sub_scope_empty": 0,
+                "fixed_count": 3,
+                "not_fixed_count": 1,
+                "commit_message_source": "senior",
+                "is_fix_followup": True,
+            }
+        )
         assert "Mode:" in out
         assert "hopper" in out
         assert "Sub-scopes:" in out
@@ -317,68 +334,78 @@ class TestBuildFixInfo:
         assert "1 not fixed" in out
 
     def test_synthesized_commit_shows_reject_reason(self):
-        out = self._render({
-            "decision": "fix_succeeded",
-            "original_decision": "approve_with_notes",
-            "review_time_seconds": 30,
-            "fix_summary": "auto-fix",
-            "commit_message_source": "synthesized",
-            "commit_message_reject_reason": "too_short",
-            "is_fix_followup": True,
-        })
+        out = self._render(
+            {
+                "decision": "fix_succeeded",
+                "original_decision": "approve_with_notes",
+                "review_time_seconds": 30,
+                "fix_summary": "auto-fix",
+                "commit_message_source": "synthesized",
+                "commit_message_reject_reason": "too_short",
+                "is_fix_followup": True,
+            }
+        )
         assert "Source: synthesized" in out
         assert "Reject: too_short" in out
 
     def test_runaway_guard_is_prominent(self):
-        out = self._render({
-            "decision": "fix_failed",
-            "original_decision": "approve_with_notes",
-            "review_time_seconds": 600,
-            "fix_summary": "runaway",
-            "pipeline_mode": "hopper",
-            "sub_scope_total": 5,
-            "sub_scope_committed": 1,
-            "runaway_guard_hit": True,
-            "is_fix_followup": True,
-        })
+        out = self._render(
+            {
+                "decision": "fix_failed",
+                "original_decision": "approve_with_notes",
+                "review_time_seconds": 600,
+                "fix_summary": "runaway",
+                "pipeline_mode": "hopper",
+                "sub_scope_total": 5,
+                "sub_scope_committed": 1,
+                "runaway_guard_hit": True,
+                "is_fix_followup": True,
+            }
+        )
         assert "Runaway:" in out
         assert "guard hit" in out
 
     def test_wall_clock_hidden_when_equal_to_duration(self):
-        out = self._render({
-            "decision": "fix_succeeded",
-            "original_decision": "approve_with_notes",
-            "review_time_seconds": 50,
-            "wall_clock_seconds": 50,
-            "fix_summary": "auto-fix",
-            "pipeline_mode": "hopper",
-            "is_fix_followup": True,
-        })
+        out = self._render(
+            {
+                "decision": "fix_succeeded",
+                "original_decision": "approve_with_notes",
+                "review_time_seconds": 50,
+                "wall_clock_seconds": 50,
+                "fix_summary": "auto-fix",
+                "pipeline_mode": "hopper",
+                "is_fix_followup": True,
+            }
+        )
         assert "Wall clock:" not in out
 
     def test_wall_clock_surfaced_when_different(self):
-        out = self._render({
-            "decision": "fix_succeeded",
-            "original_decision": "approve_with_notes",
-            "review_time_seconds": 50,
-            "wall_clock_seconds": 120,
-            "fix_summary": "auto-fix",
-            "pipeline_mode": "hopper",
-            "is_fix_followup": True,
-        })
+        out = self._render(
+            {
+                "decision": "fix_succeeded",
+                "original_decision": "approve_with_notes",
+                "review_time_seconds": 50,
+                "wall_clock_seconds": 120,
+                "fix_summary": "auto-fix",
+                "pipeline_mode": "hopper",
+                "is_fix_followup": True,
+            }
+        )
         assert "Wall clock:" in out
         assert "120s" in out
 
     def test_fix_no_op_entry_renders(self):
         """The exact entry shape produced by a graceful no-op —
         previously rendered ``?`` as its decision icon."""
-        out = self._render({
-            "decision": "fix_no_op",
-            "original_decision": "approve_with_notes",
-            "review_time_seconds": 5,
-            "fix_summary": "no mechanical work required",
-            "pipeline_mode": "hopper",
-            "is_fix_followup": True,
-        })
+        out = self._render(
+            {
+                "decision": "fix_no_op",
+                "original_decision": "approve_with_notes",
+                "review_time_seconds": 5,
+                "fix_summary": "no mechanical work required",
+                "pipeline_mode": "hopper",
+                "is_fix_followup": True,
+            }
+        )
         assert "fix no op" in out
         assert "no mechanical work required" in out

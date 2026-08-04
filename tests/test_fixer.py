@@ -108,11 +108,13 @@ class TestCleanupGateTests:
         subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
         subprocess.run(
             ["git", "config", "user.email", "test@example.com"],
-            cwd=tmp_path, check=True,
+            cwd=tmp_path,
+            check=True,
         )
         subprocess.run(
             ["git", "config", "user.name", "Test"],
-            cwd=tmp_path, check=True,
+            cwd=tmp_path,
+            check=True,
         )
         (tmp_path / "src").mkdir()
         (tmp_path / "src" / "app.ts").write_text("export const x = 1;\n")
@@ -120,7 +122,10 @@ class TestCleanupGateTests:
         subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True)
         base_sha = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            cwd=tmp_path, capture_output=True, text=True, check=True,
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout.strip()
 
         gate_test = tmp_path / "apps" / "web" / "tests" / "__gate_test_bug.ts"
@@ -136,7 +141,10 @@ class TestCleanupGateTests:
         assert not gate_test.exists()
         staged = subprocess.run(
             ["git", "diff", "--cached", "--name-only"],
-            cwd=tmp_path, capture_output=True, text=True, check=True,
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout
         assert "apps/web/tests/__gate_test_bug.ts" not in staged
         assert "src/app.ts" in staged
@@ -177,21 +185,25 @@ class TestWriteDiff:
 
 class TestBuildErrorPrompt:
     def test_includes_typecheck_errors(self):
-        result = _build_build_error_prompt({
-            "typecheck_errors": 3,
-            "lint_errors": 0,
-            "typecheck_log": "error TS2322: Type mismatch",
-            "typecheck_tool": "npx",
-        })
+        result = _build_build_error_prompt(
+            {
+                "typecheck_errors": 3,
+                "lint_errors": 0,
+                "typecheck_log": "error TS2322: Type mismatch",
+                "typecheck_tool": "npx",
+            }
+        )
         assert "npx Errors (3)" in result
         assert "TS2322" in result
 
     def test_includes_lint_errors(self):
-        result = _build_build_error_prompt({
-            "typecheck_errors": 0,
-            "lint_errors": 2,
-            "lint_log": "no-unused-vars",
-        })
+        result = _build_build_error_prompt(
+            {
+                "typecheck_errors": 0,
+                "lint_errors": 2,
+                "lint_log": "no-unused-vars",
+            }
+        )
         assert "Lint Errors (2)" in result
 
     def test_no_errors(self):
@@ -199,11 +211,13 @@ class TestBuildErrorPrompt:
         assert "Build Errors After Fix" in result
 
     def test_default_tool_name(self):
-        result = _build_build_error_prompt({
-            "typecheck_errors": 1,
-            "lint_errors": 0,
-            "typecheck_log": "some error",
-        })
+        result = _build_build_error_prompt(
+            {
+                "typecheck_errors": 1,
+                "lint_errors": 0,
+                "typecheck_log": "some error",
+            }
+        )
         assert "Type Check Errors (1)" in result
 
 
@@ -315,6 +329,7 @@ class TestCleanupArtifacts:
         """Regression: *.codex.log must be in the declared glob list so
         future artifact-cleanup additions don't drop it by accident."""
         from gate.fixer import GATE_ARTIFACT_GLOBS
+
         assert "*.codex.log" in GATE_ARTIFACT_GLOBS
 
     def test_removes_gate_directions_md(self, tmp_path):
@@ -333,6 +348,7 @@ class TestCleanupArtifacts:
         """Regression: gate-directions.md must be in the static
         artifact-files set so future cleanup additions don't drop it."""
         from gate.fixer import GATE_ARTIFACT_FILES
+
         assert "gate-directions.md" in GATE_ARTIFACT_FILES
 
     def test_removes_postconditions_json(self, tmp_path):
@@ -351,6 +367,7 @@ class TestCleanupArtifacts:
         """Regression guard: postconditions.json must stay in the static
         artifact-files set."""
         from gate.fixer import GATE_ARTIFACT_FILES
+
         assert "postconditions.json" in GATE_ARTIFACT_FILES
 
 
@@ -360,18 +377,21 @@ class TestRevertFile:
         subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
         subprocess.run(
             ["git", "config", "user.email", "test@test.com"],
-            cwd=str(tmp_path), capture_output=True,
+            cwd=str(tmp_path),
+            capture_output=True,
         )
         subprocess.run(
             ["git", "config", "user.name", "test"],
-            cwd=str(tmp_path), capture_output=True,
+            cwd=str(tmp_path),
+            capture_output=True,
         )
         tracked = tmp_path / "tracked.txt"
         tracked.write_text("original")
         subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
         subprocess.run(
             ["git", "commit", "-m", "init"],
-            cwd=str(tmp_path), capture_output=True,
+            cwd=str(tmp_path),
+            capture_output=True,
         )
         return tracked
 
@@ -407,8 +427,12 @@ class TestFixPipelineCancellation:
         cancelled = threading.Event()
         cancelled.set()
         pipe = FixPipeline(
-            pr_number=1, repo="a/b", workspace=tmp_path,
-            verdict=verdict, build={}, config=sample_config,
+            pr_number=1,
+            repo="a/b",
+            workspace=tmp_path,
+            verdict=verdict,
+            build={},
+            config=sample_config,
             cancelled=cancelled,
         )
         result = pipe.run()
@@ -425,8 +449,12 @@ class TestFixPipelineLimits:
         mock_limits.return_value = (False, "lifetime limit reached")
         verdict = {"decision": "request_changes", "findings": []}
         pipe = FixPipeline(
-            pr_number=1, repo="a/b", workspace=tmp_path,
-            verdict=verdict, build={}, config=sample_config,
+            pr_number=1,
+            repo="a/b",
+            workspace=tmp_path,
+            verdict=verdict,
+            build={},
+            config=sample_config,
         )
         result = pipe.run()
         assert result.success is False
@@ -440,12 +468,15 @@ class TestFixPipelineLimits:
         assert on the call arguments without running the full pipeline.
         """
         verdict = {"decision": "request_changes", "findings": []}
-        with patch("gate.fixer.state.check_fix_limits") as mock_limits, \
-             patch("gate.fixer.github"):
+        with patch("gate.fixer.state.check_fix_limits") as mock_limits, patch("gate.fixer.github"):
             mock_limits.return_value = (False, "blocked")
             pipe = FixPipeline(
-                pr_number=42, repo="owner/repo", workspace=tmp_path,
-                verdict=verdict, build={}, config=sample_config,
+                pr_number=42,
+                repo="owner/repo",
+                workspace=tmp_path,
+                verdict=verdict,
+                build={},
+                config=sample_config,
             )
             pipe.run()
             assert mock_limits.call_args[0][0] == 42
@@ -456,16 +487,24 @@ class TestFixPipelinePolishFlag:
     def test_polish_on_approve_with_notes(self, sample_config, tmp_path):
         verdict = {"decision": "approve_with_notes", "findings": []}
         pipe = FixPipeline(
-            pr_number=1, repo="a/b", workspace=tmp_path,
-            verdict=verdict, build={}, config=sample_config,
+            pr_number=1,
+            repo="a/b",
+            workspace=tmp_path,
+            verdict=verdict,
+            build={},
+            config=sample_config,
         )
         assert pipe.is_polish is True
 
     def test_not_polish_on_request_changes(self, sample_config, tmp_path):
         verdict = {"decision": "request_changes", "findings": []}
         pipe = FixPipeline(
-            pr_number=1, repo="a/b", workspace=tmp_path,
-            verdict=verdict, build={}, config=sample_config,
+            pr_number=1,
+            repo="a/b",
+            workspace=tmp_path,
+            verdict=verdict,
+            build={},
+            config=sample_config,
         )
         assert pipe.is_polish is False
 
@@ -496,6 +535,7 @@ class TestRunSilent:
     @patch("gate.fixer.subprocess.run")
     def test_string_cmd_uses_shlex_split(self, mock_run):
         from gate.fixer import _run_silent
+
         mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
         _run_silent("echo hi arg2", cwd="/tmp")
         call = mock_run.call_args
@@ -506,6 +546,7 @@ class TestRunSilent:
     @patch("gate.fixer.subprocess.run")
     def test_list_cmd_passed_through(self, mock_run):
         from gate.fixer import _run_silent
+
         mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
         _run_silent(["git", "diff", "HEAD"], cwd="/tmp")
         call = mock_run.call_args
@@ -517,6 +558,7 @@ class TestRunSilent:
         """stderr=subprocess.STDOUT merges both streams in the kernel;
         result.stdout contains the combined output."""
         from gate.fixer import _run_silent
+
         mock_run.return_value = MagicMock(stdout="out\nerr\n", returncode=0)
         result = _run_silent("noop")
         assert result == ("out\nerr\n", 0)
@@ -528,6 +570,7 @@ class TestRunSilent:
     @patch("gate.fixer.subprocess.run")
     def test_timeout_returns_empty(self, mock_run):
         from gate.fixer import _run_silent
+
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="x", timeout=1)
         result = _run_silent("sleep 100")
         assert result == ("", 1)
@@ -536,6 +579,7 @@ class TestRunSilent:
         """An unbalanced quote makes shlex.split raise ValueError; the
         helper must swallow it and return the safe ("", 1) sentinel."""
         from gate.fixer import _run_silent
+
         result = _run_silent("echo 'unterminated")
         assert result == ("", 1)
 
@@ -565,8 +609,7 @@ class TestEnforceBlocklistEdgeCases:
         blocklist.parent.mkdir(parents=True)
         blocklist.write_text("# foo.ts is fine\nbar.ts\n")
         mock_changed.return_value = ["foo.ts", "bar.ts"]
-        with patch("gate.fixer.gate_dir", return_value=tmp_path), \
-             patch("gate.fixer._revert_file"):
+        with patch("gate.fixer.gate_dir", return_value=tmp_path), patch("gate.fixer._revert_file"):
             violations = enforce_blocklist(tmp_path)
         assert violations == ["bar.ts"]
 
@@ -591,10 +634,15 @@ class TestResumeFixSession:
 
     def _pipeline(self, tmp_path, sample_config):
         from gate.fixer import FixPipeline
+
         verdict = {"decision": "request_changes", "findings": []}
         return FixPipeline(
-            pr_number=1, repo="a/b", workspace=tmp_path,
-            verdict=verdict, build={}, config=sample_config,
+            pr_number=1,
+            repo="a/b",
+            workspace=tmp_path,
+            verdict=verdict,
+            build={},
+            config=sample_config,
         )
 
     def _find_claude_call(self, mock_run):
@@ -622,10 +670,12 @@ class TestResumeFixSession:
         # (not /dev/tty), so the original TTY-deadlock guarantee holds.
         # Fail loudly if anyone goes back to passing ``stdin=`` explicitly
         # (which would conflict with ``input=`` and raise at runtime).
-        assert "stdin" not in claude_call.kwargs, \
+        assert "stdin" not in claude_call.kwargs, (
             "stdin must not be set explicitly when prompt is passed via input="
-        assert claude_call.kwargs.get("input") is not None, \
+        )
+        assert claude_call.kwargs.get("input") is not None, (
             "prompt must be piped to claude via input= (not via argv)"
+        )
 
     @patch("gate.fixer.subprocess.run")
     def test_resume_redirects_stdout_and_stderr(self, mock_run, sample_config, tmp_path):
@@ -665,6 +715,7 @@ class TestResumeFixSession:
                 raise subprocess.TimeoutExpired(cmd="claude", timeout=2400)
             # Let non-claude calls (the git probe) succeed with a no-op result
             return MagicMock(stdout="", returncode=0)
+
         mock_run.side_effect = side_effect
         pipe = self._pipeline(tmp_path, sample_config)
         pipe.session_id = "sess-abc"
@@ -693,6 +744,7 @@ class TestGitSubprocessTimeouts:
     @patch("gate.fixer.subprocess.run")
     def test_get_changed_files_has_timeout(self, mock_run, tmp_path):
         from gate.fixer import _get_changed_files
+
         mock_run.return_value = MagicMock(stdout="")
         _get_changed_files(tmp_path)
         assert "timeout" in mock_run.call_args.kwargs
@@ -701,6 +753,7 @@ class TestGitSubprocessTimeouts:
     @patch("gate.fixer.subprocess.run")
     def test_get_changed_files_handles_timeout(self, mock_run, tmp_path):
         from gate.fixer import _get_changed_files
+
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="sh", timeout=60)
         result = _get_changed_files(tmp_path)
         assert result == []
@@ -708,6 +761,7 @@ class TestGitSubprocessTimeouts:
     @patch("gate.fixer.subprocess.run")
     def test_get_changed_files_handles_missing_git(self, mock_run, tmp_path):
         from gate.fixer import _get_changed_files
+
         mock_run.side_effect = FileNotFoundError(2, "No such file", "sh")
         result = _get_changed_files(tmp_path)
         assert result == []
@@ -715,6 +769,7 @@ class TestGitSubprocessTimeouts:
     @patch("gate.fixer.subprocess.run")
     def test_revert_all_all_calls_have_timeout(self, mock_run, tmp_path):
         from gate.fixer import _revert_all
+
         mock_run.return_value = MagicMock(returncode=0)
         _revert_all(tmp_path)
         # Two calls: git checkout, git clean
@@ -725,6 +780,7 @@ class TestGitSubprocessTimeouts:
     @patch("gate.fixer.subprocess.run")
     def test_revert_all_tolerates_failures(self, mock_run, tmp_path):
         from gate.fixer import _revert_all
+
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="git", timeout=30)
         # Must not raise
         _revert_all(tmp_path)
@@ -732,6 +788,7 @@ class TestGitSubprocessTimeouts:
     @patch("gate.fixer.subprocess.run")
     def test_revert_file_cat_file_has_timeout(self, mock_run, tmp_path):
         from gate.fixer import _revert_file
+
         mock_run.return_value = MagicMock(returncode=1)  # untracked
         _revert_file(tmp_path, "x.txt")
         assert "timeout" in mock_run.call_args_list[0].kwargs
@@ -739,6 +796,7 @@ class TestGitSubprocessTimeouts:
     @patch("gate.fixer.subprocess.run")
     def test_revert_file_checkout_has_timeout(self, mock_run, tmp_path):
         from gate.fixer import _revert_file
+
         # First call (cat-file) returns 0 (tracked), then checkout is invoked
         mock_run.return_value = MagicMock(returncode=0)
         _revert_file(tmp_path, "x.txt")
@@ -749,6 +807,7 @@ class TestGitSubprocessTimeouts:
     @patch("gate.fixer.subprocess.run")
     def test_revert_file_tolerates_cat_file_failure(self, mock_run, tmp_path):
         from gate.fixer import _revert_file
+
         mock_run.side_effect = FileNotFoundError(2, "No git", "git")
         # Must not raise
         _revert_file(tmp_path, "x.txt")
@@ -760,45 +819,53 @@ class TestGitSubprocessTimeouts:
 class TestComputeFindingId:
     def test_stable_for_same_inputs(self):
         from gate.fixer import compute_finding_id
+
         f = {"file": "a.ts", "line": 10, "source_stage": "logic", "message": "bad"}
         assert compute_finding_id(f) == compute_finding_id(dict(f))
 
     def test_differs_on_file_change(self):
         from gate.fixer import compute_finding_id
+
         a = {"file": "a.ts", "line": 10, "source_stage": "logic", "message": "x"}
         b = {"file": "b.ts", "line": 10, "source_stage": "logic", "message": "x"}
         assert compute_finding_id(a) != compute_finding_id(b)
 
     def test_handles_missing_fields(self):
         from gate.fixer import compute_finding_id
+
         assert len(compute_finding_id({})) == 10
 
 
 class TestClassifyFixability:
     def test_respects_preset_fixability(self):
         from gate.fixer import classify_fixability
+
         assert classify_fixability({"fixability": "broad"}) == "broad"
         assert classify_fixability({"fixability": "TRIVIAL"}) == "trivial"
 
     def test_unknown_when_no_keywords(self):
         from gate.fixer import classify_fixability
+
         assert classify_fixability({"message": "something unusual"}) == "unknown"
 
 
 class TestTagFindings:
     def test_adds_ids_and_fixability(self):
         from gate.fixer import tag_findings
+
         tagged = tag_findings([{"file": "x.ts", "line": 1, "message": "m"}])
         assert "finding_id" in tagged[0]
         assert "fixability" in tagged[0]
 
     def test_preserves_existing_id(self):
         from gate.fixer import tag_findings
+
         tagged = tag_findings([{"file": "x.ts", "finding_id": "preset"}])
         assert tagged[0]["finding_id"] == "preset"
 
     def test_does_not_mutate_input(self):
         from gate.fixer import tag_findings
+
         orig = {"file": "x.ts", "line": 1, "message": "m"}
         tag_findings([orig])
         assert "finding_id" not in orig
@@ -808,12 +875,14 @@ class TestTagFindings:
         so both fix paths (polish + monolithic) observe the same tag
         without duplicated classification logic."""
         from gate.fixer import tag_findings
-        tagged = tag_findings([
-            {"file": "x.ts", "message": "it is unclear whether X should..."},
-            {"file": "y.ts", "message": "boundary off by one",
-             "suggestion": "change > to >="},
-            {"file": "z.ts", "message": "raw SQL"},
-        ])
+
+        tagged = tag_findings(
+            [
+                {"file": "x.ts", "message": "it is unclear whether X should..."},
+                {"file": "y.ts", "message": "boundary off by one", "suggestion": "change > to >="},
+                {"file": "z.ts", "message": "raw SQL"},
+            ]
+        )
         assert tagged[0]["ambiguity"] == "high"
         assert tagged[1]["ambiguity"] == "none"
         # No suggestion and no ambiguity cue -> "low"
@@ -829,9 +898,7 @@ class TestSelectActionableFindings:
             {"severity": "warning", "message": "cleanup"},
             {"severity": "info", "message": "note"},
         ]
-        selected = select_actionable_findings(
-            findings, {"decision": "request_changes"}, {}
-        )
+        selected = select_actionable_findings(findings, {"decision": "request_changes"}, {})
         assert selected == [{"severity": "error", "message": "real blocker"}]
 
     def test_request_changes_can_opt_into_warning_fixes(self):
@@ -852,18 +919,14 @@ class TestSelectActionableFindings:
         from gate.fixer import select_actionable_findings
 
         findings = [{"severity": "warning", "message": "cleanup"}]
-        selected = select_actionable_findings(
-            findings, {"decision": "request_changes"}, {}
-        )
+        selected = select_actionable_findings(findings, {"decision": "request_changes"}, {})
         assert selected == findings
 
     def test_approve_with_notes_keeps_warnings(self):
         from gate.fixer import select_actionable_findings
 
         findings = [{"severity": "warning", "message": "polish"}]
-        selected = select_actionable_findings(
-            findings, {"decision": "approve_with_notes"}, {}
-        )
+        selected = select_actionable_findings(findings, {"decision": "approve_with_notes"}, {})
         assert selected == findings
 
 
@@ -872,27 +935,37 @@ class TestClassifyAmbiguity:
 
     def test_respects_preset_ambiguity(self):
         from gate.fixer import classify_ambiguity
+
         assert classify_ambiguity({"ambiguity": "HIGH"}) == "high"
         assert classify_ambiguity({"ambiguity": "low"}) == "low"
 
     def test_high_keywords_set_high(self):
         from gate.fixer import classify_ambiguity
-        assert classify_ambiguity(
-            {"message": "It is unclear whether empty input returns 0 or raises."}
-        ) == "high"
-        assert classify_ambiguity(
-            {"title": "Ambiguous behavior", "message": "..."}
-        ) == "high"
+
+        assert (
+            classify_ambiguity(
+                {"message": "It is unclear whether empty input returns 0 or raises."}
+            )
+            == "high"
+        )
+        assert classify_ambiguity({"title": "Ambiguous behavior", "message": "..."}) == "high"
 
     def test_concrete_suggestion_is_none(self):
         from gate.fixer import classify_ambiguity
-        assert classify_ambiguity({
-            "message": "missing null check",
-            "suggestion": "add `if (x == null) return;`",
-        }) == "none"
+
+        assert (
+            classify_ambiguity(
+                {
+                    "message": "missing null check",
+                    "suggestion": "add `if (x == null) return;`",
+                }
+            )
+            == "none"
+        )
 
     def test_no_suggestion_is_low(self):
         from gate.fixer import classify_ambiguity
+
         assert classify_ambiguity({"message": "consider fixing this"}) == "low"
 
 
@@ -946,8 +1019,7 @@ class TestPostDisambigCommentIfNeeded:
                 "detail": "numbered interpretations here",
             }
         ]
-        with patch("gate.fixer.github.comment_pr") as cm, \
-             patch("gate.fixer.state") as mock_state:
+        with patch("gate.fixer.github.comment_pr") as cm, patch("gate.fixer.state") as mock_state:
             mock_state.get_pr_state_dir.return_value = tmp_path
             pipe._post_disambig_comment_if_needed(not_fixed)
         assert cm.call_count == 1
@@ -968,13 +1040,11 @@ class TestPostDisambigCommentIfNeeded:
             }
         ]
         # First call — seed the dedup file
-        with patch("gate.fixer.github.comment_pr"), \
-             patch("gate.fixer.state") as mock_state:
+        with patch("gate.fixer.github.comment_pr"), patch("gate.fixer.state") as mock_state:
             mock_state.get_pr_state_dir.return_value = tmp_path
             pipe._post_disambig_comment_if_needed(not_fixed)
         # Second call — should NOT post again
-        with patch("gate.fixer.github.comment_pr") as cm, \
-             patch("gate.fixer.state") as mock_state:
+        with patch("gate.fixer.github.comment_pr") as cm, patch("gate.fixer.state") as mock_state:
             mock_state.get_pr_state_dir.return_value = tmp_path
             pipe._post_disambig_comment_if_needed(not_fixed)
         assert cm.call_count == 0
@@ -995,8 +1065,7 @@ class TestPostDisambigCommentIfNeeded:
                 "detail": "d",
             }
         ]
-        with patch("gate.fixer.github.comment_pr") as cm, \
-             patch("gate.fixer.state") as mock_state:
+        with patch("gate.fixer.github.comment_pr") as cm, patch("gate.fixer.state") as mock_state:
             mock_state.get_pr_state_dir.return_value = tmp_path
             pipe._post_disambig_comment_if_needed(not_fixed)
         assert cm.call_count == 0
@@ -1014,8 +1083,7 @@ class TestPostDisambigCommentIfNeeded:
             }
             for i in range(5)
         ]
-        with patch("gate.fixer.github.comment_pr") as cm, \
-             patch("gate.fixer.state") as mock_state:
+        with patch("gate.fixer.github.comment_pr") as cm, patch("gate.fixer.state") as mock_state:
             mock_state.get_pr_state_dir.return_value = tmp_path
             pipe._post_disambig_comment_if_needed(not_fixed)
         assert cm.call_count == 1
@@ -1053,9 +1121,16 @@ class TestPolishLoopAmbiguityHalt:
 
         monkeypatch.setattr(fixer_polish, "_attempt_finding", _fake_attempt)
         monkeypatch.setattr(fixer_polish, "_run_fix_polish_audit", lambda _: None)
-        monkeypatch.setattr(fixer_polish, "get_polish_timeouts", lambda _: {
-            "trivial": 180, "scoped": 600, "broad": 0, "unknown": 180,
-        })
+        monkeypatch.setattr(
+            fixer_polish,
+            "get_polish_timeouts",
+            lambda _: {
+                "trivial": 180,
+                "scoped": 600,
+                "broad": 0,
+                "unknown": 180,
+            },
+        )
         monkeypatch.setattr(fixer_polish, "get_polish_total_budget_s", lambda _: 1800)
         monkeypatch.setattr(fixer_polish, "write_live_log", lambda *a, **kw: None)
 
@@ -1096,9 +1171,16 @@ class TestPolishLoopAmbiguityHalt:
 
         monkeypatch.setattr(fixer_polish, "_attempt_finding", _fake_attempt)
         monkeypatch.setattr(fixer_polish, "_run_fix_polish_audit", lambda _: None)
-        monkeypatch.setattr(fixer_polish, "get_polish_timeouts", lambda _: {
-            "trivial": 180, "scoped": 600, "broad": 0, "unknown": 180,
-        })
+        monkeypatch.setattr(
+            fixer_polish,
+            "get_polish_timeouts",
+            lambda _: {
+                "trivial": 180,
+                "scoped": 600,
+                "broad": 0,
+                "unknown": 180,
+            },
+        )
         monkeypatch.setattr(fixer_polish, "get_polish_total_budget_s", lambda _: 1800)
         monkeypatch.setattr(fixer_polish, "write_live_log", lambda *a, **kw: None)
 
@@ -1119,10 +1201,15 @@ class TestPolishLoopAmbiguityHalt:
 class TestFixabilitySummary:
     def test_counts_each_bucket(self):
         from gate.fixer import fixability_summary
-        summary = fixability_summary([
-            {"fixability": "trivial"}, {"fixability": "trivial"},
-            {"fixability": "scoped"}, {"fixability": "broad"},
-        ])
+
+        summary = fixability_summary(
+            [
+                {"fixability": "trivial"},
+                {"fixability": "trivial"},
+                {"fixability": "scoped"},
+                {"fixability": "broad"},
+            ]
+        )
         assert "2 trivial" in summary
         assert "1 scoped" in summary
         assert "1 broad" in summary
@@ -1132,12 +1219,14 @@ class TestFixabilitySummary:
 class TestValidateFixJson:
     def test_none_returns_warnings_and_empty_shape(self):
         from gate.fixer import _validate_fix_json
+
         warnings, norm = _validate_fix_json(None)
         assert warnings
         assert norm == {"fixed": [], "not_fixed": [], "stats": {}}
 
     def test_synthesizes_missing_fix_description(self):
         from gate.fixer import _validate_fix_json
+
         data = {"fixed": [{"file": "a.ts", "line": 1}], "not_fixed": []}
         warnings, norm = _validate_fix_json(data)
         entry = norm["fixed"][0]
@@ -1147,6 +1236,7 @@ class TestValidateFixJson:
 
     def test_synthesizes_missing_not_fixed_detail(self):
         from gate.fixer import _validate_fix_json
+
         data = {"fixed": [], "not_fixed": [{"file": "a.ts", "line": 1}]}
         _, norm = _validate_fix_json(data)
         assert norm["not_fixed"][0]["_detail_synthesized"] is True
@@ -1154,6 +1244,7 @@ class TestValidateFixJson:
 
     def test_resolves_missing_finding_id_from_findings(self):
         from gate.fixer import _validate_fix_json
+
         findings = [{"file": "a.ts", "line": 5, "finding_id": "xyz"}]
         data = {
             "fixed": [{"file": "a.ts", "line": 5, "fix_description": "ok"}],
@@ -1164,6 +1255,7 @@ class TestValidateFixJson:
 
     def test_drops_non_dict_entries(self):
         from gate.fixer import _validate_fix_json
+
         data = {"fixed": ["oops"], "not_fixed": [42]}
         warnings, norm = _validate_fix_json(data)
         assert norm["fixed"] == []
@@ -1172,6 +1264,7 @@ class TestValidateFixJson:
 
     def test_hopper_sub_scope_log_normalized(self):
         from gate.fixer import _validate_fix_json
+
         data = {
             "fixed": [],
             "not_fixed": [],
@@ -1202,6 +1295,7 @@ class TestValidateFixJson:
 
     def test_hopper_invalid_outcome_warns_but_keeps(self):
         from gate.fixer import _validate_fix_json
+
         data = {
             "fixed": [],
             "not_fixed": [],
@@ -1215,6 +1309,7 @@ class TestValidateFixJson:
 
     def test_hopper_missing_name_drops_entry(self):
         from gate.fixer import _validate_fix_json
+
         data = {
             "fixed": [],
             "not_fixed": [],
@@ -1230,6 +1325,7 @@ class TestValidateFixJson:
 
     def test_hopper_non_list_sub_scope_log_warns(self):
         from gate.fixer import _validate_fix_json
+
         data = {"fixed": [], "not_fixed": [], "sub_scope_log": "nope"}
         warnings, norm = _validate_fix_json(data)
         assert any("sub_scope_log" in w for w in warnings)
@@ -1237,6 +1333,7 @@ class TestValidateFixJson:
 
     def test_hopper_final_commit_non_string_warns(self):
         from gate.fixer import _validate_fix_json
+
         data = {"fixed": [], "not_fixed": [], "final_commit_message": 42}
         warnings, norm = _validate_fix_json(data)
         assert any("final_commit_message" in w for w in warnings)
@@ -1253,9 +1350,14 @@ class TestReprompTrivialSkipsHopperGate:
 
     def _make_fixer(self, tmp_path, config):
         from gate.fixer import FixPipeline
+
         f = FixPipeline(
-            pr_number=1, repo="org/repo", workspace=tmp_path,
-            verdict={"findings": []}, build=None, config=config,
+            pr_number=1,
+            repo="org/repo",
+            workspace=tmp_path,
+            verdict={"findings": []},
+            build=None,
+            config=config,
         )
         f.session_id = "stub-session"
         return f
@@ -1271,6 +1373,7 @@ class TestReprompTrivialSkipsHopperGate:
     def test_hopper_watchdog_trips_and_sets_flag(self, tmp_path):
         """Watchdog cancels the run and sets ``_runaway_guard_hit``."""
         from gate.fixer import FixPipeline
+
         cfg = {
             "fix_pipeline": {
                 "mode": "hopper",
@@ -1279,10 +1382,15 @@ class TestReprompTrivialSkipsHopperGate:
             }
         }
         f = FixPipeline(
-            pr_number=1, repo="org/repo", workspace=tmp_path,
-            verdict={"findings": []}, build=None, config=cfg,
+            pr_number=1,
+            repo="org/repo",
+            workspace=tmp_path,
+            verdict={"findings": []},
+            build=None,
+            config=cfg,
         )
         import time as _time
+
         f._fix_start_monotonic = _time.monotonic()
         f._start_watchdog()
         # Give the daemon thread up to 5s to trip the 1s cap.
@@ -1294,16 +1402,13 @@ class TestReprompTrivialSkipsHopperGate:
 
     def test_polish_legacy_still_reprompts(self, tmp_path, monkeypatch):
         from gate import fixer
+
         f = self._make_fixer(tmp_path, {"fix_pipeline": {"mode": "polish_legacy"}})
         # Stub out the heavyweight helpers this path would normally hit.
-        monkeypatch.setattr(
-            f, "_resume_fix_session", lambda *_a, **_k: {"fix_json": {}}
-        )
+        monkeypatch.setattr(f, "_resume_fix_session", lambda *_a, **_k: {"fix_json": {}})
         monkeypatch.setattr(fixer, "write_live_log", lambda *a, **k: None)
         result = f._reprompt_trivial_skips(
-            {"not_fixed": [
-                {"finding_id": "x", "reason": "skipped_broad_in_polish"}
-            ]},
+            {"not_fixed": [{"finding_id": "x", "reason": "skipped_broad_in_polish"}]},
             [{"finding_id": "x", "fixability": "trivial"}],
         )
         assert result is True
@@ -1312,6 +1417,7 @@ class TestReprompTrivialSkipsHopperGate:
 class TestDedupFixed:
     def test_dedups_by_finding_id_keeping_latest(self):
         from gate.fixer import _dedup_fixed
+
         entries = [
             {"finding_id": "a", "iter": 1, "fix_description": "old"},
             {"finding_id": "b", "iter": 1},
@@ -1351,25 +1457,32 @@ def _init_tmp_repo(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     subprocess.run(
         ["git", "config", "user.email", "test@example.com"],
-        cwd=repo, check=True,
+        cwd=repo,
+        check=True,
     )
     subprocess.run(
         ["git", "config", "user.name", "Test"],
-        cwd=repo, check=True,
+        cwd=repo,
+        check=True,
     )
     subprocess.run(
         ["git", "config", "commit.gpgsign", "false"],
-        cwd=repo, check=True,
+        cwd=repo,
+        check=True,
     )
     (repo / "README.md").write_text("baseline\n")
     subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
     subprocess.run(
         ["git", "commit", "-q", "--no-verify", "-m", "baseline"],
-        cwd=repo, check=True,
+        cwd=repo,
+        check=True,
     )
     sha = subprocess.run(
         ["git", "rev-parse", "HEAD"],
-        cwd=repo, capture_output=True, text=True, check=True,
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.strip()
     return repo, sha
 
@@ -1378,8 +1491,12 @@ def _make_pipeline(workspace, pre_fix_sha, sample_config):
     """Build a minimal FixPipeline instance targeting ``workspace``."""
     verdict = {"decision": "request_changes", "findings": []}
     pipe = FixPipeline(
-        pr_number=1, repo="org/repo", workspace=workspace,
-        verdict=verdict, build={}, config=sample_config,
+        pr_number=1,
+        repo="org/repo",
+        workspace=workspace,
+        verdict=verdict,
+        build={},
+        config=sample_config,
     )
     pipe._pre_fix_sha = pre_fix_sha
     return pipe
@@ -1392,7 +1509,8 @@ class TestFixContentPresent:
         subprocess.run(["git", "add", "new.txt"], cwd=repo, check=True)
         subprocess.run(
             ["git", "commit", "-q", "--no-verify", "-m", "senior commit"],
-            cwd=repo, check=True,
+            cwd=repo,
+            check=True,
         )
         pipe = _make_pipeline(repo, baseline, sample_config)
         assert pipe._fix_content_present() is True
@@ -1410,7 +1528,9 @@ class TestFixContentPresent:
         assert pipe._fix_content_present() is True
 
     def test_returns_false_when_baseline_unchanged_and_clean(
-        self, tmp_path, sample_config,
+        self,
+        tmp_path,
+        sample_config,
     ):
         repo, baseline = _init_tmp_repo(tmp_path)
         pipe = _make_pipeline(repo, baseline, sample_config)
@@ -1435,14 +1555,17 @@ class TestFixContentPresent:
 
 class TestWriteBaselineDiff:
     def test_captures_committed_content_above_baseline(
-        self, tmp_path, sample_config,
+        self,
+        tmp_path,
+        sample_config,
     ):
         repo, baseline = _init_tmp_repo(tmp_path)
         (repo / "payload.txt").write_text("hopper payload\n")
         subprocess.run(["git", "add", "payload.txt"], cwd=repo, check=True)
         subprocess.run(
             ["git", "commit", "-q", "--no-verify", "-m", "senior finalize"],
-            cwd=repo, check=True,
+            cwd=repo,
+            check=True,
         )
         pipe = _make_pipeline(repo, baseline, sample_config)
         pipe._write_baseline_diff()
@@ -1459,7 +1582,9 @@ class TestWriteBaselineDiff:
         assert "brand-new.ts" in diff
 
     def test_falls_back_to_head_when_pre_fix_sha_empty(
-        self, tmp_path, sample_config,
+        self,
+        tmp_path,
+        sample_config,
     ):
         repo, _ = _init_tmp_repo(tmp_path)
         pipe = _make_pipeline(repo, "", sample_config)
@@ -1491,13 +1616,17 @@ class TestRevertToBaseline:
         subprocess.run(["git", "add", "hopper.txt"], cwd=repo, check=True)
         subprocess.run(
             ["git", "commit", "-q", "--no-verify", "-m", "senior"],
-            cwd=repo, check=True,
+            cwd=repo,
+            check=True,
         )
         pipe = _make_pipeline(repo, baseline, sample_config)
         pipe._revert_to_baseline()
         head = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            cwd=repo, capture_output=True, text=True, check=True,
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout.strip()
         assert head == baseline
         assert not (repo / "hopper.txt").exists()
@@ -1510,7 +1639,10 @@ class TestRevertToBaseline:
         assert not (repo / "scratch.txt").exists()
 
     def test_falls_back_when_pre_fix_sha_empty(
-        self, tmp_path, sample_config, monkeypatch,
+        self,
+        tmp_path,
+        sample_config,
+        monkeypatch,
     ):
         repo, _ = _init_tmp_repo(tmp_path)
         pipe = _make_pipeline(repo, "", sample_config)
@@ -1524,7 +1656,10 @@ class TestRevertToBaseline:
         assert called["revert_all"] == 1
 
     def test_falls_back_on_subprocess_error(
-        self, tmp_path, sample_config, monkeypatch,
+        self,
+        tmp_path,
+        sample_config,
+        monkeypatch,
     ):
         repo, baseline = _init_tmp_repo(tmp_path)
         pipe = _make_pipeline(repo, baseline, sample_config)
@@ -1554,6 +1689,7 @@ class TestValidateSeniorCommitMessage:
 
     def test_valid_fix_scope_accepted(self):
         from gate.fixer import _validate_senior_commit_message
+
         msg = (
             "fix(weather): remove unjustified eslint-disable\n\n"
             "Dropped the disable line and handled the nullish case directly."
@@ -1565,6 +1701,7 @@ class TestValidateSeniorCommitMessage:
 
     def test_valid_refactor_scope_accepted(self):
         from gate.fixer import _validate_senior_commit_message
+
         msg = "refactor(api): inline nested try/catch blocks"
         accepted, reason = _validate_senior_commit_message(msg, self.SYNTH)
         assert reason is None
@@ -1572,18 +1709,21 @@ class TestValidateSeniorCommitMessage:
 
     def test_empty_rejected(self):
         from gate.fixer import _validate_senior_commit_message
+
         accepted, reason = _validate_senior_commit_message("", self.SYNTH)
         assert accepted is None
         assert reason == "empty"
 
     def test_too_short_rejected(self):
         from gate.fixer import _validate_senior_commit_message
+
         accepted, reason = _validate_senior_commit_message("fix: oops", self.SYNTH)
         assert accepted is None
         assert reason == "too_short"
 
     def test_subject_too_long_rejected(self):
         from gate.fixer import _validate_senior_commit_message
+
         subject = "fix(weather): " + ("x" * 120)
         accepted, reason = _validate_senior_commit_message(subject, self.SYNTH)
         assert accepted is None
@@ -1591,6 +1731,7 @@ class TestValidateSeniorCommitMessage:
 
     def test_bad_shape_rejected(self):
         from gate.fixer import _validate_senior_commit_message
+
         accepted, reason = _validate_senior_commit_message(
             "just fix the thing please kthx", self.SYNTH
         )
@@ -1599,6 +1740,7 @@ class TestValidateSeniorCommitMessage:
 
     def test_placeholder_subject_rejected(self):
         from gate.fixer import _validate_senior_commit_message
+
         # Placeholder check runs against the stripped subject, so pad the
         # body to clear the min-length gate first.
         accepted, reason = _validate_senior_commit_message(
@@ -1610,6 +1752,7 @@ class TestValidateSeniorCommitMessage:
 
     def test_byte_identical_to_synth_rejected(self):
         from gate.fixer import _validate_senior_commit_message
+
         accepted, reason = _validate_senior_commit_message(self.SYNTH, self.SYNTH)
         assert accepted is None
         assert reason == "matches_synth"
@@ -1633,12 +1776,16 @@ class TestPublishGateMarker:
     """Behavioural tests for ``FixPipeline._publish_gate_marker``."""
 
     def test_publishes_both_markers_via_atomic_write(
-        self, tmp_path, sample_config, monkeypatch,
+        self,
+        tmp_path,
+        sample_config,
+        monkeypatch,
     ):
         repo, baseline = _init_tmp_repo(tmp_path)
         pipe = _make_pipeline(repo, baseline, sample_config)
 
         import gate.fixer as fixer_mod
+
         real = fixer_mod.atomic_write
         calls: list[tuple[str, str]] = []
 
@@ -1668,7 +1815,9 @@ class TestPublishGateMarker:
         assert '"repo": "org/repo"' in ctx_raw
 
     def test_no_tmp_sibling_left_behind_after_success(
-        self, tmp_path, sample_config,
+        self,
+        tmp_path,
+        sample_config,
     ):
         """``atomic_write``'s contract: on success the ``.tmp`` sibling
         is gone. Any leftover tmp file indicates a partial write or a
@@ -1683,7 +1832,10 @@ class TestPublishGateMarker:
         assert not (gate_dir / "context.json.tmp").exists()
 
     def test_noop_when_pre_fix_sha_unset(
-        self, tmp_path, sample_config, monkeypatch,
+        self,
+        tmp_path,
+        sample_config,
+        monkeypatch,
     ):
         """Baseline capture can legitimately be skipped (e.g. test
         fixtures that don't snapshot HEAD). In that case the helper
@@ -1693,9 +1845,12 @@ class TestPublishGateMarker:
         pipe = _make_pipeline(repo, "", sample_config)
 
         import gate.fixer as fixer_mod
+
         calls: list = []
         monkeypatch.setattr(
-            fixer_mod, "atomic_write", lambda *a, **kw: calls.append(a),
+            fixer_mod,
+            "atomic_write",
+            lambda *a, **kw: calls.append(a),
         )
 
         pipe._publish_gate_marker()
@@ -1707,7 +1862,11 @@ class TestPublishGateMarker:
         assert not (repo / ".gate" / "pre-fix-sha").exists()
 
     def test_oserror_is_logged_not_raised(
-        self, tmp_path, sample_config, monkeypatch, caplog,
+        self,
+        tmp_path,
+        sample_config,
+        monkeypatch,
+        caplog,
     ):
         """A filesystem failure during marker publish must not take the
         review down — the main fix pipeline can still run; the senior
@@ -1717,16 +1876,18 @@ class TestPublishGateMarker:
         pipe = _make_pipeline(repo, baseline, sample_config)
 
         import gate.fixer as fixer_mod
+
         def boom(*_a, **_kw):
             raise OSError("disk full (simulated)")
+
         monkeypatch.setattr(fixer_mod, "atomic_write", boom)
 
         caplog.set_level("WARNING", logger="gate.fixer")
         pipe._publish_gate_marker()  # must not raise
 
-        assert any(
-            ".gate/pre-fix-sha marker" in r.message for r in caplog.records
-        ), "OSError during publish must surface as a WARNING log"
+        assert any(".gate/pre-fix-sha marker" in r.message for r in caplog.records), (
+            "OSError during publish must surface as a WARNING log"
+        )
 
 
 class TestFixPipelineCodexPreflight:
@@ -1738,8 +1899,12 @@ class TestFixPipelineCodexPreflight:
         (tmp_path / "verdict.json").write_text("{}")
         (tmp_path / "triage.json").write_text("{}")
         pipe = FixPipeline(
-            pr_number=1, repo="a/b", workspace=tmp_path,
-            verdict=verdict, build={}, config=sample_config,
+            pr_number=1,
+            repo="a/b",
+            workspace=tmp_path,
+            verdict=verdict,
+            build={},
+            config=sample_config,
         )
         return pipe
 
@@ -1763,8 +1928,14 @@ class TestFixPipelineCodexPreflight:
     @patch("gate.fixer.bootstrap_codex", return_value=(1, None, "auth error"))
     @patch("gate.fixer.github")
     def test_bootstrap_retry_then_skip(
-        self, mock_gh, mock_bootstrap, mock_health, mock_limits, mock_notify,
-        sample_config, tmp_path,
+        self,
+        mock_gh,
+        mock_bootstrap,
+        mock_health,
+        mock_limits,
+        mock_notify,
+        sample_config,
+        tmp_path,
     ):
         pipe = self._make_pipeline(sample_config, tmp_path)
         result = pipe.run()
@@ -1804,20 +1975,20 @@ class TestFixResultSkipped:
     """
 
     def _make_pipeline(self, sample_config, tmp_path):
-        findings = [
-            {"severity": "warning", "message": "test", "file": "a.ts", "line": 1}
-        ]
+        findings = [{"severity": "warning", "message": "test", "file": "a.ts", "line": 1}]
         verdict = {"decision": "request_changes", "findings": findings}
         (tmp_path / "verdict.json").write_text("{}")
         (tmp_path / "triage.json").write_text("{}")
         return FixPipeline(
-            pr_number=1, repo="a/b", workspace=tmp_path,
-            verdict=verdict, build={}, config=sample_config,
+            pr_number=1,
+            repo="a/b",
+            workspace=tmp_path,
+            verdict=verdict,
+            build={},
+            config=sample_config,
         )
 
-    def test_cancelled_before_start_returns_skipped(
-        self, sample_config, tmp_path
-    ):
+    def test_cancelled_before_start_returns_skipped(self, sample_config, tmp_path):
         """Pre-set cancel event → ``skipped=True`` (was ``failed``)."""
         pipe = self._make_pipeline(sample_config, tmp_path)
         pipe._cancelled.set()
@@ -1828,9 +1999,7 @@ class TestFixResultSkipped:
 
     @patch("gate.fixer.github")
     @patch("gate.fixer.state.check_fix_limits")
-    def test_fix_cooldown_returns_skipped(
-        self, mock_limits, mock_gh, sample_config, tmp_path
-    ):
+    def test_fix_cooldown_returns_skipped(self, mock_limits, mock_gh, sample_config, tmp_path):
         """``check_fix_limits`` returning False for cooldown maps to
         ``skipped=True``. This is the exact PR #340 case."""
         mock_limits.return_value = (False, "Fix cooldown active (268s remaining)")
@@ -1842,9 +2011,7 @@ class TestFixResultSkipped:
 
     @patch("gate.fixer.github")
     @patch("gate.fixer.state.check_fix_limits")
-    def test_soft_limit_returns_skipped(
-        self, mock_limits, mock_gh, sample_config, tmp_path
-    ):
+    def test_soft_limit_returns_skipped(self, mock_limits, mock_gh, sample_config, tmp_path):
         """Soft / lifetime limit hits are policy decisions, not
         failures — share the same ``skipped`` mapping as the cooldown.
         """
@@ -1856,9 +2023,7 @@ class TestFixResultSkipped:
 
     @patch("gate.fixer.github")
     @patch("gate.fixer.state.check_fix_limits")
-    def test_lifetime_limit_returns_skipped(
-        self, mock_limits, mock_gh, sample_config, tmp_path
-    ):
+    def test_lifetime_limit_returns_skipped(self, mock_limits, mock_gh, sample_config, tmp_path):
         mock_limits.return_value = (False, "Lifetime fix limit reached (6)")
         pipe = self._make_pipeline(sample_config, tmp_path)
         result = pipe.run()
@@ -1871,6 +2036,7 @@ class TestFixResultSkipped:
         opt-in or the orchestrator will mis-route real failures.
         """
         from gate.schemas import FixResult
+
         result = FixResult(success=False, summary="something bad")
         assert result.skipped is False
 
@@ -1899,49 +2065,85 @@ class TestClassifyPrePush:
     """
 
     def test_regression_when_count_increases(self):
-        assert _classify_pre_push(
-            after_failed=3, baseline_failed=1, project_type="node",
-            has_parse_failure=False, has_original_build=True,
-        ) == "regression"
+        assert (
+            _classify_pre_push(
+                after_failed=3,
+                baseline_failed=1,
+                project_type="node",
+                has_parse_failure=False,
+                has_original_build=True,
+            )
+            == "regression"
+        )
 
     def test_pre_existing_when_count_same(self):
-        assert _classify_pre_push(
-            after_failed=1, baseline_failed=1, project_type="node",
-            has_parse_failure=False, has_original_build=True,
-        ) == "pre_existing"
+        assert (
+            _classify_pre_push(
+                after_failed=1,
+                baseline_failed=1,
+                project_type="node",
+                has_parse_failure=False,
+                has_original_build=True,
+            )
+            == "pre_existing"
+        )
 
     def test_pre_existing_when_count_lower(self):
         """Gate fixed some failures but others remain — still
         pre-existing because no new failure was introduced."""
-        assert _classify_pre_push(
-            after_failed=1, baseline_failed=3, project_type="node",
-            has_parse_failure=False, has_original_build=True,
-        ) == "pre_existing"
+        assert (
+            _classify_pre_push(
+                after_failed=1,
+                baseline_failed=3,
+                project_type="node",
+                has_parse_failure=False,
+                has_original_build=True,
+            )
+            == "pre_existing"
+        )
 
     def test_missing_baseline_treated_as_regression(self):
         """No ``original_build`` snapshot → can't tell pre-existing
         from new, so default to safer side (Codex tries to fix)."""
-        assert _classify_pre_push(
-            after_failed=1, baseline_failed=0, project_type="node",
-            has_parse_failure=False, has_original_build=False,
-        ) == "regression"
+        assert (
+            _classify_pre_push(
+                after_failed=1,
+                baseline_failed=0,
+                project_type="node",
+                has_parse_failure=False,
+                has_original_build=False,
+            )
+            == "regression"
+        )
 
     def test_parse_failure_treated_as_regression(self):
         """Parser returned 0 findings on a non-zero exit — synthetic
         count is unreliable. Don't fail-fast; let Codex try."""
-        assert _classify_pre_push(
-            after_failed=1, baseline_failed=1, project_type="node",
-            has_parse_failure=True, has_original_build=True,
-        ) == "regression"
+        assert (
+            _classify_pre_push(
+                after_failed=1,
+                baseline_failed=1,
+                project_type="node",
+                has_parse_failure=True,
+                has_original_build=True,
+            )
+            == "regression"
+        )
 
     def test_generic_project_type_treated_as_regression(self):
         """Go/Rust/etc. use ``_parse_generic_test`` which returns 0 or 1
         — delta detection is meaningless. Safer side."""
         for project_type in ("go", "rust", "java", "none"):
-            assert _classify_pre_push(
-                after_failed=1, baseline_failed=1, project_type=project_type,
-                has_parse_failure=False, has_original_build=True,
-            ) == "regression", f"{project_type} should route to regression"
+            assert (
+                _classify_pre_push(
+                    after_failed=1,
+                    baseline_failed=1,
+                    project_type=project_type,
+                    has_parse_failure=False,
+                    has_original_build=True,
+                )
+                == "regression"
+            ), f"{project_type} should route to regression"
 
 
 class TestPrePushVerifyDefaultPath:
@@ -1950,7 +2152,9 @@ class TestPrePushVerifyDefaultPath:
 
     def test_strict_pass_short_circuits(self, tmp_path):
         last_bv = {
-            "pass": True, "strict_pass": True, "build_result": None,
+            "pass": True,
+            "strict_pass": True,
+            "build_result": None,
             "test_failures": 0,
         }
         result = pre_push_verify(tmp_path, last_bv, None, {})
@@ -1961,8 +2165,8 @@ class TestPrePushVerifyDefaultPath:
     def test_strict_fail_with_regression(self, tmp_path):
         """Baseline had 0 failures, after-fix has 2 → regression."""
         last_bv = {
-            "pass": True,           # tolerance accepted
-            "strict_pass": False,   # but strict says no
+            "pass": True,  # tolerance accepted
+            "strict_pass": False,  # but strict says no
             "test_failures": 2,
             "build_result": {
                 "project_type": "node",
@@ -1971,7 +2175,9 @@ class TestPrePushVerifyDefaultPath:
         }
         baseline = {"tests": {"failed": 0}}
         result = pre_push_verify(
-            tmp_path, last_bv, baseline,
+            tmp_path,
+            last_bv,
+            baseline,
             {"repo": {"project_type": "node"}},
         )
         assert result["pass"] is False
@@ -1983,7 +2189,8 @@ class TestPrePushVerifyDefaultPath:
     def test_strict_fail_pre_existing(self, tmp_path):
         """Baseline had 3 failures, after-fix has 3 → pre-existing."""
         last_bv = {
-            "pass": True, "strict_pass": False,
+            "pass": True,
+            "strict_pass": False,
             "test_failures": 3,
             "build_result": {
                 "project_type": "node",
@@ -1992,7 +2199,9 @@ class TestPrePushVerifyDefaultPath:
         }
         baseline = {"tests": {"failed": 3}}
         result = pre_push_verify(
-            tmp_path, last_bv, baseline,
+            tmp_path,
+            last_bv,
+            baseline,
             {"repo": {"project_type": "node"}},
         )
         assert result["pass"] is False
@@ -2004,7 +2213,8 @@ class TestPrePushVerifyDefaultPath:
         """``original_build=None`` should be treated as regression
         (safer side), not pre_existing."""
         last_bv = {
-            "pass": False, "strict_pass": False,
+            "pass": False,
+            "strict_pass": False,
             "test_failures": 1,
             "build_result": {
                 "project_type": "node",
@@ -2012,14 +2222,17 @@ class TestPrePushVerifyDefaultPath:
             },
         }
         result = pre_push_verify(
-            tmp_path, last_bv, None,
+            tmp_path,
+            last_bv,
+            None,
             {"repo": {"project_type": "node"}},
         )
         assert result["kind"] == "regression"
 
     def test_parse_failure_routes_to_regression(self, tmp_path):
         last_bv = {
-            "pass": False, "strict_pass": False,
+            "pass": False,
+            "strict_pass": False,
             "test_failures": 1,
             "build_result": {
                 "project_type": "node",
@@ -2030,7 +2243,9 @@ class TestPrePushVerifyDefaultPath:
         # Would normally be pre_existing (counts match) but parse failure
         # bumps it to regression on the safer side.
         result = pre_push_verify(
-            tmp_path, last_bv, baseline,
+            tmp_path,
+            last_bv,
+            baseline,
             {"repo": {"project_type": "node"}},
         )
         assert result["kind"] == "regression"
@@ -2038,7 +2253,9 @@ class TestPrePushVerifyDefaultPath:
     def test_generic_project_type_routes_to_regression(self, tmp_path):
         """Go/Rust/etc. — counts are unreliable, treat as regression."""
         last_bv = {
-            "pass": False, "strict_pass": False, "test_failures": 1,
+            "pass": False,
+            "strict_pass": False,
+            "test_failures": 1,
             "build_result": {
                 "project_type": "go",
                 "tests": {"failed": 1, "raw_output_tail": ""},
@@ -2046,7 +2263,9 @@ class TestPrePushVerifyDefaultPath:
         }
         baseline = {"tests": {"failed": 1}}
         result = pre_push_verify(
-            tmp_path, last_bv, baseline,
+            tmp_path,
+            last_bv,
+            baseline,
             {"repo": {"project_type": "go"}},
         )
         assert result["kind"] == "regression"
@@ -2057,11 +2276,15 @@ class TestPrePushVerifyDisabled:
         """``pre_push_disable = true`` bypasses everything."""
         # Even with a strict-fail cached result, gate should pass.
         last_bv = {
-            "pass": False, "strict_pass": False, "test_failures": 99,
+            "pass": False,
+            "strict_pass": False,
+            "test_failures": 99,
             "build_result": {"tests": {"failed": 99}},
         }
         result = pre_push_verify(
-            tmp_path, last_bv, {"tests": {"failed": 0}},
+            tmp_path,
+            last_bv,
+            {"tests": {"failed": 0}},
             {"repo": {"build": {"pre_push_disable": True}}},
         )
         assert result["pass"] is True
@@ -2071,11 +2294,15 @@ class TestPrePushVerifyDisabled:
     def test_strict_false_short_circuits(self, tmp_path):
         """``pre_push_strict = false`` also bypasses (legacy behavior)."""
         last_bv = {
-            "pass": False, "strict_pass": False, "test_failures": 99,
+            "pass": False,
+            "strict_pass": False,
+            "test_failures": 99,
             "build_result": {"tests": {"failed": 99}},
         }
         result = pre_push_verify(
-            tmp_path, last_bv, {"tests": {"failed": 0}},
+            tmp_path,
+            last_bv,
+            {"tests": {"failed": 0}},
             {"repo": {"build": {"pre_push_strict": False}}},
         )
         assert result["pass"] is True
@@ -2089,7 +2316,10 @@ class TestPrePushVerifyExplicitCmds:
     def test_runs_provided_commands_when_set(self, mock_run, tmp_path):
         """Subprocess called for each command; happy path returns pass."""
         mock_run.return_value = subprocess.CompletedProcess(
-            [], 0, stdout="all green", stderr="",
+            [],
+            0,
+            stdout="all green",
+            stderr="",
         )
         cfg = {
             "repo": {
@@ -2115,7 +2345,8 @@ class TestPrePushVerifyExplicitCmds:
         mock_run.side_effect = [
             subprocess.CompletedProcess([], 0, stdout="ok", stderr=""),
             subprocess.CompletedProcess(
-                [], 1,
+                [],
+                1,
                 stdout="Tests  3 passed | 2 failed (5)",
                 stderr="",
             ),
@@ -2150,8 +2381,10 @@ class TestPrePushVerifyExplicitCmds:
         regression (let Codex try once).
         """
         mock_run.return_value = subprocess.CompletedProcess(
-            [], 134,  # SIGSEGV-style exit
-            stdout="Segmentation fault (core dumped)\n", stderr="",
+            [],
+            134,  # SIGSEGV-style exit
+            stdout="Segmentation fault (core dumped)\n",
+            stderr="",
         )
         cfg = {
             "repo": {
@@ -2177,7 +2410,8 @@ class TestPrePushVerifyExplicitCmds:
         over-broad.
         """
         mock_run.return_value = subprocess.CompletedProcess(
-            [], 1,
+            [],
+            1,
             stdout="Tests  4 passed | 2 failed (6)",
             stderr="",
         )
@@ -2196,12 +2430,14 @@ class TestPrePushVerifyExplicitCmds:
 
 class TestBuildPrePushErrorPrompt:
     def test_includes_delta_and_logs(self):
-        prompt = _build_pre_push_error_prompt({
-            "test_failures": 2,
-            "baseline_failures": 0,
-            "failed_cmd": "npm -w apps/web run test:run",
-            "logs": "FAIL src/foo.test.ts\n  expected 1, got 2",
-        })
+        prompt = _build_pre_push_error_prompt(
+            {
+                "test_failures": 2,
+                "baseline_failures": 0,
+                "failed_cmd": "npm -w apps/web run test:run",
+                "logs": "FAIL src/foo.test.ts\n  expected 1, got 2",
+            }
+        )
         assert "Pre-Push Verification Failed" in prompt
         assert "Baseline (before fix): 0" in prompt
         assert "After fix: 2" in prompt
@@ -2210,10 +2446,14 @@ class TestBuildPrePushErrorPrompt:
         assert "ONLY the test regressions" in prompt
 
     def test_handles_missing_baseline(self):
-        prompt = _build_pre_push_error_prompt({
-            "test_failures": 1, "baseline_failures": -1,
-            "failed_cmd": "", "logs": "",
-        })
+        prompt = _build_pre_push_error_prompt(
+            {
+                "test_failures": 1,
+                "baseline_failures": -1,
+                "failed_cmd": "",
+                "logs": "",
+            }
+        )
         assert "Test failures after fix: 1" in prompt
         # No baseline → don't claim a comparison
         assert "Baseline" not in prompt
@@ -2227,19 +2467,28 @@ class TestFailPreExistingTests:
         (tmp_path / "verdict.json").write_text("{}")
         (tmp_path / "triage.json").write_text("{}")
         return FixPipeline(
-            pr_number=399, repo="a/b", workspace=tmp_path,
-            verdict=verdict, build={}, config=sample_config,
+            pr_number=399,
+            repo="a/b",
+            workspace=tmp_path,
+            verdict=verdict,
+            build={},
+            config=sample_config,
         )
 
     @patch("gate.fixer.notify")
     @patch("gate.fixer.state.record_fix_attempt")
     def test_records_attempt_and_notifies(
-        self, mock_record, mock_notify, sample_config, tmp_path,
+        self,
+        mock_record,
+        mock_notify,
+        sample_config,
+        tmp_path,
     ):
         pipe = self._make_pipeline(sample_config, tmp_path)
         pp = {
             "kind": "pre_existing",
-            "test_failures": 3, "baseline_failures": 3,
+            "test_failures": 3,
+            "baseline_failures": 3,
             "failed_cmd": "npm test",
         }
         result = pipe._fail_pre_existing_tests(pp, iteration=2)

@@ -84,18 +84,20 @@ class ReviewQueue:
             token = self._enqueue_counter
             self._latest_token[key] = token
 
-        self._queue.put((
-            time.time(),
-            pr_number,
-            token,
-            {
-                "repo": repo,
-                "head_sha": head_sha,
-                "event": event,
-                "branch": branch,
-                "labels": labels,
-            },
-        ))
+        self._queue.put(
+            (
+                time.time(),
+                pr_number,
+                token,
+                {
+                    "repo": repo,
+                    "head_sha": head_sha,
+                    "event": event,
+                    "branch": branch,
+                    "labels": labels,
+                },
+            )
+        )
         logger.info(f"Enqueued review for {repo} PR #{pr_number}")
 
     def get_active_reviews(self) -> dict[tuple[str, int], ReviewOrchestrator]:
@@ -156,9 +158,7 @@ class ReviewQueue:
             with self._lock:
                 latest = self._latest_token.get(key)
                 if latest is None or token != latest:
-                    logger.info(
-                        f"Dropping superseded queue entry for {repo} PR #{pr_number}"
-                    )
+                    logger.info(f"Dropping superseded queue entry for {repo} PR #{pr_number}")
                     continue
 
             quota = quota_mod.check_quota()
@@ -187,15 +187,11 @@ class ReviewQueue:
                 # Re-check latest token under lock to rule out any enqueue
                 # that landed between the earlier check and now.
                 if self._latest_token.get(key) != token:
-                    logger.info(
-                        f"Dropping superseded queue entry for {repo} PR #{pr_number}"
-                    )
+                    logger.info(f"Dropping superseded queue entry for {repo} PR #{pr_number}")
                     continue
                 existing = self._active.get(key)
                 if existing is not None:
-                    logger.info(
-                        f"Cancelling superseded review for {repo} PR #{pr_number}"
-                    )
+                    logger.info(f"Cancelling superseded review for {repo} PR #{pr_number}")
                     existing.cancel()
                 self._active[key] = orchestrator
                 # Token is now owned by _active; future enqueues will either

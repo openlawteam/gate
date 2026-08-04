@@ -140,7 +140,9 @@ def _is_branch_not_found(stderr: str) -> bool:
 
 
 def _git_fetch_with_retry(
-    repo_path: str, branch: str, max_retries: int = 4,
+    repo_path: str,
+    branch: str,
+    max_retries: int = 4,
 ) -> None:
     """Fetch a branch with exponential backoff + recovery (Group 3A).
 
@@ -178,15 +180,17 @@ def _git_fetch_with_retry(
                 try:
                     subprocess.run(
                         ["git", "fetch", "--prune", "origin"],
-                        cwd=repo_path, capture_output=True, timeout=90, env=env,
+                        cwd=repo_path,
+                        capture_output=True,
+                        timeout=90,
+                        env=env,
                     )
                 except Exception as prune_err:
                     logger.info(f"git fetch --prune failed: {prune_err}")
             if attempt < max_retries:
-                backoff = 2 ** attempt
+                backoff = 2**attempt
                 logger.warning(
-                    f"git fetch retry {attempt}/{max_retries} in {backoff}s: "
-                    f"{stderr.strip() or e}"
+                    f"git fetch retry {attempt}/{max_retries} in {backoff}s: {stderr.strip() or e}"
                 )
                 time.sleep(backoff)
                 continue
@@ -194,10 +198,8 @@ def _git_fetch_with_retry(
         except subprocess.TimeoutExpired as e:
             last_err = e
             if attempt < max_retries:
-                backoff = 2 ** attempt
-                logger.warning(
-                    f"git fetch timeout retry {attempt}/{max_retries} in {backoff}s"
-                )
+                backoff = 2**attempt
+                logger.warning(f"git fetch timeout retry {attempt}/{max_retries} in {backoff}s")
                 time.sleep(backoff)
                 continue
             raise
@@ -253,7 +255,9 @@ def _refresh_default_branch_ref(
 
 
 def _install_deps_with_retry(
-    worktree_path: Path, cmd: str, max_retries: int = 2,
+    worktree_path: Path,
+    cmd: str,
+    max_retries: int = 2,
 ) -> None:
     """Run dependency install with retries (Group 3B).
 
@@ -574,9 +578,13 @@ def create_auxiliary_worktree(
 
     subprocess.run(
         [
-            "git", "worktree", "add",
-            "-b", branch,
-            str(worktree_path), base_sha,
+            "git",
+            "worktree",
+            "add",
+            "-b",
+            branch,
+            str(worktree_path),
+            base_sha,
         ],
         cwd=resolved_repo,
         check=True,

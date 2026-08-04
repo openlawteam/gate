@@ -156,14 +156,13 @@ class TestFindSticky:
     @patch("gate.github._gh")
     def test_find_handles_array_response(self, mock_gh):
         # Older `gh` returns the comments array as a single line.
-        mock_gh.return_value = (
-            '[{"id":7,"body":"' + STICKY_MARKER + '"}]'
-        )
+        mock_gh.return_value = '[{"id":7,"body":"' + STICKY_MARKER + '"}]'
         assert _find_sticky_comment("o/r", 1) == 7
 
     @patch("gate.github._gh")
     def test_find_returns_none_on_gh_error(self, mock_gh):
         import subprocess
+
         mock_gh.side_effect = subprocess.CalledProcessError(1, "gh")
         assert _find_sticky_comment("o/r", 1) is None
 

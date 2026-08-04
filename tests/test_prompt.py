@@ -250,7 +250,9 @@ class TestBuildVars:
     def test_postconditions_max_functions_surfaced(self, tmp_workspace):
         env_vars = {}
         vars = build_vars(
-            tmp_workspace, "postconditions", env_vars,
+            tmp_workspace,
+            "postconditions",
+            env_vars,
             config={"limits": {"postconditions_max_functions": 7}},
         )
         assert vars["postconditions_max_functions"] == "7"
@@ -279,7 +281,9 @@ class TestBuildVars:
     def test_exposes_monorepo_layout_from_profile(self, tmp_workspace):
         env_vars = {}
         vars = build_vars(
-            tmp_workspace, "logic", env_vars,
+            tmp_workspace,
+            "logic",
+            env_vars,
             config={
                 "repo": {
                     "project_type": "node",
@@ -296,7 +300,9 @@ class TestBuildVars:
     def test_exposes_command_groups_as_shell_friendly_display(self, tmp_workspace):
         env_vars = {}
         vars = build_vars(
-            tmp_workspace, "logic", env_vars,
+            tmp_workspace,
+            "logic",
+            env_vars,
             config={
                 "repo": {
                     "project_type": "node",

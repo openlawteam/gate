@@ -493,10 +493,7 @@ class Finding:
                     )
                 )
 
-        extra = {
-            k: v for k, v in raw.items()
-            if k not in cls._KNOWN_FIELDS
-        }
+        extra = {k: v for k, v in raw.items() if k not in cls._KNOWN_FIELDS}
 
         return cls(
             severity=severity,

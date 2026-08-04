@@ -74,19 +74,13 @@ class TestParse:
 
 class TestBypassLink:
     def test_linear_link_accepted(self):
-        assert _validate_bypass_link(
-            "https://linear.app/myorg/issue/PRO-123", None
-        )
+        assert _validate_bypass_link("https://linear.app/myorg/issue/PRO-123", None)
 
     def test_jira_link_accepted(self):
-        assert _validate_bypass_link(
-            "https://acme.atlassian.net/browse/PROJ-99", None
-        )
+        assert _validate_bypass_link("https://acme.atlassian.net/browse/PROJ-99", None)
 
     def test_pagerduty_link_accepted(self):
-        assert _validate_bypass_link(
-            "https://acme.pagerduty.com/incidents/Q1ABCDEF", None
-        )
+        assert _validate_bypass_link("https://acme.pagerduty.com/incidents/Q1ABCDEF", None)
 
     def test_random_url_rejected(self):
         assert not _validate_bypass_link("https://example.com/whatever", None)
@@ -98,9 +92,7 @@ class TestBypassLink:
         repo_cfg = {"bypass_link_patterns": [r"^https://internal\.acme\.com/incidents/"]}
         assert _validate_bypass_link("https://internal.acme.com/incidents/42", repo_cfg)
         # Default Linear no longer accepted because override replaces defaults.
-        assert not _validate_bypass_link(
-            "https://linear.app/myorg/issue/X", repo_cfg
-        )
+        assert not _validate_bypass_link("https://linear.app/myorg/issue/X", repo_cfg)
 
 
 # ── Dispatch — auth gate ────────────────────────────────────
@@ -109,7 +101,10 @@ class TestBypassLink:
 class TestDispatchAuth:
     def test_open_verbs_pass_without_allowed_commanders(self, tmp_path):
         cmd = Command(
-            verb="status", args=[], pr_number=1, repo="o/r",
+            verb="status",
+            args=[],
+            pr_number=1,
+            repo="o/r",
             commenter="anyone",
         )
         with patch("gate.slash_commands.gate_client.list_reviews", return_value=[]):
@@ -122,18 +117,22 @@ class TestDispatchAuth:
 
     def test_mutating_verb_rejected_when_no_commanders_configured(self, tmp_path):
         cmd = Command(
-            verb="rerun", args=[], pr_number=1, repo="o/r",
+            verb="rerun",
+            args=[],
+            pr_number=1,
+            repo="o/r",
             commenter="alice",
         )
-        outcome, reply = dispatch_command(
-            cmd, socket_path=tmp_path / "fake.sock", repo_config={}
-        )
+        outcome, reply = dispatch_command(cmd, socket_path=tmp_path / "fake.sock", repo_config={})
         assert outcome == "rejected"
         assert "allowed_commanders" in reply
 
     def test_mutating_verb_rejected_when_commenter_not_in_list(self, tmp_path):
         cmd = Command(
-            verb="rerun", args=[], pr_number=1, repo="o/r",
+            verb="rerun",
+            args=[],
+            pr_number=1,
+            repo="o/r",
             commenter="mallory",
         )
         repo_cfg = {"allowed_commanders": ["alice", "bob"]}
@@ -145,18 +144,20 @@ class TestDispatchAuth:
 
     def test_authorised_commenter_proceeds(self, tmp_path):
         cmd = Command(
-            verb="rerun", args=[], pr_number=1, repo="o/r",
+            verb="rerun",
+            args=[],
+            pr_number=1,
+            repo="o/r",
             commenter="alice",
         )
         fake_pr_info = {
             "headRefOid": "abc1234567890def",
             "headRefName": "feature/x",
         }
-        with patch(
-            "gate.github.get_pr_info", return_value=fake_pr_info
-        ), patch(
-            "gate.slash_commands.gate_client.send_message", return_value=None
-        ) as mock_send:
+        with (
+            patch("gate.github.get_pr_info", return_value=fake_pr_info),
+            patch("gate.slash_commands.gate_client.send_message", return_value=None) as mock_send,
+        ):
             outcome, reply = dispatch_command(
                 cmd,
                 socket_path=tmp_path / "fake.sock",
@@ -177,7 +178,10 @@ class TestDispatchAuth:
 class TestDispatchVerbs:
     def test_skip_requires_reason(self, tmp_path):
         cmd = Command(
-            verb="skip", args=[], pr_number=1, repo="o/r",
+            verb="skip",
+            args=[],
+            pr_number=1,
+            repo="o/r",
             commenter="alice",
         )
         outcome, reply = dispatch_command(
@@ -190,7 +194,10 @@ class TestDispatchVerbs:
 
     def test_skip_adds_label_when_authorised(self, tmp_path):
         cmd = Command(
-            verb="skip", args=["docs", "only"], pr_number=1, repo="o/r",
+            verb="skip",
+            args=["docs", "only"],
+            pr_number=1,
+            repo="o/r",
             commenter="alice",
         )
         with patch("gate.slash_commands._add_label") as mock_label:
@@ -205,7 +212,10 @@ class TestDispatchVerbs:
 
     def test_bypass_requires_link(self, tmp_path):
         cmd = Command(
-            verb="bypass", args=[], pr_number=1, repo="o/r",
+            verb="bypass",
+            args=[],
+            pr_number=1,
+            repo="o/r",
             commenter="alice",
         )
         outcome, _ = dispatch_command(
@@ -217,8 +227,11 @@ class TestDispatchVerbs:
 
     def test_bypass_rejects_random_link(self, tmp_path):
         cmd = Command(
-            verb="bypass", args=["https://example.com/incident/1"],
-            pr_number=1, repo="o/r", commenter="alice",
+            verb="bypass",
+            args=["https://example.com/incident/1"],
+            pr_number=1,
+            repo="o/r",
+            commenter="alice",
         )
         outcome, reply = dispatch_command(
             cmd,
@@ -232,7 +245,9 @@ class TestDispatchVerbs:
         cmd = Command(
             verb="bypass",
             args=["https://linear.app/myorg/issue/PRO-123"],
-            pr_number=1, repo="o/r", commenter="alice",
+            pr_number=1,
+            repo="o/r",
+            commenter="alice",
         )
         with patch("gate.slash_commands._add_label") as mock_label:
             outcome, reply = dispatch_command(
@@ -251,8 +266,12 @@ class TestDispatchVerbs:
 class TestActionsLog:
     def test_record_action_writes_line(self):
         actions_mod.record_action(
-            verb="skip", actor="alice", repo="o/r", pr_number=1,
-            args={"reason": "docs"}, outcome="ok",
+            verb="skip",
+            actor="alice",
+            repo="o/r",
+            pr_number=1,
+            args={"reason": "docs"},
+            outcome="ok",
         )
         rows = list(actions_mod.read_actions())
         assert any(r["verb"] == "skip" and r["actor"] == "alice" for r in rows)
@@ -267,7 +286,10 @@ class TestActionsLog:
 
     def test_dispatch_records_authorised_action(self, tmp_path):
         cmd = Command(
-            verb="skip", args=["docs"], pr_number=1, repo="o/r",
+            verb="skip",
+            args=["docs"],
+            pr_number=1,
+            repo="o/r",
             commenter="alice",
         )
         with patch("gate.slash_commands._add_label"):
@@ -281,7 +303,10 @@ class TestActionsLog:
 
     def test_dispatch_records_rejected_action(self, tmp_path):
         cmd = Command(
-            verb="skip", args=["docs"], pr_number=1, repo="o/r",
+            verb="skip",
+            args=["docs"],
+            pr_number=1,
+            repo="o/r",
             commenter="mallory",
         )
         dispatch_command(

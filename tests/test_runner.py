@@ -135,12 +135,14 @@ class TestReviewRunnerExtractResult:
         assert envelope["success"] is True
 
     def test_falls_back_to_transcript(self, tmp_workspace, sample_config):
-        transcript = json.dumps([
-            {
-                "role": "assistant",
-                "content": '{"findings": [{"message": "from transcript"}], "pass": true}',
-            }
-        ])
+        transcript = json.dumps(
+            [
+                {
+                    "role": "assistant",
+                    "content": '{"findings": [{"message": "from transcript"}], "pass": true}',
+                }
+            ]
+        )
         (tmp_workspace / "architecture-raw.json").write_text(transcript)
 
         runner = ReviewRunner(
@@ -311,9 +313,7 @@ class TestRunWithRetry:
 
     # ── Cancellation event plumbing (audit P2.1) ─────────────
 
-    def test_cancelled_event_short_circuits_before_first_attempt(
-        self, sample_config
-    ):
+    def test_cancelled_event_short_circuits_before_first_attempt(self, sample_config):
         """Pre-set cancel event causes early return before run_fn runs.
 
         Mirrors the orchestrator behavior where a queue supersede can
@@ -329,9 +329,7 @@ class TestRunWithRetry:
             called[0] += 1
             return StageResult(stage="triage", success=True, data={"key": "val"})
 
-        result = run_with_retry(
-            run_fn, "triage", sample_config, cancelled=cancelled
-        )
+        result = run_with_retry(run_fn, "triage", sample_config, cancelled=cancelled)
         assert called[0] == 0
         assert result.cancelled is True
         assert result.success is False
@@ -347,9 +345,7 @@ class TestRunWithRetry:
         # Force a short base delay so the test can complete fast.
         config = {"retry": {"max_retries": 2, "base_delay_s": 5}}
         cancelled = threading.Event()
-        rate_limited = StageResult(
-            stage="triage", success=False, is_rate_limited=True
-        )
+        rate_limited = StageResult(stage="triage", success=False, is_rate_limited=True)
 
         # Fire the cancel ~50ms into the rate-limit sleep.
         def _cancel_soon():
@@ -359,9 +355,7 @@ class TestRunWithRetry:
         threading.Thread(target=_cancel_soon, daemon=True).start()
 
         start = time.monotonic()
-        result = run_with_retry(
-            lambda: rate_limited, "triage", config, cancelled=cancelled
-        )
+        result = run_with_retry(lambda: rate_limited, "triage", config, cancelled=cancelled)
         elapsed = time.monotonic() - start
 
         assert result.cancelled is True
@@ -371,9 +365,7 @@ class TestRunWithRetry:
 
     def test_cancelled_event_breaks_transient_retry_sleep(self, sample_config):
         """Same shape as the rate-limit test but for the transient branch."""
-        config = {
-            "retry": {"max_retries": 2, "base_delay_s": 60, "transient_base_delay_s": 5}
-        }
+        config = {"retry": {"max_retries": 2, "base_delay_s": 60, "transient_base_delay_s": 5}}
         cancelled = threading.Event()
         transient = StageResult(stage="triage", success=False, is_transient=True)
 
@@ -384,9 +376,7 @@ class TestRunWithRetry:
         threading.Thread(target=_cancel_soon, daemon=True).start()
 
         start = time.monotonic()
-        result = run_with_retry(
-            lambda: transient, "triage", config, cancelled=cancelled
-        )
+        result = run_with_retry(lambda: transient, "triage", config, cancelled=cancelled)
         elapsed = time.monotonic() - start
 
         assert result.cancelled is True
@@ -401,9 +391,7 @@ class TestRunWithRetry:
         behavior. Verified by patching ``time.sleep`` and asserting it
         was invoked (the Event.wait path would skip the patch).
         """
-        rate_limited = StageResult(
-            stage="triage", success=False, is_rate_limited=True
-        )
+        rate_limited = StageResult(stage="triage", success=False, is_rate_limited=True)
 
         with patch("gate.runner.time.sleep") as mock_sleep:
             run_with_retry(lambda: rate_limited, "triage", sample_config)
@@ -453,7 +441,9 @@ class TestStructuredRunnerCancellation:
 
         runner = StructuredRunner()
         result = runner.run(
-            "triage", "prompt", tmp_path,
+            "triage",
+            "prompt",
+            tmp_path,
             {"models": {}, "timeouts": {}},
             cancelled=cancelled,
         )
@@ -462,9 +452,7 @@ class TestStructuredRunnerCancellation:
         assert proc.terminate.called, "watchdog must call terminate() on cancel"
 
     @patch("gate.runner.subprocess.Popen")
-    def test_cancelled_after_completion_returns_normal_result(
-        self, mock_popen, tmp_path
-    ):
+    def test_cancelled_after_completion_returns_normal_result(self, mock_popen, tmp_path):
         """If cancel arrives after communicate() returns cleanly, the
         normal parse path runs — we don't retroactively mark success as
         cancelled.
@@ -479,7 +467,9 @@ class TestStructuredRunnerCancellation:
 
         runner = StructuredRunner()
         result = runner.run(
-            "triage", "prompt", tmp_path,
+            "triage",
+            "prompt",
+            tmp_path,
             {"models": {}, "timeouts": {}},
             cancelled=cancelled,
         )
@@ -503,9 +493,7 @@ class TestStructuredRunnerCancellation:
         runner = StructuredRunner()
         # We can't directly assert "no thread spawned" without
         # introspection, but we can assert terminate is not called.
-        result = runner.run(
-            "triage", "prompt", tmp_path, {"models": {}, "timeouts": {}}
-        )
+        result = runner.run("triage", "prompt", tmp_path, {"models": {}, "timeouts": {}})
         assert proc.terminate.called is False
         assert result.success is True
 
@@ -525,15 +513,15 @@ class TestReviewRunnerHandleSignalSweep:
             config=sample_config,
         )
 
-    def test_sigterm_invokes_pkill_with_own_pid(
-        self, tmp_workspace, sample_config
-    ):
+    def test_sigterm_invokes_pkill_with_own_pid(self, tmp_workspace, sample_config):
         import signal as _signal
 
         runner = self._make_runner(tmp_workspace, sample_config)
-        with patch("gate.runner.subprocess.run") as mock_run, \
-             patch("gate.runner.os.getpid", return_value=4242), \
-             patch("gate.runner.sys.exit") as mock_exit:
+        with (
+            patch("gate.runner.subprocess.run") as mock_run,
+            patch("gate.runner.os.getpid", return_value=4242),
+            patch("gate.runner.sys.exit") as mock_exit,
+        ):
             runner._handle_signal(_signal.SIGTERM, None)
 
         assert mock_run.called, "pkill sweep must run before exit"
@@ -545,9 +533,7 @@ class TestReviewRunnerHandleSignalSweep:
         assert kwargs.get("check") is False
         mock_exit.assert_called_once_with(128 + _signal.SIGTERM)
 
-    def test_sigint_still_raises_after_sweep(
-        self, tmp_workspace, sample_config
-    ):
+    def test_sigint_still_raises_after_sweep(self, tmp_workspace, sample_config):
         """SIGINT must still surface as KeyboardInterrupt (preserving
         the pre-Fix-2d contract) — but only after we attempt to reap
         direct children."""
@@ -556,15 +542,12 @@ class TestReviewRunnerHandleSignalSweep:
         runner = self._make_runner(tmp_workspace, sample_config)
         import pytest
 
-        with patch("gate.runner.subprocess.run") as mock_run, \
-             pytest.raises(KeyboardInterrupt):
+        with patch("gate.runner.subprocess.run") as mock_run, pytest.raises(KeyboardInterrupt):
             runner._handle_signal(_signal.SIGINT, None)
 
         assert mock_run.called
 
-    def test_pkill_failures_are_swallowed(
-        self, tmp_workspace, sample_config
-    ):
+    def test_pkill_failures_are_swallowed(self, tmp_workspace, sample_config):
         """Missing pkill binary, timeout, or OSError must not prevent
         the handler from exiting — this is best-effort cleanup."""
         import signal as _signal
@@ -576,7 +559,9 @@ class TestReviewRunnerHandleSignalSweep:
             _subprocess.TimeoutExpired(cmd="pkill", timeout=2),
             OSError(),
         ):
-            with patch("gate.runner.subprocess.run", side_effect=exc), \
-                 patch("gate.runner.sys.exit") as mock_exit:
+            with (
+                patch("gate.runner.subprocess.run", side_effect=exc),
+                patch("gate.runner.sys.exit") as mock_exit,
+            ):
                 runner._handle_signal(_signal.SIGTERM, None)
                 mock_exit.assert_called_once_with(128 + _signal.SIGTERM)

@@ -48,9 +48,7 @@ class TestRunCodeStage:
 
     @patch("gate.code.run_codex")
     @patch("gate.code._load_prompt_template")
-    def test_stdout_log_path_threaded_to_run_codex(
-        self, mock_load, mock_run, tmp_path
-    ):
+    def test_stdout_log_path_threaded_to_run_codex(self, mock_load, mock_run, tmp_path):
         """run_code_stage must thread a {suffix}.codex.log path into
         run_codex so codex's stdout gets redirected away from senior's
         tmux pane."""
@@ -65,9 +63,7 @@ class TestRunCodeStage:
 
     @patch("gate.code.run_codex")
     @patch("gate.code._load_prompt_template")
-    def test_stdout_log_path_versioned_on_rerun(
-        self, mock_load, mock_run, tmp_path
-    ):
+    def test_stdout_log_path_versioned_on_rerun(self, mock_load, mock_run, tmp_path):
         """Second call for the same stage bumps the version suffix, and
         the codex log path must bump with it (no clobbering prior logs)."""
         mock_load.return_value = "Do this: $request"
@@ -81,9 +77,7 @@ class TestRunCodeStage:
 
     @patch("gate.code.run_codex")
     @patch("gate.code._load_prompt_template")
-    def test_heartbeat_thread_starts_and_joins(
-        self, mock_load, mock_run, tmp_path
-    ):
+    def test_heartbeat_thread_starts_and_joins(self, mock_load, mock_run, tmp_path):
         """The heartbeat thread must start when run_codex begins and be
         joined (stopped) by the time run_code_stage returns. Verified
         indirectly by asserting no gate-code heartbeat threads survive."""
@@ -94,10 +88,7 @@ class TestRunCodeStage:
 
         run_code_stage("implement", "fix", tmp_path, "tid")
 
-        leftover = [
-            t for t in threading.enumerate()
-            if t.name.startswith("gate-code-heartbeat-")
-        ]
+        leftover = [t for t in threading.enumerate() if t.name.startswith("gate-code-heartbeat-")]
         assert leftover == [], f"heartbeat threads not joined: {leftover}"
 
     @patch("gate.code._load_prompt_template")
@@ -106,12 +97,11 @@ class TestRunCodeStage:
         the runner stuck-detector (hard_timeout_s=1200) never fires on
         a long junior call. Lowering this silently would undo Fix 1b."""
         from gate.code import HEARTBEAT_INTERVAL_S
+
         assert HEARTBEAT_INTERVAL_S == 30.0
 
     @patch("gate.code._load_prompt_template")
-    def test_heartbeat_fires_while_codex_runs(
-        self, mock_load, tmp_path, capsys, monkeypatch
-    ):
+    def test_heartbeat_fires_while_codex_runs(self, mock_load, tmp_path, capsys, monkeypatch):
         """Heartbeat prints status to stdout on its configured interval
         while codex is running, and the thread joins cleanly when
         run_codex returns. Monkeypatches the interval to a tiny value
@@ -140,10 +130,7 @@ class TestRunCodeStage:
             run_code_stage("implement", "fix", tmp_path, "tid")
 
         # After return, no heartbeat threads should be lingering.
-        leftover = [
-            t for t in _threading.enumerate()
-            if t.name.startswith("gate-code-heartbeat-")
-        ]
+        leftover = [t for t in _threading.enumerate() if t.name.startswith("gate-code-heartbeat-")]
         assert leftover == [], f"heartbeat threads not joined: {leftover}"
 
 
@@ -154,9 +141,7 @@ class TestMainSignalHandlers:
     the user's quota.
     """
 
-    def test_signal_handlers_registered(
-        self, tmp_path, monkeypatch
-    ):
+    def test_signal_handlers_registered(self, tmp_path, monkeypatch):
         import signal as _signal
 
         monkeypatch.setenv("GATE_CODEX_THREAD_ID", "tid")
@@ -170,8 +155,10 @@ class TestMainSignalHandlers:
             registered[signum] = handler
             return _signal.SIG_DFL
 
-        with patch("gate.code.signal.signal", side_effect=capture_signal), \
-             patch("gate.code.run_code_stage", return_value=0):
+        with (
+            patch("gate.code.signal.signal", side_effect=capture_signal),
+            patch("gate.code.run_code_stage", return_value=0),
+        ):
             try:
                 main()
             except SystemExit:
@@ -180,9 +167,7 @@ class TestMainSignalHandlers:
         assert _signal.SIGTERM in registered
         assert _signal.SIGHUP in registered
 
-    def test_signal_handler_terminates_active_codex_and_exits(
-        self, tmp_path, monkeypatch
-    ):
+    def test_signal_handler_terminates_active_codex_and_exits(self, tmp_path, monkeypatch):
         """Installed handler must call codex.terminate_active(SIGTERM)
         and then exit with 128 + signum."""
         import signal as _signal
@@ -198,16 +183,20 @@ class TestMainSignalHandlers:
             captured[signum] = handler
             return _signal.SIG_DFL
 
-        with patch("gate.code.signal.signal", side_effect=capture_signal), \
-             patch("gate.code.run_code_stage", return_value=0):
+        with (
+            patch("gate.code.signal.signal", side_effect=capture_signal),
+            patch("gate.code.run_code_stage", return_value=0),
+        ):
             try:
                 main()
             except SystemExit:
                 pass
 
         handler = captured[_signal.SIGTERM]
-        with patch("gate.code._codex.terminate_active") as mock_term, \
-             patch("gate.code.sys.exit") as mock_exit:
+        with (
+            patch("gate.code._codex.terminate_active") as mock_term,
+            patch("gate.code.sys.exit") as mock_exit,
+        ):
             handler(_signal.SIGTERM, None)
             mock_term.assert_called_once_with(_signal.SIGTERM)
             mock_exit.assert_called_once_with(128 + _signal.SIGTERM)
@@ -231,22 +220,27 @@ class TestRunCodeStageConfigThreading:
         import inspect
 
         from gate.code import run_code_stage
+
         sig = inspect.signature(run_code_stage)
         assert "config" in sig.parameters
 
     def test_threads_config_to_resolve_repo_config(self, tmp_path):
         from unittest.mock import patch
+
         # Workspace has pr-metadata.json with a repo name
         (tmp_path / "pr-metadata.json").write_text('{"repo": "org/repo"}')
 
-        with patch("gate.code._load_prompt_template", return_value="ok $request"), \
-             patch("gate.code.run_codex", return_value=(0, ["codex"])), \
-             patch("gate.profiles.resolve_profile", return_value={}), \
-             patch("gate.config.resolve_repo_config") as rrc, \
-             patch("gate.config.load_config") as load:
+        with (
+            patch("gate.code._load_prompt_template", return_value="ok $request"),
+            patch("gate.code.run_codex", return_value=(0, ["codex"])),
+            patch("gate.profiles.resolve_profile", return_value={}),
+            patch("gate.config.resolve_repo_config") as rrc,
+            patch("gate.config.load_config") as load,
+        ):
             rrc.return_value = {"repo": {"name": "org/repo"}}
             cfg = {"repos": [{"name": "org/repo"}]}
             from gate.code import run_code_stage
+
             run_code_stage("prep", "req", tmp_path, "tid", config=cfg)
             # resolve_repo_config got our config, no hidden reload
             rrc.assert_called_once()
@@ -263,12 +257,16 @@ class TestRunCodeStageErrorLogging:
     def test_corrupt_pr_metadata_logs_exception(self, tmp_path, caplog):
         import logging
         from unittest.mock import patch
+
         (tmp_path / "pr-metadata.json").write_text("{not json")
-        with patch("gate.code._load_prompt_template", return_value="ok $request"), \
-             patch("gate.code.run_codex", return_value=(0, ["codex"])), \
-             patch("gate.profiles.resolve_profile", return_value={}):
+        with (
+            patch("gate.code._load_prompt_template", return_value="ok $request"),
+            patch("gate.code.run_codex", return_value=(0, ["codex"])),
+            patch("gate.profiles.resolve_profile", return_value={}),
+        ):
             with caplog.at_level(logging.WARNING, logger="gate.code"):
                 from gate.code import run_code_stage
+
                 run_code_stage("prep", "req", tmp_path, "tid", config={})
         assert any(
             "pr-metadata" in rec.message or "failed to read" in rec.message

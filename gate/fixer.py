@@ -38,17 +38,30 @@ SEVERITY_ORDER = {"critical": 0, "error": 1, "warning": 2, "info": 3}
 #
 # Keep in sync with GATE_EXCLUDE_PATTERNS in gate/workspace.py.
 GATE_ARTIFACT_FILES = {
-    "diff.txt", "changed_files.txt", "file_count.txt",
-    "diff_stats.txt", "lines_changed.txt",
-    "pr-metadata.json", "prior-review.json",
-    "build.json", "triage.json", "architecture.json",
-    "security.json", "logic.json", "verdict.json",
-    "fix-build.json", "fix-diff.txt", "fix-env.json",
-    "fix-resume-prompt.md", "fix-rereview.json",
-    "no-codex.txt", "fix.json",
+    "diff.txt",
+    "changed_files.txt",
+    "file_count.txt",
+    "diff_stats.txt",
+    "lines_changed.txt",
+    "pr-metadata.json",
+    "prior-review.json",
+    "build.json",
+    "triage.json",
+    "architecture.json",
+    "security.json",
+    "logic.json",
+    "verdict.json",
+    "fix-build.json",
+    "fix-diff.txt",
+    "fix-env.json",
+    "fix-resume-prompt.md",
+    "fix-rereview.json",
+    "no-codex.txt",
+    "fix.json",
     # Polish-loop / hopper-pipeline state files (PR #217 regression
     # guard — these must never land in PR commits).
-    "fix-polish.json", "fix-decomposition.json",
+    "fix-polish.json",
+    "fix-decomposition.json",
     # Scratch file senior Claude writes before each `gate-code <stage>
     # < gate-directions.md` invocation (Fix 3: replaces the deprecated
     # heredoc pattern). Never commit to the PR.
@@ -63,9 +76,13 @@ GATE_ARTIFACT_FILES = {
 }
 
 GATE_ARTIFACT_GLOBS = [
-    "*-findings.json", "*-result.json",
-    "*-session-id.txt", "*-raw.json",
-    "*.in.md", "*.out.md", "*.in.md.tmp",
+    "*-findings.json",
+    "*-result.json",
+    "*-session-id.txt",
+    "*-raw.json",
+    "*.in.md",
+    "*.out.md",
+    "*.in.md.tmp",
     "*.codex.log",
 ]
 
@@ -322,9 +339,18 @@ def build_verify(
 # 0 or 1). Used by _classify_pre_push to fall back to the safer-side
 # "regression" classification rather than mis-attributing failures to
 # pre-existing baseline.
-_GENERIC_TEST_PROJECT_TYPES: frozenset[str] = frozenset({
-    "go", "rust", "java", "ruby", "csharp", "kotlin", "swift", "none",
-})
+_GENERIC_TEST_PROJECT_TYPES: frozenset[str] = frozenset(
+    {
+        "go",
+        "rust",
+        "java",
+        "ruby",
+        "csharp",
+        "kotlin",
+        "swift",
+        "none",
+    }
+)
 
 
 def _classify_pre_push(
@@ -404,7 +430,8 @@ def pre_push_verify(
 
     baseline_failed = (
         (original_build or {}).get("tests", {}).get("failed", 0)
-        if original_build is not None else -1
+        if original_build is not None
+        else -1
     )
 
     # --- Default path: reuse cached build_verify result ---
@@ -495,9 +522,7 @@ def pre_push_verify(
     # synthesized block; that block doesn't run on this code path so
     # we synthesize the same signal here from the parser output.
     parse_failure = (
-        overall_exit != 0
-        and int(parsed.get("failed", 0)) == 0
-        and int(parsed.get("total", 0)) == 0
+        overall_exit != 0 and int(parsed.get("failed", 0)) == 0 and int(parsed.get("total", 0)) == 0
     )
     kind = _classify_pre_push(
         after_failed=after_failed,
@@ -542,10 +567,13 @@ def _get_changed_files(workspace: Path) -> list[str]:
     """
     try:
         result = subprocess.run(
-            ["sh", "-c",
-             "{ git diff --name-only 2>/dev/null; "
-             "git diff --cached --name-only 2>/dev/null; "
-             "git ls-files --others --exclude-standard 2>/dev/null; } | sort -u"],
+            [
+                "sh",
+                "-c",
+                "{ git diff --name-only 2>/dev/null; "
+                "git diff --cached --name-only 2>/dev/null; "
+                "git ls-files --others --exclude-standard 2>/dev/null; } | sort -u",
+            ],
             capture_output=True,
             text=True,
             cwd=str(workspace),
@@ -796,18 +824,37 @@ def _build_codex_bootstrap_prompt() -> str:
 # budget, which is the exact failure mode the polish loop is designed to
 # avoid.
 _TRIVIAL_KEYWORDS = (
-    "add comment", "add a comment", "explanatory comment",
-    "justification comment", "missing jsdoc", "add jsdoc",
-    "missing import", "unused import", "rename ", "typo",
-    "add type annotation", "missing type annotation",
-    "eslint-disable", "no-img-element",
-    "without an explanatory", "without justification",
+    "add comment",
+    "add a comment",
+    "explanatory comment",
+    "justification comment",
+    "missing jsdoc",
+    "add jsdoc",
+    "missing import",
+    "unused import",
+    "rename ",
+    "typo",
+    "add type annotation",
+    "missing type annotation",
+    "eslint-disable",
+    "no-img-element",
+    "without an explanatory",
+    "without justification",
 )
 _BROAD_KEYWORDS = (
-    "split file", "extract ", "duplicate ", "refactor",
-    "move to separate", "introduce abstraction", "rewrite ",
-    "line ceiling", "exceeding the", "exceeds the",
-    "over the ", "hard ceiling", "soft target",
+    "split file",
+    "extract ",
+    "duplicate ",
+    "refactor",
+    "move to separate",
+    "introduce abstraction",
+    "rewrite ",
+    "line ceiling",
+    "exceeding the",
+    "exceeds the",
+    "over the ",
+    "hard ceiling",
+    "soft target",
 )
 
 
@@ -933,17 +980,10 @@ def select_actionable_findings(
     """
     actionable = [f for f in findings if f.get("severity", "") != "info"]
     decision = (verdict or {}).get("decision")
-    has_blockers = any(
-        f.get("severity") in ("critical", "error") for f in actionable
-    )
-    fix_warnings = get_repo_bool(
-        config or {}, "fix_warnings_on_request_changes", False
-    )
+    has_blockers = any(f.get("severity") in ("critical", "error") for f in actionable)
+    fix_warnings = get_repo_bool(config or {}, "fix_warnings_on_request_changes", False)
     if decision == "request_changes" and has_blockers and not fix_warnings:
-        return [
-            f for f in actionable
-            if f.get("severity") in ("critical", "error")
-        ]
+        return [f for f in actionable if f.get("severity") in ("critical", "error")]
     return actionable
 
 
@@ -1084,18 +1124,14 @@ def _validate_fix_json(
 
         finding_ids = out.get("finding_ids") or []
         if not isinstance(finding_ids, list):
-            warnings.append(
-                f"sub_scope_log '{out['name']}' finding_ids is not a list"
-            )
+            warnings.append(f"sub_scope_log '{out['name']}' finding_ids is not a list")
             finding_ids = []
         out["finding_ids"] = [str(x) for x in finding_ids if x]
 
         try:
             out["iterations"] = int(out.get("iterations") or 0)
         except (TypeError, ValueError):
-            warnings.append(
-                f"sub_scope_log '{out['name']}' iterations not an int"
-            )
+            warnings.append(f"sub_scope_log '{out['name']}' iterations not an int")
             out["iterations"] = 0
 
         outcome = out.get("outcome")
@@ -1242,11 +1278,13 @@ class FixPipeline:
                     self._cancelled.set()
                     try:
                         from gate.logger import write_live_log as _wll
+
                         _wll(
                             self.pr_number,
                             f"Hopper watchdog tripped at {int(elapsed)}s "
                             f"(cap {cap}s) — cancelling fix run",
-                            prefix="fix", repo=self.repo,
+                            prefix="fix",
+                            repo=self.repo,
                         )
                     except Exception:  # noqa: BLE001 — best-effort
                         pass
@@ -1264,15 +1302,14 @@ class FixPipeline:
     def run(self) -> FixResult:
         """Execute the fix pipeline."""
         if self._cancelled.is_set():
-            return FixResult(
-                success=False, skipped=True, summary="Cancelled before start"
-            )
+            return FixResult(success=False, skipped=True, summary="Cancelled before start")
 
         self._fix_start_monotonic = time.monotonic()
         self._start_watchdog()
         self._connection = None
         if self.socket_path and self.review_id:
             from gate.client import GateConnection
+
             self._connection = GateConnection(self.socket_path)
             self._connection.start()
 
@@ -1282,20 +1319,19 @@ class FixPipeline:
             self._pre_fix_sha = subprocess.run(
                 ["git", "rev-parse", "HEAD"],
                 cwd=str(self.workspace),
-                capture_output=True, text=True, check=True, timeout=10,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
             ).stdout.strip()
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
-            logger.warning(
-                f"PR #{self.pr_number}: could not snapshot pre-fix HEAD: {exc}"
-            )
+            logger.warning(f"PR #{self.pr_number}: could not snapshot pre-fix HEAD: {exc}")
             self._pre_fix_sha = ""
 
         self._publish_gate_marker()
 
         findings = self.verdict.get("findings", [])
-        actionable = select_actionable_findings(
-            findings, self.verdict, self.config
-        )
+        actionable = select_actionable_findings(findings, self.verdict, self.config)
         finding_count = len(actionable)
 
         # Check fix attempt limits — cooldown / soft / lifetime caps
@@ -1310,9 +1346,7 @@ class FixPipeline:
                 self.pr_number,
                 f"**Gate Auto-Fix: skipped** — {reason}",
             )
-            return FixResult(
-                success=False, skipped=True, reason=reason, summary=reason
-            )
+            return FixResult(success=False, skipped=True, reason=reason, summary=reason)
 
         triage = self._read_json("triage.json") or {}
         risk_level = triage.get("risk_level", "medium")
@@ -1324,9 +1358,7 @@ class FixPipeline:
             if findings:
                 sorted_findings = sort_findings_by_severity(findings)
                 self.verdict["findings"] = sorted_findings
-                (self.workspace / "verdict.json").write_text(
-                    json.dumps(self.verdict, indent=2)
-                )
+                (self.workspace / "verdict.json").write_text(json.dumps(self.verdict, indent=2))
 
             # Pre-flight: verify codex CLI is functional
             ok, health_detail = codex_health_check()
@@ -1351,7 +1383,9 @@ class FixPipeline:
                     break
                 logger.warning(
                     "Codex bootstrap failed (attempt %d/2): rc=%d stderr=%s",
-                    attempt, _rc, stderr_tail[:500],
+                    attempt,
+                    _rc,
+                    stderr_tail[:500],
                 )
                 codex_health_check(force=True)
                 if attempt < 2:
@@ -1384,10 +1418,9 @@ class FixPipeline:
             # senior-driven monolithic path runs over all findings with
             # sub-scope checkpointing (see Part 3 of the hardening plan).
             from gate.config import get_fix_pipeline_mode, get_repo_bool
+
             pipeline_mode = get_fix_pipeline_mode(self.config)
-            polish_enabled = get_repo_bool(
-                self.config, "fix_polish_loop_enabled", True
-            )
+            polish_enabled = get_repo_bool(self.config, "fix_polish_loop_enabled", True)
             if (
                 pipeline_mode == "polish_legacy"
                 and self.is_polish
@@ -1397,13 +1430,12 @@ class FixPipeline:
                 return self._run_polish_path(tagged_findings, finding_count)
 
             from gate.config import get_fix_max_iterations
+
             max_iter = get_fix_max_iterations(self.config)
 
             for iteration in range(1, max_iter + 1):
                 if self._cancelled.is_set():
-                    return FixResult(
-                        success=False, skipped=True, summary="Cancelled"
-                    )
+                    return FixResult(success=False, skipped=True, summary="Cancelled")
 
                 write_live_log(
                     self.pr_number,
@@ -1439,16 +1471,18 @@ class FixPipeline:
                 if fix_result.get("has_changes") and not new_fixed:
                     changed = _get_changed_files(self.workspace)
                     for f in changed:
-                        new_fixed.append({
-                            "finding_id": f"synth:{f}",
-                            "file": f,
-                            "line": 0,
-                            "finding_message": "unreported change",
-                            "fix_description": (
-                                f"Agent modified {f} but did not record a finding mapping"
-                            ),
-                            "_synthesized": True,
-                        })
+                        new_fixed.append(
+                            {
+                                "finding_id": f"synth:{f}",
+                                "file": f,
+                                "line": 0,
+                                "finding_message": "unreported change",
+                                "fix_description": (
+                                    f"Agent modified {f} but did not record a finding mapping"
+                                ),
+                                "_synthesized": True,
+                            }
+                        )
 
                 all_fixed.extend(new_fixed)
 
@@ -1457,15 +1491,11 @@ class FixPipeline:
                 # so new_fixed picks up whatever the second pass lands.
                 # Only runs on the first iteration to avoid infinite
                 # loops and only when the senior is resumable.
-                if iteration == 1 and self._reprompt_trivial_skips(
-                    last_fix_json, tagged_findings
-                ):
+                if iteration == 1 and self._reprompt_trivial_skips(last_fix_json, tagged_findings):
                     follow_up_json = self._read_json("fix.json") or self._read_json(
                         "fix-senior-findings.json"
                     )
-                    _, follow_up_normalized = _validate_fix_json(
-                        follow_up_json, tagged_findings
-                    )
+                    _, follow_up_normalized = _validate_fix_json(follow_up_json, tagged_findings)
                     reprompt_fixed = follow_up_normalized["fixed"]
                     if reprompt_fixed:
                         all_fixed.extend(reprompt_fixed)
@@ -1542,7 +1572,10 @@ class FixPipeline:
                     # here so we never push something the remote will
                     # reject 60s later.
                     pp = pre_push_verify(
-                        self.workspace, build_result, self.build, self.config,
+                        self.workspace,
+                        build_result,
+                        self.build,
+                        self.config,
                     )
                     if pp["pass"]:
                         return self._commit_and_finish(
@@ -1564,17 +1597,23 @@ class FixPipeline:
                     write_live_log(
                         self.pr_number,
                         f"Pre-push regression: {pp['test_failures']} failure(s); resuming",
-                        prefix="fix", repo=self.repo,
+                        prefix="fix",
+                        repo=self.repo,
                     )
                     self._resume_fix_session(_build_pre_push_error_prompt(pp))
 
                     enforce_blocklist(self.workspace, config=self.config)
                     cleanup_gate_tests(self.workspace)
                     retry_build = build_verify(
-                        self.workspace, self.build, config=self.config,
+                        self.workspace,
+                        self.build,
+                        config=self.config,
                     )
                     pp2 = pre_push_verify(
-                        self.workspace, retry_build, self.build, self.config,
+                        self.workspace,
+                        retry_build,
+                        self.build,
+                        self.config,
                     )
                     if pp2["pass"]:
                         return self._commit_and_finish(
@@ -1591,14 +1630,15 @@ class FixPipeline:
                     if iteration >= max_iter:
                         state.record_fix_attempt(self.pr_number, repo=self.repo)
                         notify.fix_failed(
-                            self.pr_number, "pre-push regression",
-                            iteration, self.repo,
+                            self.pr_number,
+                            "pre-push regression",
+                            iteration,
+                            self.repo,
                         )
                         return FixResult(
                             success=False,
                             summary=(
-                                f"Pre-push test regressions unresolved "
-                                f"after {iteration} iterations"
+                                f"Pre-push test regressions unresolved after {iteration} iterations"
                             ),
                         )
                     continue
@@ -1621,9 +1661,7 @@ class FixPipeline:
             # Worktree teardown is the cancellation cascade — not a
             # real failure. Mark skipped so reviews.jsonl distinguishes
             # this from iteration-exhausted / crash failures.
-            return FixResult(
-                success=False, skipped=True, summary="Workspace deleted (cancelled)"
-            )
+            return FixResult(success=False, skipped=True, summary="Workspace deleted (cancelled)")
         except Exception as e:
             logger.exception(f"Fix pipeline failed for PR #{self.pr_number}")
             notify.fix_failed(self.pr_number, str(e), 0, self.repo)
@@ -1677,16 +1715,16 @@ class FixPipeline:
             )
             atomic_write(
                 gate_dir_marker / "context.json",
-                json.dumps({
-                    "pr_number": self.pr_number,
-                    "repo": self.repo,
-                }) + "\n",
+                json.dumps(
+                    {
+                        "pr_number": self.pr_number,
+                        "repo": self.repo,
+                    }
+                )
+                + "\n",
             )
         except OSError as exc:
-            logger.warning(
-                f"PR #{self.pr_number}: could not write "
-                f".gate/pre-fix-sha marker: {exc}"
-            )
+            logger.warning(f"PR #{self.pr_number}: could not write .gate/pre-fix-sha marker: {exc}")
 
     def _fix_content_present(self) -> bool:
         """Return True iff the fix session produced any content to commit.
@@ -1713,13 +1751,19 @@ class FixPipeline:
         try:
             tracked = subprocess.run(
                 ["git", "diff", "--name-only", self._pre_fix_sha],
-                capture_output=True, text=True, cwd=cwd, timeout=60,
+                capture_output=True,
+                text=True,
+                cwd=cwd,
+                timeout=60,
             )
             if tracked.stdout.strip():
                 return True
             untracked = subprocess.run(
                 ["git", "ls-files", "--others", "--exclude-standard"],
-                capture_output=True, text=True, cwd=cwd, timeout=60,
+                capture_output=True,
+                text=True,
+                cwd=cwd,
+                timeout=60,
             )
             return bool(untracked.stdout.strip())
         except (subprocess.SubprocessError, OSError) as exc:
@@ -1751,11 +1795,16 @@ class FixPipeline:
         try:
             subprocess.run(
                 ["git", "add", "-A"],
-                capture_output=True, cwd=cwd, timeout=60,
+                capture_output=True,
+                cwd=cwd,
+                timeout=60,
             )
             result = subprocess.run(
                 ["git", "diff", "--cached", self._pre_fix_sha],
-                capture_output=True, text=True, cwd=cwd, timeout=120,
+                capture_output=True,
+                text=True,
+                cwd=cwd,
+                timeout=120,
             )
             diff = result.stdout
             atomic_write(self.workspace / "fix-diff.txt", diff or "(no changes)")
@@ -1786,11 +1835,16 @@ class FixPipeline:
         try:
             subprocess.run(
                 ["git", "reset", "--hard", self._pre_fix_sha],
-                capture_output=True, cwd=cwd, timeout=60, check=True,
+                capture_output=True,
+                cwd=cwd,
+                timeout=60,
+                check=True,
             )
             subprocess.run(
                 ["git", "clean", "-fd"],
-                capture_output=True, cwd=cwd, timeout=60,
+                capture_output=True,
+                cwd=cwd,
+                timeout=60,
             )
         except (subprocess.SubprocessError, OSError) as exc:
             logger.warning(
@@ -1812,9 +1866,9 @@ class FixPipeline:
         result_file.unlink(missing_ok=True)
 
         from gate.config import repo_slug
+
         review_id = (
-            f"{repo_slug(self.repo)}-pr{self.pr_number}"
-            if self.repo else f"pr{self.pr_number}"
+            f"{repo_slug(self.repo)}-pr{self.pr_number}" if self.repo else f"pr{self.pr_number}"
         )
         pane_id = spawn_review_stage(
             review_id=review_id,
@@ -1952,9 +2006,7 @@ class FixPipeline:
         )
 
         # Write result
-        (self.workspace / "fix-rereview.json").write_text(
-            json.dumps(result.data, indent=2)
-        )
+        (self.workspace / "fix-rereview.json").write_text(json.dumps(result.data, indent=2))
 
         passed = result.data.get("pass") is not False
         logger.info(f"Re-review: {'pass' if passed else 'fail'}")
@@ -1985,6 +2037,7 @@ class FixPipeline:
         informational-only in hopper mode — see Part 3).
         """
         from gate.config import get_fix_pipeline_mode
+
         if get_fix_pipeline_mode(self.config) != "polish_legacy":
             return False
         if not self.session_id or not last_fix_json:
@@ -1993,15 +2046,11 @@ class FixPipeline:
         if not isinstance(not_fixed, list):
             return False
 
-        trivial_ids = {
-            f["finding_id"]
-            for f in tagged_findings
-            if f.get("fixability") == "trivial"
-        }
+        trivial_ids = {f["finding_id"] for f in tagged_findings if f.get("fixability") == "trivial"}
         skipped_trivial = [
-            entry for entry in not_fixed
-            if isinstance(entry, dict)
-            and entry.get("finding_id") in trivial_ids
+            entry
+            for entry in not_fixed
+            if isinstance(entry, dict) and entry.get("finding_id") in trivial_ids
         ]
         if not skipped_trivial:
             return False
@@ -2031,9 +2080,9 @@ class FixPipeline:
         )
         write_live_log(
             self.pr_number,
-            f"Min-effort floor: re-prompting on {len(skipped_trivial)} "
-            "skipped trivial findings",
-            prefix="fix", repo=self.repo,
+            f"Min-effort floor: re-prompting on {len(skipped_trivial)} skipped trivial findings",
+            prefix="fix",
+            repo=self.repo,
         )
         self._resume_fix_session(reprompt)
         return True
@@ -2079,7 +2128,10 @@ class FixPipeline:
             self._revert_to_baseline()
             state.record_fix_attempt(self.pr_number, repo=self.repo)
             notify.fix_failed(
-                self.pr_number, "re-review rejected polish changes", 1, self.repo,
+                self.pr_number,
+                "re-review rejected polish changes",
+                1,
+                self.repo,
             )
             return FixResult(
                 success=False,
@@ -2100,6 +2152,7 @@ class FixPipeline:
         a legitimate regression signal (audit A9).
         """
         from gate.config import get_repo_bool
+
         if not self.is_polish:
             return False
         return get_repo_bool(self.config, "graceful_noop_on_approve_with_notes", True)
@@ -2183,8 +2236,10 @@ class FixPipeline:
         semantics bolted on.
         """
         write_live_log(
-            self.pr_number, "Re-review passed, committing...",
-            prefix="fix", repo=self.repo,
+            self.pr_number,
+            "Re-review passed, committing...",
+            prefix="fix",
+            repo=self.repo,
         )
 
         # Dedup all_fixed by finding_id before reporting (Group 1B / A2)
@@ -2219,34 +2274,28 @@ class FixPipeline:
         synth_msg += " from Gate review"
 
         fixed_details = "\n".join(
-            f"- {f.get('file', '?')} — {f.get('fix_description')}"
-            for f in real_fixed
+            f"- {f.get('file', '?')} — {f.get('fix_description')}" for f in real_fixed
         )
         if fixed_details:
             synth_msg += f"\n\nFindings fixed:\n{fixed_details}"
         if synth_fixed:
             synth_lines = "\n".join(
-                f"- {f.get('file', '?')} — {f.get('fix_description')}"
-                for f in synth_fixed
+                f"- {f.get('file', '?')} — {f.get('fix_description')}" for f in synth_fixed
             )
             synth_msg += (
                 "\n\nFile-level changes reconstructed from diff "
                 "(fix-senior did not report them):\n" + synth_lines
             )
         not_fixed_details = "\n".join(
-            f"- {f.get('file', '?')} ({f.get('reason')}): {f.get('detail')}"
-            for f in not_fixed
+            f"- {f.get('file', '?')} ({f.get('reason')}): {f.get('detail')}" for f in not_fixed
         )
         if not_fixed_details:
             synth_msg += f"\n\nNot fixed (require human action):\n{not_fixed_details}"
 
-        synthesized_any = any(
-            f.get("_description_synthesized") for f in real_fixed
-        )
+        synthesized_any = any(f.get("_description_synthesized") for f in real_fixed)
         if synthesized_any:
             synth_msg += (
-                "\n\n_Some descriptions synthesized from diff; "
-                "fix-senior omitted fix_description._"
+                "\n\n_Some descriptions synthesized from diff; fix-senior omitted fix_description._"
             )
 
         # Try senior-authored ``final_commit_message`` first (hopper mode
@@ -2261,9 +2310,7 @@ class FixPipeline:
                 tag_findings(self.verdict.get("findings", [])),
             )
             senior_msg_raw = normalized_for_msg.get("final_commit_message") or ""
-        accepted_msg, reject_reason = _validate_senior_commit_message(
-            senior_msg_raw, synth_msg
-        )
+        accepted_msg, reject_reason = _validate_senior_commit_message(senior_msg_raw, synth_msg)
         if accepted_msg is not None:
             commit_msg = accepted_msg
             commit_msg_source = "senior"
@@ -2299,7 +2346,9 @@ class FixPipeline:
                 subprocess.run(
                     ["git", "reset", "--soft", self._pre_fix_sha],
                     cwd=str(self.workspace),
-                    check=True, capture_output=True, timeout=10,
+                    check=True,
+                    capture_output=True,
+                    timeout=10,
                 )
             except (
                 subprocess.CalledProcessError,
@@ -2307,8 +2356,7 @@ class FixPipeline:
                 FileNotFoundError,
             ) as exc:
                 logger.warning(
-                    f"PR #{self.pr_number}: pre-commit reset "
-                    f"to pre-fix sha failed: {exc}"
+                    f"PR #{self.pr_number}: pre-commit reset to pre-fix sha failed: {exc}"
                 )
 
         # The soft reset above re-stages the full checkpoint diff relative
@@ -2322,10 +2370,7 @@ class FixPipeline:
 
         if result.status == "no_diff":
             state.record_fix_attempt(self.pr_number, repo=self.repo)
-            msg = (
-                "Re-review passed but no diff to push "
-                "(fix-senior made no file changes)"
-            )
+            msg = "Re-review passed but no diff to push (fix-senior made no file changes)"
             write_live_log(self.pr_number, msg, prefix="fix", repo=self.repo)
             notify.fix_failed(self.pr_number, "no diff to push", iteration, self.repo)
             return FixResult(
@@ -2356,12 +2401,10 @@ class FixPipeline:
         marker.write_text(new_sha)
 
         fixed_lines = "\n".join(
-            f"- `{f.get('file', '?')}` — {f.get('fix_description')}"
-            for f in real_fixed
+            f"- `{f.get('file', '?')}` — {f.get('fix_description')}" for f in real_fixed
         )
         not_fixed_lines = "\n".join(
-            f"- `{f.get('file', '?')}` ({f.get('reason')}): {f.get('detail')}"
-            for f in not_fixed
+            f"- `{f.get('file', '?')}` ({f.get('reason')}): {f.get('detail')}" for f in not_fixed
         )
         not_fixed_count = len(not_fixed)
         body = ""
@@ -2389,9 +2432,7 @@ class FixPipeline:
         state.record_fix_attempt(self.pr_number, repo=self.repo)
         notify.fix_complete(self.pr_number, fixed_count, finding_count, iteration, self.repo)
 
-        summary = (
-            f"Fixed {fixed_count}/{finding_count} findings in {iteration} iteration(s)"
-        )
+        summary = f"Fixed {fixed_count}/{finding_count} findings in {iteration} iteration(s)"
         if synth_count:
             summary += f" (+{synth_count} reconstructions)"
         write_live_log(self.pr_number, summary, prefix="fix", repo=self.repo)
@@ -2405,22 +2446,15 @@ class FixPipeline:
         )
         sub_scope_log = normalized.get("sub_scope_log") or []
         sub_scope_total = len(sub_scope_log)
-        sub_scope_committed = sum(
-            1 for s in sub_scope_log if s.get("outcome") == "committed"
-        )
-        sub_scope_reverted = sum(
-            1 for s in sub_scope_log if s.get("outcome") == "reverted"
-        )
-        sub_scope_empty = sum(
-            1 for s in sub_scope_log if s.get("outcome") == "empty"
-        )
+        sub_scope_committed = sum(1 for s in sub_scope_log if s.get("outcome") == "committed")
+        sub_scope_reverted = sum(1 for s in sub_scope_log if s.get("outcome") == "reverted")
+        sub_scope_empty = sum(1 for s in sub_scope_log if s.get("outcome") == "empty")
 
         from gate.config import get_fix_pipeline_mode
+
         pipeline_mode = get_fix_pipeline_mode(self.config)
         wall_clock = (
-            int(time.monotonic() - self._fix_start_monotonic)
-            if self._fix_start_monotonic
-            else 0
+            int(time.monotonic() - self._fix_start_monotonic) if self._fix_start_monotonic else 0
         )
 
         return FixResult(
@@ -2486,28 +2520,17 @@ class FixPipeline:
         repo_cfg = self.config.get("repo", {})
         if not repo_cfg.get("halt_on_ambiguity", True):
             return
-        disambig = [
-            e for e in not_fixed
-            if e.get("reason") == "requires_author_disambiguation"
-        ]
+        disambig = [e for e in not_fixed if e.get("reason") == "requires_author_disambiguation"]
         if not disambig:
             return
         try:
-            asked_path = (
-                state.get_pr_state_dir(self.pr_number, self.repo)
-                / "disambig_asked.txt"
-            )
+            asked_path = state.get_pr_state_dir(self.pr_number, self.repo) / "disambig_asked.txt"
             already: set[str] = set()
             if asked_path.exists():
                 already = set(
-                    line.strip()
-                    for line in asked_path.read_text().splitlines()
-                    if line.strip()
+                    line.strip() for line in asked_path.read_text().splitlines() if line.strip()
                 )
-            fresh = [
-                e for e in disambig
-                if self._disambig_digest(e) not in already
-            ]
+            fresh = [e for e in disambig if self._disambig_digest(e) not in already]
             cap = int(repo_cfg.get("max_disambig_questions_per_pr", 2))
             # Audit fix N4 — when ``cap`` is 0 the repo has explicitly
             # opted out of asking questions. We must not bump the stale
@@ -2526,13 +2549,9 @@ class FixPipeline:
             try:
                 github.comment_pr(self.repo, self.pr_number, body)
             except Exception as e:  # noqa: BLE001
-                logger.warning(
-                    f"PR #{self.pr_number}: disambig comment_pr failed: {e}"
-                )
+                logger.warning(f"PR #{self.pr_number}: disambig comment_pr failed: {e}")
                 return
-            updated = sorted(
-                already | {self._disambig_digest(e) for e in fresh}
-            )
+            updated = sorted(already | {self._disambig_digest(e) for e in fresh})
             asked_path.write_text("\n".join(updated) + "\n")
             # Audit fix W8 — the stale counter is for unanswered
             # questions only. Posting a fresh batch starts a brand-new
@@ -2543,9 +2562,7 @@ class FixPipeline:
             # that introduce legitimately new ambiguous findings.
             self._reset_disambig_stale_count()
         except Exception as e:  # noqa: BLE001
-            logger.warning(
-                f"PR #{self.pr_number}: disambig comment pipeline failed: {e}"
-            )
+            logger.warning(f"PR #{self.pr_number}: disambig comment pipeline failed: {e}")
 
     def _bump_disambig_stale_count(self, disambig: list[dict]) -> None:
         """Increment the stale-counter for pending disambig questions.
@@ -2557,8 +2574,7 @@ class FixPipeline:
         """
         try:
             count_path = (
-                state.get_pr_state_dir(self.pr_number, self.repo)
-                / "disambig_stale_count.txt"
+                state.get_pr_state_dir(self.pr_number, self.repo) / "disambig_stale_count.txt"
             )
             prior = 0
             if count_path.exists():
@@ -2568,9 +2584,7 @@ class FixPipeline:
                     prior = 0
             count_path.write_text(str(prior + 1))
         except Exception as e:  # noqa: BLE001
-            logger.info(
-                f"PR #{self.pr_number}: disambig stale counter bump failed: {e}"
-            )
+            logger.info(f"PR #{self.pr_number}: disambig stale counter bump failed: {e}")
 
     def _reset_disambig_stale_count(self) -> None:
         """Zero the stale counter when a fresh question is posted.
@@ -2581,15 +2595,12 @@ class FixPipeline:
         """
         try:
             count_path = (
-                state.get_pr_state_dir(self.pr_number, self.repo)
-                / "disambig_stale_count.txt"
+                state.get_pr_state_dir(self.pr_number, self.repo) / "disambig_stale_count.txt"
             )
             if count_path.exists():
                 count_path.write_text("0")
         except Exception as e:  # noqa: BLE001
-            logger.info(
-                f"PR #{self.pr_number}: disambig stale counter reset failed: {e}"
-            )
+            logger.info(f"PR #{self.pr_number}: disambig stale counter reset failed: {e}")
 
     @staticmethod
     def _build_disambig_comment(fresh: list[dict]) -> str:
@@ -2607,8 +2618,7 @@ class FixPipeline:
             "",
         ]
         for i, entry in enumerate(fresh, start=1):
-            lines.append(f"### {i}. `{entry.get('file', '?')}` "
-                         f"line {entry.get('line', '?')}")
+            lines.append(f"### {i}. `{entry.get('file', '?')}` line {entry.get('line', '?')}")
             lines.append("")
             detail = str(entry.get("detail") or "").strip()
             if detail:

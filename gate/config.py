@@ -81,6 +81,7 @@ def load_config() -> dict:
         return tomllib.loads(config_file.read_text())
     except tomllib.TOMLDecodeError as e:
         import logging
+
         logging.getLogger(__name__).warning(f"Invalid gate.toml: {e}, using defaults")
         return {}
 
@@ -156,9 +157,7 @@ def get_polish_timeouts(config: dict) -> dict[str, int]:
     changes that do not fit inside a bounded polish budget.
     """
     defaults = {"trivial": 180, "scoped": 600, "broad": 0}
-    override = ((config or {}).get("repo", {}) or {}).get(
-        "polish_per_finding_timeout_seconds", {}
-    )
+    override = ((config or {}).get("repo", {}) or {}).get("polish_per_finding_timeout_seconds", {})
     if not isinstance(override, dict):
         return defaults
     merged = dict(defaults)

@@ -142,9 +142,7 @@ class GateServer:
             while not self.stop_event.is_set():
                 try:
                     conn, _ = self.server_socket.accept()
-                    threading.Thread(
-                        target=self._handle_client, args=(conn,), daemon=True
-                    ).start()
+                    threading.Thread(target=self._handle_client, args=(conn,), daemon=True).start()
                 except socket.timeout:
                     continue
                 except Exception as e:
@@ -155,10 +153,17 @@ class GateServer:
             if self.socket_path.exists():
                 self.socket_path.unlink()
 
-    _READ_ONLY_TYPES = frozenset({
-        "connect", "ping", "review_list", "queue_list",
-        "health_get", "review_request", "cancel_review",
-    })
+    _READ_ONLY_TYPES = frozenset(
+        {
+            "connect",
+            "ping",
+            "review_list",
+            "queue_list",
+            "health_get",
+            "review_request",
+            "cancel_review",
+        }
+    )
 
     def _handle_client(self, conn: socket.socket) -> None:
         with self.lock:
@@ -248,11 +253,14 @@ class GateServer:
             cancelled = self._review_queue.cancel_pr(pr_number, repo)
             if cancelled:
                 logger.info(f"Review cancelled via socket: PR #{pr_number}")
-            self._send_response(conn, {
-                "type": "cancel_accepted",
-                "pr_number": pr_number,
-                "cancelled": cancelled,
-            })
+            self._send_response(
+                conn,
+                {
+                    "type": "cancel_accepted",
+                    "pr_number": pr_number,
+                    "cancelled": cancelled,
+                },
+            )
 
     def _handle_mutation(self, message: dict, conn: socket.socket | None) -> None:
         msg_type = message.get("type")
@@ -283,8 +291,7 @@ class GateServer:
                     )
                     return
                 incoming_status = message.get("status", "")
-                if (review.get("status") == "fixing"
-                        and incoming_status != "fixing"):
+                if review.get("status") == "fixing" and incoming_status != "fixing":
                     review["updated_at"] = _current_ms()
                     return
                 review["stage"] = message.get("stage", "")
@@ -463,9 +470,7 @@ class GateServer:
                 for sub in dead:
                     if sub in self._subscribers:
                         self._subscribers.remove(sub)
-            logger.warning(
-                f"Evicted {len(dead)} slow subscriber(s) from broadcast fanout"
-            )
+            logger.warning(f"Evicted {len(dead)} slow subscriber(s) from broadcast fanout")
 
     def _writer_loop(self) -> None:
         while not self.stop_event.is_set():
@@ -546,7 +551,6 @@ class GateServer:
             self._log_handler.close()
             self._log_handler = None
 
-
     def _reaper_loop(self) -> None:
         """Periodically check for stale reviews stuck in the active list."""
         while not self.stop_event.is_set():
@@ -559,10 +563,7 @@ class GateServer:
         """Remove reviews stuck longer than 1 hour from the active list."""
         now = _current_ms()
         timeout_ms = 3600 * 1000
-        stale = [
-            r for r in self.reviews
-            if now - r.get("updated_at", now) > timeout_ms
-        ]
+        stale = [r for r in self.reviews if now - r.get("updated_at", now) > timeout_ms]
         for r in stale:
             r["status"] = "stuck"
             self.broadcast({"type": "review_completed", "review": r})
@@ -658,9 +659,7 @@ def start_server_headless(socket_path: Path, on_started=None) -> int:
     atexit.register(cleanup_socket)
 
     if on_started is not None:
-        server_thread = threading.Thread(
-            target=server.start, name="server", daemon=True
-        )
+        server_thread = threading.Thread(target=server.start, name="server", daemon=True)
         server_thread.start()
 
         for _ in range(50):

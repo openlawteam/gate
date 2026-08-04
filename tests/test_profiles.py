@@ -1,6 +1,5 @@
 """Tests for gate.profiles module."""
 
-
 from gate.profiles import (
     PROFILES,
     command_display,
@@ -141,11 +140,10 @@ class TestBuildVarsExposesVerifyCmd:
 
         (tmp_path / "diff.txt").write_text("")
         (tmp_path / "changed_files.txt").write_text("")
-        (tmp_path / "pr-metadata.json").write_text(
-            '{"pr_title":"t","pr_body":"b","pr_author":"a"}'
-        )
+        (tmp_path / "pr-metadata.json").write_text('{"pr_title":"t","pr_body":"b","pr_author":"a"}')
         vars_ = prompt_mod.build_vars(
-            tmp_path, "logic",
+            tmp_path,
+            "logic",
             {"pr_title": "t", "pr_body": "b", "pr_author": "a"},
             {"repo": {"project_type": "node"}},
         )
@@ -156,11 +154,10 @@ class TestBuildVarsExposesVerifyCmd:
 
         (tmp_path / "diff.txt").write_text("")
         (tmp_path / "changed_files.txt").write_text("")
-        (tmp_path / "pr-metadata.json").write_text(
-            '{"pr_title":"t","pr_body":"b","pr_author":"a"}'
-        )
+        (tmp_path / "pr-metadata.json").write_text('{"pr_title":"t","pr_body":"b","pr_author":"a"}')
         vars_ = prompt_mod.build_vars(
-            tmp_path, "logic",
+            tmp_path,
+            "logic",
             {"pr_title": "t", "pr_body": "b", "pr_author": "a"},
             {
                 "repo": {
@@ -177,6 +174,7 @@ class TestPromptAnchorsForProofConfirmed:
 
     def _read(self, name):
         from gate.prompt import load
+
         return load(name)
 
     def test_logic_lists_proof_confirmed_enum(self):

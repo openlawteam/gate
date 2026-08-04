@@ -34,8 +34,11 @@ def _make_pipeline(sample_config, tmp_path, repo_overrides=None):
     """
     findings = [
         {
-            "severity": "warning", "message": "test finding",
-            "file": "a.ts", "line": 1, "rule": "test/rule",
+            "severity": "warning",
+            "message": "test finding",
+            "file": "a.ts",
+            "line": 1,
+            "rule": "test/rule",
         }
     ]
     verdict = {"decision": "request_changes", "findings": findings}
@@ -45,8 +48,12 @@ def _make_pipeline(sample_config, tmp_path, repo_overrides=None):
         sample_config = dict(sample_config)
         sample_config["repo"] = {**sample_config["repo"], **repo_overrides}
     return FixPipeline(
-        pr_number=399, repo="openlawteam/adin-chat", workspace=tmp_path,
-        verdict=verdict, build={}, config=sample_config,
+        pr_number=399,
+        repo="openlawteam/adin-chat",
+        workspace=tmp_path,
+        verdict=verdict,
+        build={},
+        config=sample_config,
     )
 
 
@@ -70,9 +77,7 @@ def patched_pipeline_env(sample_config, tmp_path):
         pipe._run_fix_session = MagicMock(
             return_value={"has_changes": True, "fix_json": {"fixed": [], "not_fixed": []}}
         )
-        pipe._resume_fix_session = MagicMock(
-            return_value={"has_changes": True, "fix_json": None}
-        )
+        pipe._resume_fix_session = MagicMock(return_value={"has_changes": True, "fix_json": None})
         pipe._is_graceful_noop_case = MagicMock(return_value=False)
         pipe._write_baseline_diff = MagicMock()
         pipe._emit_fix_stage = MagicMock()
@@ -86,13 +91,22 @@ class TestPrePushGateHappyPath:
     @patch("gate.fixer.pre_push_verify")
     @patch("gate.fixer.build_verify")
     def test_strict_pass_short_circuits_to_commit(
-        self, mock_bv, mock_pp, patched_pipeline_env,
+        self,
+        mock_bv,
+        mock_pp,
+        patched_pipeline_env,
     ):
         pipe = patched_pipeline_env
         mock_bv.return_value = {
-            "pass": True, "strict_pass": True, "build_result": None,
-            "typecheck_errors": 0, "lint_errors": 0, "test_failures": 0,
-            "typecheck_log": "", "lint_log": "", "typecheck_tool": "",
+            "pass": True,
+            "strict_pass": True,
+            "build_result": None,
+            "typecheck_errors": 0,
+            "lint_errors": 0,
+            "test_failures": 0,
+            "typecheck_log": "",
+            "lint_log": "",
+            "typecheck_tool": "",
         }
         mock_pp.return_value = {"pass": True, "kind": "pass"}
         pipe._run_rereview = MagicMock(return_value=True)
@@ -113,19 +127,33 @@ class TestPrePushGateRegression:
     @patch("gate.fixer.pre_push_verify")
     @patch("gate.fixer.build_verify")
     def test_regression_retry_succeeds_then_commits(
-        self, mock_bv, mock_pp, patched_pipeline_env,
+        self,
+        mock_bv,
+        mock_pp,
+        patched_pipeline_env,
     ):
         """First pre_push fails (regression), retry passes, commit fires."""
         pipe = patched_pipeline_env
         mock_bv.return_value = {
-            "pass": True, "strict_pass": False,
+            "pass": True,
+            "strict_pass": False,
             "build_result": {"tests": {"failed": 2}},
-            "typecheck_errors": 0, "lint_errors": 0, "test_failures": 2,
-            "typecheck_log": "", "lint_log": "", "typecheck_tool": "",
+            "typecheck_errors": 0,
+            "lint_errors": 0,
+            "test_failures": 2,
+            "typecheck_log": "",
+            "lint_log": "",
+            "typecheck_tool": "",
         }
         mock_pp.side_effect = [
-            {"pass": False, "kind": "regression", "test_failures": 2,
-             "baseline_failures": 0, "failed_cmd": "", "logs": ""},
+            {
+                "pass": False,
+                "kind": "regression",
+                "test_failures": 2,
+                "baseline_failures": 0,
+                "failed_cmd": "",
+                "logs": "",
+            },
             {"pass": True, "kind": "pass"},
         ]
         pipe._run_rereview = MagicMock(return_value=True)
@@ -138,29 +166,42 @@ class TestPrePushGateRegression:
         assert mock_pp.call_count == 2, "called twice — initial + retry"
         pipe._resume_fix_session.assert_called_once(), "regression triggers resume"
         commit_mock.assert_called_once()
-        pipe._revert_to_baseline.assert_not_called(), (
-            "must NOT revert on regression — keep partial fix for retry"
+        (
+            pipe._revert_to_baseline.assert_not_called(),
+            ("must NOT revert on regression — keep partial fix for retry"),
         )
 
     @patch("gate.fixer.pre_push_verify")
     @patch("gate.fixer.build_verify")
     def test_regression_retry_fails_continues_no_revert(
-        self, mock_bv, mock_pp, patched_pipeline_env,
+        self,
+        mock_bv,
+        mock_pp,
+        patched_pipeline_env,
     ):
         """Both pre_push attempts fail → continues to next iteration
         without reverting (worktree state preserved for iter N+1)."""
         pipe = patched_pipeline_env
         mock_bv.return_value = {
-            "pass": True, "strict_pass": False,
+            "pass": True,
+            "strict_pass": False,
             "build_result": {"tests": {"failed": 2}},
-            "typecheck_errors": 0, "lint_errors": 0, "test_failures": 2,
-            "typecheck_log": "", "lint_log": "", "typecheck_tool": "",
+            "typecheck_errors": 0,
+            "lint_errors": 0,
+            "test_failures": 2,
+            "typecheck_log": "",
+            "lint_log": "",
+            "typecheck_tool": "",
         }
         # Every pre_push call: regression. With max_iter=3 we expect
         # 2 calls per iteration (initial + retry) × 3 iterations = 6.
         mock_pp.return_value = {
-            "pass": False, "kind": "regression", "test_failures": 2,
-            "baseline_failures": 0, "failed_cmd": "", "logs": "",
+            "pass": False,
+            "kind": "regression",
+            "test_failures": 2,
+            "baseline_failures": 0,
+            "failed_cmd": "",
+            "logs": "",
         }
         pipe._run_rereview = MagicMock(return_value=True)
         pipe._commit_and_finish = MagicMock()
@@ -172,8 +213,9 @@ class TestPrePushGateRegression:
         # 2 calls per iter × 3 iters
         assert mock_pp.call_count == 6
         pipe._commit_and_finish.assert_not_called()
-        pipe._revert_to_baseline.assert_not_called(), (
-            "no revert across iterations — partial fix preserved"
+        (
+            pipe._revert_to_baseline.assert_not_called(),
+            ("no revert across iterations — partial fix preserved"),
         )
 
 
@@ -183,19 +225,30 @@ class TestPrePushGatePreExisting:
     @patch("gate.fixer.pre_push_verify")
     @patch("gate.fixer.build_verify")
     def test_pre_existing_fails_fast_no_retry(
-        self, mock_bv, mock_pp, patched_pipeline_env,
+        self,
+        mock_bv,
+        mock_pp,
+        patched_pipeline_env,
     ):
         pipe = patched_pipeline_env
         mock_bv.return_value = {
-            "pass": True, "strict_pass": False,
+            "pass": True,
+            "strict_pass": False,
             "build_result": {"tests": {"failed": 3}},
-            "typecheck_errors": 0, "lint_errors": 0, "test_failures": 3,
-            "typecheck_log": "", "lint_log": "", "typecheck_tool": "",
+            "typecheck_errors": 0,
+            "lint_errors": 0,
+            "test_failures": 3,
+            "typecheck_log": "",
+            "lint_log": "",
+            "typecheck_tool": "",
         }
         mock_pp.return_value = {
-            "pass": False, "kind": "pre_existing",
-            "test_failures": 3, "baseline_failures": 3,
-            "failed_cmd": "", "logs": "",
+            "pass": False,
+            "kind": "pre_existing",
+            "test_failures": 3,
+            "baseline_failures": 3,
+            "failed_cmd": "",
+            "logs": "",
         }
         pipe._run_rereview = MagicMock(return_value=True)
         commit_mock = MagicMock()
@@ -232,10 +285,15 @@ class TestPrePushGateDisabled:
             pipe = _make_pipeline(sample_config, tmp_path, repo_overrides)
             # Even strict failure here should not block — disable bypasses.
             mock_bv.return_value = {
-                "pass": True, "strict_pass": False,
+                "pass": True,
+                "strict_pass": False,
                 "build_result": {"tests": {"failed": 5}},
-                "typecheck_errors": 0, "lint_errors": 0, "test_failures": 5,
-                "typecheck_log": "", "lint_log": "", "typecheck_tool": "",
+                "typecheck_errors": 0,
+                "lint_errors": 0,
+                "test_failures": 5,
+                "typecheck_log": "",
+                "lint_log": "",
+                "typecheck_tool": "",
             }
             pipe._run_fix_session = MagicMock(
                 return_value={"has_changes": True, "fix_json": {"fixed": [], "not_fixed": []}}
@@ -260,15 +318,24 @@ class TestIterationBudgetIs3:
     @patch("gate.fixer.pre_push_verify")
     @patch("gate.fixer.build_verify")
     def test_default_budget_runs_3_iterations(
-        self, mock_bv, mock_pp, patched_pipeline_env,
+        self,
+        mock_bv,
+        mock_pp,
+        patched_pipeline_env,
     ):
         """Forcing re-review rejection on every iter: should attempt
         iter 1, 2, 3 (and bail after the third)."""
         pipe = patched_pipeline_env
         mock_bv.return_value = {
-            "pass": True, "strict_pass": True, "build_result": None,
-            "typecheck_errors": 0, "lint_errors": 0, "test_failures": 0,
-            "typecheck_log": "", "lint_log": "", "typecheck_tool": "",
+            "pass": True,
+            "strict_pass": True,
+            "build_result": None,
+            "typecheck_errors": 0,
+            "lint_errors": 0,
+            "test_failures": 0,
+            "typecheck_log": "",
+            "lint_log": "",
+            "typecheck_tool": "",
         }
         # Force re-review fail every time so the pre-push gate never
         # runs — we're checking iter budget alone.

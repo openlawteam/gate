@@ -191,9 +191,7 @@ def _gh(
                     continue
                 raise last_error
 
-            raise subprocess.CalledProcessError(
-                result.returncode, "gh", stderr=result.stderr
-            )
+            raise subprocess.CalledProcessError(result.returncode, "gh", stderr=result.stderr)
 
         except subprocess.TimeoutExpired:
             if attempt < GH_MAX_RETRIES:
@@ -236,10 +234,14 @@ def get_commit_author_email(repo: str, sha: str) -> str | None:
     its own bot commit) and label the check status accordingly.
     """
     try:
-        out = _gh([
-            "api", f"repos/{repo}/commits/{sha}",
-            "-q", ".commit.author.email",
-        ])
+        out = _gh(
+            [
+                "api",
+                f"repos/{repo}/commits/{sha}",
+                "-q",
+                ".commit.author.email",
+            ]
+        )
     except subprocess.CalledProcessError as e:
         logger.warning(f"Failed to fetch commit author email for {sha[:8]}: {e}")
         return None
@@ -332,10 +334,7 @@ def _format_findings(findings: list[dict]) -> str:
             primary = locs[0]
             md += f"- **{_loc_label(primary)}** — {f.message}"
             if len(locs) > 1:
-                md += (
-                    "\n  > Also at: "
-                    + ", ".join(f"`{_loc_label(loc)}`" for loc in locs[1:])
-                )
+                md += "\n  > Also at: " + ", ".join(f"`{_loc_label(loc)}`" for loc in locs[1:])
             md += "\n"
 
     if malformed:
@@ -515,9 +514,7 @@ def post_review(
         # ``gh pr review`` call. No WARNING, no wasted round-trip, no
         # race with the sticky-comment update.
         comment_pr(repo, pr_number, comment)
-        logger.info(
-            f"PR #{pr_number}: bot-authored PR, posted review as comment ({decision})"
-        )
+        logger.info(f"PR #{pr_number}: bot-authored PR, posted review as comment ({decision})")
     elif decision in ("approve", "approve_with_notes"):
         try:
             _gh(["pr", "review", str(pr_number), "--repo", repo, "--approve", "--body", comment])
@@ -530,10 +527,18 @@ def post_review(
                 raise
     else:
         try:
-            _gh([
-                "pr", "review", str(pr_number), "--repo", repo,
-                "--request-changes", "--body", comment,
-            ])
+            _gh(
+                [
+                    "pr",
+                    "review",
+                    str(pr_number),
+                    "--repo",
+                    repo,
+                    "--request-changes",
+                    "--body",
+                    comment,
+                ]
+            )
             logger.info(f"PR #{pr_number} changes requested")
         except subprocess.CalledProcessError as e:
             if "request changes on your own" in (e.stderr or ""):
@@ -561,10 +566,18 @@ def post_review(
                 logger.info(f"PR #{pr_number}: escalation skipped (no reviewers configured)")
             else:
                 try:
-                    _gh(["pr", "edit", str(pr_number), "--repo", repo,
-                         "--add-label", "needs-human-review"])
-                    _gh(["pr", "edit", str(pr_number), "--repo", repo,
-                         "--add-reviewer", reviewers])
+                    _gh(
+                        [
+                            "pr",
+                            "edit",
+                            str(pr_number),
+                            "--repo",
+                            repo,
+                            "--add-label",
+                            "needs-human-review",
+                        ]
+                    )
+                    _gh(["pr", "edit", str(pr_number), "--repo", repo, "--add-reviewer", reviewers])
                     reason = "critical_finding" if has_critical else "low_confidence"
                     logger.info(f"PR #{pr_number} escalated: {reason}")
                 except subprocess.CalledProcessError:
@@ -575,9 +588,7 @@ def post_review(
     try:
         upsert_sticky_summary(repo, pr_number, verdict, build)
     except Exception:
-        logger.exception(
-            f"PR #{pr_number}: sticky summary upsert failed (non-fatal)"
-        )
+        logger.exception(f"PR #{pr_number}: sticky summary upsert failed (non-fatal)")
 
 
 # ── Commit Status API ────────────────────────────────────────
@@ -601,13 +612,20 @@ def create_check_run(
     """Create a commit status (pending). Returns the context name as ID."""
     state = "pending"
     try:
-        _gh([
-            "api", f"repos/{repo}/statuses/{sha}",
-            "-X", "POST",
-            "-f", f"state={state}",
-            "-f", f"context={name}",
-            "-f", "description=Gate review queued",
-        ])
+        _gh(
+            [
+                "api",
+                f"repos/{repo}/statuses/{sha}",
+                "-X",
+                "POST",
+                "-f",
+                f"state={state}",
+                "-f",
+                f"context={name}",
+                "-f",
+                "description=Gate review queued",
+            ]
+        )
         logger.info(f"Created commit status '{name}' on {sha[:8]}")
         return name
     except subprocess.CalledProcessError as e:
@@ -656,13 +674,20 @@ def complete_check_run(
         logger.warning("complete_check_run called without sha, skipping")
         return
     try:
-        _gh([
-            "api", f"repos/{repo}/statuses/{sha}",
-            "-X", "POST",
-            "-f", f"state={state}",
-            "-f", f"context={context}",
-            "-f", f"description={description}",
-        ])
+        _gh(
+            [
+                "api",
+                f"repos/{repo}/statuses/{sha}",
+                "-X",
+                "POST",
+                "-f",
+                f"state={state}",
+                "-f",
+                f"context={context}",
+                "-f",
+                f"description={description}",
+            ]
+        )
         logger.info(f"Commit status '{context}' -> {state}: {description}")
     except subprocess.CalledProcessError:
         logger.warning(f"Failed to set commit status {context}")
@@ -689,9 +714,7 @@ def approve_pr(
     """
     if _is_own_pr(pr_author, config):
         comment_pr(repo, pr_number, body)
-        logger.info(
-            f"PR #{pr_number}: bot-authored PR, posted approval as comment"
-        )
+        logger.info(f"PR #{pr_number}: bot-authored PR, posted approval as comment")
         return
     try:
         _gh(["pr", "review", str(pr_number), "--repo", repo, "--approve", "--body", body])
@@ -712,7 +735,11 @@ def comment_pr(repo: str, pr_number: int, body: str) -> None:
 
 
 def create_pr(
-    repo: str, title: str, body: str, head: str, base: str,
+    repo: str,
+    title: str,
+    body: str,
+    head: str,
+    base: str,
 ) -> int | None:
     """Open a new PR via ``gh pr create``. Fail-open — never raises.
 
@@ -721,20 +748,25 @@ def create_pr(
     must never taint the original review's success.
     """
     try:
-        out = _gh([
-            "pr", "create",
-            "--repo", repo,
-            "--title", title,
-            "--body", body,
-            "--head", head,
-            "--base", base,
-        ])
+        out = _gh(
+            [
+                "pr",
+                "create",
+                "--repo",
+                repo,
+                "--title",
+                title,
+                "--body",
+                body,
+                "--head",
+                head,
+                "--base",
+                base,
+            ]
+        )
     except subprocess.CalledProcessError as e:
         stderr = (e.stderr or "").strip() if isinstance(e.stderr, str) else ""
-        logger.warning(
-            f"gh pr create failed for {repo} head={head} base={base}: "
-            f"{stderr[:200]}"
-        )
+        logger.warning(f"gh pr create failed for {repo} head={head} base={base}: {stderr[:200]}")
         return None
     url = out.strip().splitlines()[-1] if out.strip() else ""
     try:
@@ -749,10 +781,13 @@ def branch_exists(repo: str, branch: str) -> bool:
     idempotency: a second promotion run for the same PR×SHA detects its
     branch already exists and short-circuits without a duplicate PR."""
     try:
-        _gh([
-            "api", f"repos/{repo}/branches/{branch}",
-            "--silent",
-        ])
+        _gh(
+            [
+                "api",
+                f"repos/{repo}/branches/{branch}",
+                "--silent",
+            ]
+        )
         return True
     except subprocess.CalledProcessError:
         return False
@@ -779,23 +814,32 @@ def commit_and_push(worktree: Path, message: str, branch: str = "") -> "CommitRe
         subprocess.run(["git", "add", "-A"], cwd=cwd, check=True, capture_output=True)
         result = subprocess.run(
             ["git", "diff", "--cached", "--quiet"],
-            cwd=cwd, capture_output=True,
+            cwd=cwd,
+            capture_output=True,
         )
         if result.returncode == 0:
             logger.info("No changes to commit")
             return CommitResult(status="no_diff")
         subprocess.run(
             ["git", "commit", "-m", message],
-            cwd=cwd, check=True, capture_output=True, env=env,
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            env=env,
         )
         push_cmd = ["git", "push", "origin", f"HEAD:{branch}"] if branch else ["git", "push"]
         subprocess.run(
             push_cmd,
-            cwd=cwd, check=True, capture_output=True, env=env,
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            env=env,
         )
         sha_result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            cwd=cwd, capture_output=True, text=True,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
         )
         new_sha = sha_result.stdout.strip() if sha_result.returncode == 0 else ""
         logger.info(f"Committed and pushed: {message} ({new_sha[:8]})")
@@ -803,9 +847,7 @@ def commit_and_push(worktree: Path, message: str, branch: str = "") -> "CommitRe
     except subprocess.CalledProcessError as e:
         stderr_tail = ""
         if getattr(e, "stderr", None):
-            stderr_bytes = (
-                e.stderr if isinstance(e.stderr, bytes) else str(e.stderr).encode()
-            )
+            stderr_bytes = e.stderr if isinstance(e.stderr, bytes) else str(e.stderr).encode()
             decoded = stderr_bytes.decode("utf-8", errors="replace").strip()
             tail_lines = decoded.splitlines()[-5:]
             stderr_tail = "\n".join(tail_lines)

@@ -80,16 +80,23 @@ def cmd_init(args: list[str]) -> int:
 
     parser = make_parser("init", "Set up Gate for a repository.")
     parser.add_argument("--force", action="store_true", help="Overwrite existing config")
-    parser.add_argument("--non-interactive", action="store_true",
-                        help="Skip prompts (requires --repo and --clone-path)")
+    parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Skip prompts (requires --repo and --clone-path)",
+    )
     parser.add_argument("--repo", default="", help="Repository (owner/name)")
     parser.add_argument("--clone-path", default="", help="Local clone path")
     parser.add_argument("--branch", default="main", help="Default branch")
     parser.add_argument("--bot", default="", help="Bot account name")
-    parser.add_argument("--worktree-base", default="/tmp/gate-worktrees",
-                        help="Worktree base directory")
-    parser.add_argument("--project-type", default="",
-                        help="Project type (node/python/go/rust/none). Auto-detected if omitted.")
+    parser.add_argument(
+        "--worktree-base", default="/tmp/gate-worktrees", help="Worktree base directory"
+    )
+    parser.add_argument(
+        "--project-type",
+        default="",
+        help="Project type (node/python/go/rust/none). Auto-detected if omitted.",
+    )
     try:
         parsed = parse_args(parser, args)
     except SystemExit:
@@ -123,6 +130,7 @@ def cmd_init(args: list[str]) -> int:
             return 1
         bot = parsed.bot or setup.detect_gh_user() or "gate-bot"
         from gate import profiles
+
         project_type = parsed.project_type or profiles.detect_project_type(Path(parsed.clone_path))
         repo_config = {
             "name": parsed.repo,
@@ -139,9 +147,7 @@ def cmd_init(args: list[str]) -> int:
         print()
 
     config_path = gate_dir() / "config" / "gate.toml"
-    if (config_path.exists()
-            and not setup.is_placeholder_config(config_path)
-            and not parsed.force):
+    if config_path.exists() and not setup.is_placeholder_config(config_path) and not parsed.force:
         print(f"Config already exists at {config_path}")
         print("Use --force to overwrite, or use 'gate add-repo' to add another repository.")
         return 1
@@ -199,16 +205,23 @@ def cmd_add_repo(args: list[str]) -> int:
     from gate.config import gate_dir, get_all_repos, load_config
 
     parser = make_parser("add-repo", "Add a repository to Gate.")
-    parser.add_argument("--non-interactive", action="store_true",
-                        help="Skip prompts (requires --repo and --clone-path)")
+    parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Skip prompts (requires --repo and --clone-path)",
+    )
     parser.add_argument("--repo", default="", help="Repository (owner/name)")
     parser.add_argument("--clone-path", default="", help="Local clone path")
     parser.add_argument("--branch", default="main", help="Default branch")
     parser.add_argument("--bot", default="", help="Bot account name")
-    parser.add_argument("--worktree-base", default="/tmp/gate-worktrees",
-                        help="Worktree base directory")
-    parser.add_argument("--project-type", default="",
-                        help="Project type (node/python/go/rust/none). Auto-detected if omitted.")
+    parser.add_argument(
+        "--worktree-base", default="/tmp/gate-worktrees", help="Worktree base directory"
+    )
+    parser.add_argument(
+        "--project-type",
+        default="",
+        help="Project type (node/python/go/rust/none). Auto-detected if omitted.",
+    )
     try:
         parsed = parse_args(parser, args)
     except SystemExit:
@@ -247,6 +260,7 @@ def cmd_add_repo(args: list[str]) -> int:
             return 1
         bot = parsed.bot or setup.detect_gh_user() or "gate-bot"
         from gate import profiles
+
         project_type = parsed.project_type or profiles.detect_project_type(Path(parsed.clone_path))
         new_repo = {
             "name": parsed.repo,
@@ -401,6 +415,7 @@ def cmd_process(args: list[str]) -> int:
     config = load_config()
     if parsed.repo:
         from gate.config import resolve_repo_config
+
         config = resolve_repo_config(parsed.repo, config)
 
     socket_path = Path(parsed.socket) if parsed.socket else None
@@ -438,8 +453,7 @@ def cmd_up(args: list[str]) -> int:
         default="",
         metavar="ADDR",
         help=(
-            "Expose broadcasts as SSE on HOST:PORT (e.g. ':7080'). "
-            "Requires GATE_SSE_TOKEN env var."
+            "Expose broadcasts as SSE on HOST:PORT (e.g. ':7080'). Requires GATE_SSE_TOKEN env var."
         ),
     )
     parser.add_argument(
@@ -472,6 +486,7 @@ def cmd_up(args: list[str]) -> int:
     socket_path = _socket_path()
 
     from gate.cleanup import cleanup_orphans
+
     cleanup_orphans()
 
     serve_events_addr = parsed.serve_events.strip()
@@ -567,7 +582,8 @@ def cmd_status(args: list[str]) -> int:
         detail = quota_auth.get("detail", "auth drift latched")
         print()
         print(
-            "⛔  quota_auth: " + detail
+            "⛔  quota_auth: "
+            + detail
             + "  — refresh OAuth token; reviews will degrade as Codex requests fail."
         )
 
@@ -589,8 +605,7 @@ def cmd_status(args: list[str]) -> int:
     # quality.
     if isinstance(health, dict) and health:
         failing = [
-            (k, v) for k, v in health.items()
-            if isinstance(v, dict) and not v.get("ok", True)
+            (k, v) for k, v in health.items() if isinstance(v, dict) and not v.get("ok", True)
         ]
         if failing:
             print(f"\n⚠  Health issues ({len(failing)}):")
@@ -746,13 +761,14 @@ def cmd_inspect_pr(args: list[str]) -> int:
         help="Only show one stage's output (default: all)",
     )
     parser.add_argument(
-        "--raw", action="store_true",
+        "--raw",
+        action="store_true",
         help="Dump raw JSON instead of the rich-table view.",
     )
     parser.add_argument(
-        "--history", action="store_true",
-        help="List archived per-review snapshots (PR B.1) instead of "
-             "the current-state pointers.",
+        "--history",
+        action="store_true",
+        help="List archived per-review snapshots (PR B.1) instead of the current-state pointers.",
     )
     try:
         parsed = parse_args(parser, args)
@@ -831,7 +847,8 @@ def cmd_inspect_pr(args: list[str]) -> int:
             if findings:
                 table = Table(
                     title=f"Findings ({len(findings)})",
-                    show_header=True, header_style="bold",
+                    show_header=True,
+                    header_style="bold",
                 )
                 table.add_column("Sev")
                 table.add_column("Stage")
@@ -844,7 +861,10 @@ def cmd_inspect_pr(args: list[str]) -> int:
                         f = Finding.from_dict(raw)
                     except (ValueError, TypeError):
                         table.add_row(
-                            "?", "?", "?", "?",
+                            "?",
+                            "?",
+                            "?",
+                            "?",
                             f"[red]malformed:[/red] {str(raw)[:80]}",
                             "",
                         )
@@ -995,21 +1015,23 @@ def cmd_prune(args: list[str]) -> int:
     """
     parser = make_parser("gate prune", "Remove stale gate worktrees.")
     parser.add_argument(
-        "--max-age-hours", type=int, default=24,
+        "--max-age-hours",
+        type=int,
+        default=24,
         help="Worktrees older than this are removed (default: 24).",
     )
     parser.add_argument(
-        "--aggressive", action="store_true",
-        help="Also prune worktrees newer than max-age-hours whose PR "
-             "has no active review marker.",
+        "--aggressive",
+        action="store_true",
+        help="Also prune worktrees newer than max-age-hours whose PR has no active review marker.",
     )
     parser.add_argument(
         "--reviews",
         metavar="SPEC",
         default=None,
         help="Also prune per-review state archives. SPEC is "
-             "'older-than=<N>d' (days) or 'older-than=<N>h' (hours). "
-             "Example: --reviews older-than=30d.",
+        "'older-than=<N>d' (days) or 'older-than=<N>h' (hours). "
+        "Example: --reviews older-than=30d.",
     )
     parsed = parse_args(parser, args)
 
@@ -1045,7 +1067,7 @@ def _parse_older_than(spec: str) -> float | None:
     prefix = "older-than="
     if not spec.startswith(prefix):
         return None
-    value = spec[len(prefix):].strip().lower()
+    value = spec[len(prefix) :].strip().lower()
     if not value:
         return None
     try:
@@ -1122,10 +1144,7 @@ def _cmd_audit_retro_scan(args: list[str]) -> int:
         return 0
     print(f"retro-scan: found {len(hits)} silent approval(s):")
     for hit in hits:
-        print(
-            f"  {hit['timestamp']}  {hit['sha']}  {hit['decision']}  "
-            f"{hit['pr_dir']}"
-        )
+        print(f"  {hit['timestamp']}  {hit['sha']}  {hit['decision']}  {hit['pr_dir']}")
         for reason in hit["reasons"]:
             print(f"    - {reason}")
     return 0
@@ -1142,8 +1161,7 @@ def _cmd_audit_contradictions(args: list[str]) -> int:
         "--since",
         metavar="SPEC",
         default=None,
-        help="Only include entries newer than SPEC "
-             "(e.g. '7d', '24h'). Default: all.",
+        help="Only include entries newer than SPEC (e.g. '7d', '24h'). Default: all.",
     )
     parser.add_argument(
         "--raw",
@@ -1163,10 +1181,7 @@ def _cmd_audit_contradictions(args: list[str]) -> int:
     if parsed.since:
         since_seconds = _parse_duration(parsed.since)
         if since_seconds is None:
-            print(
-                f"error: --since expects '<N>d', '<N>h', '<N>m', or "
-                f"'<N>s'; got {parsed.since!r}"
-            )
+            print(f"error: --since expects '<N>d', '<N>h', '<N>m', or '<N>s'; got {parsed.since!r}")
             return 1
 
     from gate.audit import list_contradictions
@@ -1257,9 +1272,7 @@ def cmd_report(args: list[str]) -> int:
     parser = make_parser("report", "Aggregate stats from reviews.jsonl.")
     parser.add_argument("--since", default="7d", help="e.g. 24h, 7d, 30d")
     parser.add_argument("--repo", default="", help="Filter to one repo")
-    parser.add_argument(
-        "--json", action="store_true", help="Machine-readable output"
-    )
+    parser.add_argument("--json", action="store_true", help="Machine-readable output")
     try:
         parsed = parse_args(parser, args)
     except SystemExit:
@@ -1276,9 +1289,7 @@ def cmd_report(args: list[str]) -> int:
         return 1
 
     rows = load_reviews(since=since, repo=parsed.repo)
-    report = summarize(
-        rows, since_label=parsed.since, repo_label=parsed.repo
-    )
+    report = summarize(rows, since_label=parsed.since, repo_label=parsed.repo)
 
     if parsed.json:
         print(_json.dumps(format_json(report), indent=2, default=str))
@@ -1330,6 +1341,7 @@ def cmd_doctor(args: list[str]) -> int:
     claude_oauth = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
     if not claude_oauth:
         from gate.quota import read_keychain_token
+
         claude_oauth = read_keychain_token() or ""
     if claude_oauth:
         checks.append(("Claude OAuth", True, f"token ({len(claude_oauth)} chars)"))
@@ -1337,6 +1349,7 @@ def cmd_doctor(args: list[str]) -> int:
         checks.append(("Claude OAuth", False, "not in env or Keychain"))
 
     from gate.setup import check_codex_auth
+
     checks.append(check_codex_auth())
 
     gate_root = gate_dir()
@@ -1366,6 +1379,7 @@ def cmd_doctor(args: list[str]) -> int:
 
     config = load_config()
     from gate.config import get_all_repos
+
     all_repos = get_all_repos(config)
     if not all_repos:
         checks.append(("clone_path", False, "no repos configured in gate.toml"))
@@ -1393,6 +1407,7 @@ def cmd_doctor(args: list[str]) -> int:
         checks.append(("runner", True, "not configured (optional)"))
 
     from gate.config import socket_path as _socket_path
+
     sock = _socket_path()
     if sock.exists() and ping(sock, timeout=2.0):
         checks.append(("server socket", True, str(sock)))
@@ -1457,6 +1472,7 @@ def cmd_checkpoint(args: list[str]) -> int:
     remains the single source of truth for ``gate <cmd>`` dispatch.
     """
     from gate import checkpoint as _checkpoint
+
     return _checkpoint.cli_main(args)
 
 

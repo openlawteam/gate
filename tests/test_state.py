@@ -186,16 +186,15 @@ class TestPersistReviewStateRobustness:
         state_dir.mkdir(parents=True)
         (state_dir / "last_sha.txt").write_text("oldsha1234567")
         verdict_json = {"decision": "approve", "findings": [], "stats": {}}
-        (tmp_workspace / "verdict.json").write_text(
-            __import__("json").dumps(verdict_json)
-        )
+        (tmp_workspace / "verdict.json").write_text(__import__("json").dumps(verdict_json))
         return state_dir
 
     def test_git_missing_does_not_escape(self, tmp_path, tmp_workspace):
         self._setup(tmp_path, tmp_workspace)
-        with _patch("gate.state.state_dir", lambda: tmp_path), \
-             _patch("gate.state.subprocess.run",
-                    side_effect=FileNotFoundError(2, "No git", "git")):
+        with (
+            _patch("gate.state.state_dir", lambda: tmp_path),
+            _patch("gate.state.subprocess.run", side_effect=FileNotFoundError(2, "No git", "git")),
+        ):
             # Must not raise
             persist_review_state(42, "newsha7654321", tmp_workspace)
         # The force-push path should have fired (is_ancestor stays False)
@@ -204,11 +203,14 @@ class TestPersistReviewStateRobustness:
 
     def test_clone_path_pruned_does_not_escape(self, tmp_path, tmp_workspace):
         self._setup(tmp_path, tmp_workspace)
-        with _patch("gate.state.state_dir", lambda: tmp_path), \
-             _patch("gate.state.subprocess.run",
-                    side_effect=NotADirectoryError(20, "Not a directory", "x")):
-            persist_review_state(42, "newsha7654321", tmp_workspace,
-                                 clone_path="/pruned/path")
+        with (
+            _patch("gate.state.state_dir", lambda: tmp_path),
+            _patch(
+                "gate.state.subprocess.run",
+                side_effect=NotADirectoryError(20, "Not a directory", "x"),
+            ),
+        ):
+            persist_review_state(42, "newsha7654321", tmp_workspace, clone_path="/pruned/path")
         # Force-push branch fires because is_ancestor stays False
         assert (tmp_path / "pr42" / "review_count.txt").read_text() == "1"
 
@@ -248,8 +250,7 @@ class TestReviewArchive:
         # (name collision avoided even if timestamp resolution is low).
         _time.sleep(1.1)  # ensure distinct second in the ISO stamp
         with patch("gate.state.state_dir", lambda: tmp_path):
-            persist_review_state(42, "abc12345deadbeef", tmp_workspace,
-                                 is_post_fix_rereview=True)
+            persist_review_state(42, "abc12345deadbeef", tmp_workspace, is_post_fix_rereview=True)
             archives = list_review_archives(42)
             assert len(archives) == 2
             # Sorted oldest-first by archive name.

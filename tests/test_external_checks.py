@@ -34,8 +34,7 @@ class TestNormaliseConclusion:
         assert ec._normalise_conclusion("SUCCESS", None) == ec.CONCLUSION_SUCCESS
 
     def test_failure_family(self):
-        for v in ("failure", "failed", "timed_out", "cancelled",
-                  "action_required", "error"):
+        for v in ("failure", "failed", "timed_out", "cancelled", "action_required", "error"):
             assert ec._normalise_conclusion(v, None) == ec.CONCLUSION_FAILURE
 
     def test_in_progress_maps_to_pending(self):
@@ -53,10 +52,12 @@ class TestNormaliseConclusion:
 
 class TestParseRequired:
     def test_dict_entries(self):
-        parsed = ec._parse_required([
-            {"name": "Vercel", "policy": "blocking"},
-            {"name": "tests", "policy": "advisory", "match": "exact"},
-        ])
+        parsed = ec._parse_required(
+            [
+                {"name": "Vercel", "policy": "blocking"},
+                {"name": "tests", "policy": "advisory", "match": "exact"},
+            ]
+        )
         assert [r.name for r in parsed] == ["Vercel", "tests"]
         assert parsed[0].policy == "blocking"
         assert parsed[1].policy == "advisory"
@@ -78,14 +79,25 @@ class TestParseRequired:
 
 class TestFetchCheckState:
     def test_merges_both_endpoints(self):
-        modern_runs = {"check_runs": [
-            {"name": "test", "status": "completed", "conclusion": "success",
-             "details_url": "https://gh/test"},
-        ]}
-        legacy = {"statuses": [
-            {"context": "Vercel – Preview", "state": "failure",
-             "target_url": "https://vercel/u"},
-        ]}
+        modern_runs = {
+            "check_runs": [
+                {
+                    "name": "test",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "details_url": "https://gh/test",
+                },
+            ]
+        }
+        legacy = {
+            "statuses": [
+                {
+                    "context": "Vercel – Preview",
+                    "state": "failure",
+                    "target_url": "https://vercel/u",
+                },
+            ]
+        }
 
         def _fake_gh(args, timeout=None, **_kw):  # noqa: ARG001
             if "check-runs" in args[1]:
@@ -103,12 +115,16 @@ class TestFetchCheckState:
         assert checks["Vercel – Preview"].source == "statuses"
 
     def test_modern_wins_on_name_collision(self):
-        modern = {"check_runs": [
-            {"name": "dup", "status": "completed", "conclusion": "success"},
-        ]}
-        legacy = {"statuses": [
-            {"context": "dup", "state": "failure"},
-        ]}
+        modern = {
+            "check_runs": [
+                {"name": "dup", "status": "completed", "conclusion": "success"},
+            ]
+        }
+        legacy = {
+            "statuses": [
+                {"context": "dup", "state": "failure"},
+            ]
+        }
 
         def _fake_gh(args, timeout=None, **_kw):  # noqa: ARG001
             return json.dumps(modern if "check-runs" in args[1] else legacy)
@@ -164,16 +180,18 @@ class TestFineGrainedPatGap:
         import subprocess
 
         return subprocess.CalledProcessError(
-            1, "gh",
+            1,
+            "gh",
             stderr="gh: Resource not accessible by personal access token (HTTP 403)",
         )
 
     def test_first_403_degrades_to_statuses_only(self, _reset_check_runs_flag):
         calls: list[str] = []
-        legacy = {"statuses": [
-            {"context": "Vercel", "state": "success",
-             "target_url": "https://vercel/u"},
-        ]}
+        legacy = {
+            "statuses": [
+                {"context": "Vercel", "state": "success", "target_url": "https://vercel/u"},
+            ]
+        }
 
         def _fake(args, timeout=None, **_kw):  # noqa: ARG001
             calls.append(args[1])
@@ -237,7 +255,8 @@ class TestFineGrainedPatGap:
         import subprocess
 
         exc = subprocess.CalledProcessError(
-            1, "gh",
+            1,
+            "gh",
             stderr='{"message":"Resource not accessible by personal access token","status":"403"}',
         )
         assert ec._is_pat_forbidden_error(exc) is True
@@ -246,7 +265,8 @@ class TestFineGrainedPatGap:
         import subprocess
 
         exc = subprocess.CalledProcessError(
-            1, "gh",
+            1,
+            "gh",
             stderr="gh: Resource not accessible by personal access token (HTTP 403)",
         )
         assert ec._is_pat_forbidden_error(exc) is True
@@ -272,7 +292,9 @@ class TestClassify:
     def test_blocking_pending_not_counted_as_failure(self):
         checks = {
             "Vercel – Preview": self._make(
-                "Vercel – Preview", ec.CONCLUSION_PENDING, "in_progress",
+                "Vercel – Preview",
+                ec.CONCLUSION_PENDING,
+                "in_progress",
             ),
         }
         result = ec.classify(checks, [ec.RequiredCheck(name="Vercel")])
@@ -282,7 +304,8 @@ class TestClassify:
     def test_advisory_failure_not_blocking(self):
         checks = {"tests": self._make("tests", ec.CONCLUSION_FAILURE)}
         result = ec.classify(
-            checks, [ec.RequiredCheck(name="tests", policy="advisory")],
+            checks,
+            [ec.RequiredCheck(name="tests", policy="advisory")],
         )
         assert not result.has_blocking_failure
         assert result.advisory_failures
@@ -302,12 +325,17 @@ class TestClassify:
 
 class TestWaitForPending:
     def test_returns_immediately_when_already_terminal(self):
-        checks = {"tests": ec.CheckState(
-            name="tests", conclusion=ec.CONCLUSION_SUCCESS, status="completed",
-        )}
+        checks = {
+            "tests": ec.CheckState(
+                name="tests",
+                conclusion=ec.CONCLUSION_SUCCESS,
+                status="completed",
+            )
+        }
         with patch("gate.external_checks.fetch_check_state", return_value=checks):
             result = ec.wait_for_pending(
-                "sha", "o/r",
+                "sha",
+                "o/r",
                 required=[ec.RequiredCheck(name="tests")],
                 cancelled=threading.Event(),
                 timeout_s=0.5,
@@ -318,15 +346,21 @@ class TestWaitForPending:
 
     def test_polls_until_green(self):
         sequence = [
-            {"tests": ec.CheckState(name="tests",
-                                    conclusion=ec.CONCLUSION_PENDING,
-                                    status="in_progress")},
-            {"tests": ec.CheckState(name="tests",
-                                    conclusion=ec.CONCLUSION_PENDING,
-                                    status="in_progress")},
-            {"tests": ec.CheckState(name="tests",
-                                    conclusion=ec.CONCLUSION_SUCCESS,
-                                    status="completed")},
+            {
+                "tests": ec.CheckState(
+                    name="tests", conclusion=ec.CONCLUSION_PENDING, status="in_progress"
+                )
+            },
+            {
+                "tests": ec.CheckState(
+                    name="tests", conclusion=ec.CONCLUSION_PENDING, status="in_progress"
+                )
+            },
+            {
+                "tests": ec.CheckState(
+                    name="tests", conclusion=ec.CONCLUSION_SUCCESS, status="completed"
+                )
+            },
         ]
         calls = {"n": 0}
 
@@ -337,7 +371,8 @@ class TestWaitForPending:
 
         with patch("gate.external_checks.fetch_check_state", side_effect=_fake):
             result = ec.wait_for_pending(
-                "sha", "o/r",
+                "sha",
+                "o/r",
                 required=[ec.RequiredCheck(name="tests")],
                 cancelled=threading.Event(),
                 timeout_s=2.0,
@@ -353,13 +388,15 @@ class TestWaitForPending:
             "gate.external_checks.fetch_check_state",
             return_value={
                 "tests": ec.CheckState(
-                    name="tests", conclusion=ec.CONCLUSION_PENDING,
+                    name="tests",
+                    conclusion=ec.CONCLUSION_PENDING,
                     status="in_progress",
                 ),
             },
         ):
             result = ec.wait_for_pending(
-                "sha", "o/r",
+                "sha",
+                "o/r",
                 required=[ec.RequiredCheck(name="tests")],
                 cancelled=event,
                 timeout_s=5.0,
@@ -373,13 +410,15 @@ class TestWaitForPending:
             "gate.external_checks.fetch_check_state",
             return_value={
                 "tests": ec.CheckState(
-                    name="tests", conclusion=ec.CONCLUSION_PENDING,
+                    name="tests",
+                    conclusion=ec.CONCLUSION_PENDING,
                     status="in_progress",
                 ),
             },
         ):
             result = ec.wait_for_pending(
-                "sha", "o/r",
+                "sha",
+                "o/r",
                 required=[ec.RequiredCheck(name="tests")],
                 cancelled=threading.Event(),
                 timeout_s=0.05,

@@ -169,8 +169,7 @@ def _render_single_finding_prompt(finding: dict, context_findings: list[dict]) -
             "\nThis finding applies at multiple sites. Fix every site "
             "in a single pass — do not skip any:\n"
             + "\n".join(
-                f"- `{loc.get('file', '?')}`"
-                + (f":{loc.get('line')}" if loc.get("line") else "")
+                f"- `{loc.get('file', '?')}`" + (f":{loc.get('line')}" if loc.get("line") else "")
                 for loc in locations
                 if isinstance(loc, dict)
             )
@@ -215,9 +214,11 @@ def _attempt_finding(
     write_live_log(
         pipeline.pr_number,
         f"polish[{finding_id}] bootstrapping Codex for {file}",
-        prefix="fix", repo=pipeline.repo,
+        prefix="fix",
+        repo=pipeline.repo,
     )
     from gate.fixer import _build_codex_bootstrap_prompt  # local import to avoid cycle
+
     codex_prompt = _build_codex_bootstrap_prompt()
     _, thread_id, _stderr = bootstrap_codex(codex_prompt, str(workspace), env=build_claude_env())
     if not thread_id:
@@ -279,12 +280,14 @@ def _attempt_finding(
 
     if result.get("has_changes"):
         from gate.fixer import build_verify
+
         bv = build_verify(workspace, pipeline.build, config=pipeline.config)
         if not bv.get("pass"):
             write_live_log(
                 pipeline.pr_number,
                 f"polish[{finding_id}] build failed, reverting just this finding",
-                prefix="fix", repo=pipeline.repo,
+                prefix="fix",
+                repo=pipeline.repo,
             )
             _reset_to(workspace, pre_sha)
             return {
@@ -381,7 +384,8 @@ def _spawn_fix_senior(pipeline: "FixPipeline", finding: dict, timeout_s: int) ->
 
     review_id = (
         f"{repo_slug(pipeline.repo)}-pr{pipeline.pr_number}"
-        if pipeline.repo else f"pr{pipeline.pr_number}"
+        if pipeline.repo
+        else f"pr{pipeline.pr_number}"
     )
     pane_id = spawn_review_stage(
         review_id=review_id,
@@ -444,6 +448,7 @@ def _resume_fix_senior(pipeline: "FixPipeline", finding: dict, timeout_s: int) -
     env["GATE_FIX_WORKSPACE"] = str(workspace)
 
     from gate.fixer import RESUME_MAX_TURNS
+
     # Prompt is piped via stdin (not appended to argv) so large polish
     # prompts can't hit macOS ARG_MAX (~1 MB) and crash with
     # `OSError [Errno 7] Argument list too long` before claude starts.
@@ -460,9 +465,10 @@ def _resume_fix_senior(pipeline: "FixPipeline", finding: dict, timeout_s: int) -
         str(RESUME_MAX_TURNS),
     ]
     try:
-        with open(workspace / "polish-resume-stdout.log", "ab") as out, open(
-            workspace / "polish-resume-stderr.log", "ab"
-        ) as err:
+        with (
+            open(workspace / "polish-resume-stdout.log", "ab") as out,
+            open(workspace / "polish-resume-stderr.log", "ab") as err,
+        ):
             subprocess.run(
                 cmd,
                 input=resume_prompt.encode("utf-8"),
@@ -502,11 +508,10 @@ def _run_fix_polish_audit(pipeline: "FixPipeline") -> dict | None:
 
     # write_diff so $fix_diff is fresh
     from gate.fixer import write_diff
+
     write_diff(pipeline.workspace)
 
-    vars_dict = prompt.build_vars(
-        pipeline.workspace, "fix-polish", {}, pipeline.config
-    )
+    vars_dict = prompt.build_vars(pipeline.workspace, "fix-polish", {}, pipeline.config)
     assembled = prompt.safe_substitute(template, vars_dict, "polish-audit")
 
     def _run() -> StageResult:
@@ -518,9 +523,7 @@ def _run_fix_polish_audit(pipeline: "FixPipeline") -> dict | None:
             cancelled=pipeline._cancelled,
         )
 
-    result = run_with_retry(
-        _run, "fix-polish", pipeline.config, cancelled=pipeline._cancelled
-    )
+    result = run_with_retry(_run, "fix-polish", pipeline.config, cancelled=pipeline._cancelled)
     data = result.data or {}
     (pipeline.workspace / "fix-polish.json").write_text(json.dumps(data, indent=2))
     clean = data.get("clean", True)
@@ -528,7 +531,8 @@ def _run_fix_polish_audit(pipeline: "FixPipeline") -> dict | None:
     write_live_log(
         pipeline.pr_number,
         f"fix-polish self-audit: clean={clean} corrections={len(corrections)}",
-        prefix="fix", repo=pipeline.repo,
+        prefix="fix",
+        repo=pipeline.repo,
     )
     return data
 
@@ -561,9 +565,9 @@ def run_polish_loop(
     ordered = _sort_by_fixability(findings)
     write_live_log(
         pipeline.pr_number,
-        f"polish loop: {len(ordered)} findings, "
-        f"budget={total_budget_s}s, timeouts={timeouts}",
-        prefix="fix", repo=pipeline.repo,
+        f"polish loop: {len(ordered)} findings, budget={total_budget_s}s, timeouts={timeouts}",
+        prefix="fix",
+        repo=pipeline.repo,
     )
 
     fixed: list[dict] = []
@@ -572,8 +576,10 @@ def run_polish_loop(
     for idx, finding in enumerate(ordered, start=1):
         if pipeline._cancelled.is_set():
             write_live_log(
-                pipeline.pr_number, "polish loop cancelled",
-                prefix="fix", repo=pipeline.repo,
+                pipeline.pr_number,
+                "polish loop cancelled",
+                prefix="fix",
+                repo=pipeline.repo,
             )
             break
 
@@ -586,32 +592,35 @@ def run_polish_loop(
         # disambiguation question will be posted to the PR from
         # _commit_and_finish. This runs ahead of the budget check so a
         # full-budget loop does not starve unrelated findings.
-        if (
-            finding.get("ambiguity") == "high"
-            and pipeline.config.get("repo", {}).get("halt_on_ambiguity", True)
+        if finding.get("ambiguity") == "high" and pipeline.config.get("repo", {}).get(
+            "halt_on_ambiguity", True
         ):
-            not_fixed.append({
-                "finding_id": finding.get("finding_id"),
-                "file": finding.get("file"),
-                "line": finding.get("line"),
-                "finding_message": (finding.get("message") or "")[:200],
-                "reason": "requires_author_disambiguation",
-                "detail": _build_disambig_detail(finding),
-            })
+            not_fixed.append(
+                {
+                    "finding_id": finding.get("finding_id"),
+                    "file": finding.get("file"),
+                    "line": finding.get("line"),
+                    "finding_message": (finding.get("message") or "")[:200],
+                    "reason": "requires_author_disambiguation",
+                    "detail": _build_disambig_detail(finding),
+                }
+            )
             continue
 
         if total_budget_s and elapsed >= total_budget_s:
-            not_fixed.append({
-                "finding_id": finding.get("finding_id"),
-                "file": finding.get("file"),
-                "line": finding.get("line"),
-                "finding_message": (finding.get("message") or "")[:200],
-                "reason": "deferred_by_budget",
-                "detail": (
-                    f"Polish loop exhausted its {total_budget_s}s total "
-                    f"budget before this finding could be attempted."
-                ),
-            })
+            not_fixed.append(
+                {
+                    "finding_id": finding.get("finding_id"),
+                    "file": finding.get("file"),
+                    "line": finding.get("line"),
+                    "finding_message": (finding.get("message") or "")[:200],
+                    "reason": "deferred_by_budget",
+                    "detail": (
+                        f"Polish loop exhausted its {total_budget_s}s total "
+                        f"budget before this finding could be attempted."
+                    ),
+                }
+            )
             continue
 
         if per_finding_timeout <= 0:
@@ -619,17 +628,19 @@ def run_polish_loop(
             # dispatching. This is the exit path for broad/architectural
             # findings (e.g. file-size ceilings) that shouldn't consume
             # the polish budget.
-            not_fixed.append({
-                "finding_id": finding.get("finding_id"),
-                "file": finding.get("file"),
-                "line": finding.get("line"),
-                "finding_message": (finding.get("message") or "")[:200],
-                "reason": "skipped_broad_in_polish",
-                "detail": (
-                    f"Finding classified `{cls}`; polish loop does not "
-                    "attempt broad/architectural changes (timeout=0)."
-                ),
-            })
+            not_fixed.append(
+                {
+                    "finding_id": finding.get("finding_id"),
+                    "file": finding.get("file"),
+                    "line": finding.get("line"),
+                    "finding_message": (finding.get("message") or "")[:200],
+                    "reason": "skipped_broad_in_polish",
+                    "detail": (
+                        f"Finding classified `{cls}`; polish loop does not "
+                        "attempt broad/architectural changes (timeout=0)."
+                    ),
+                }
+            )
             continue
 
         # Clamp per-finding timeout to remaining total budget so a
@@ -643,7 +654,8 @@ def run_polish_loop(
             pipeline.pr_number,
             f"polish[{idx}/{len(ordered)}] {cls} {finding.get('file')} "
             f"(timeout={per_finding_timeout}s)",
-            prefix="fix", repo=pipeline.repo,
+            prefix="fix",
+            repo=pipeline.repo,
         )
 
         outcome = _attempt_finding(pipeline, finding, per_finding_timeout)
@@ -660,9 +672,9 @@ def run_polish_loop(
         corrections = audit.get("corrections", []) or []
         write_live_log(
             pipeline.pr_number,
-            f"polish self-audit flagged {len(corrections)} corrections; "
-            "logging for human review.",
-            prefix="fix", repo=pipeline.repo,
+            f"polish self-audit flagged {len(corrections)} corrections; logging for human review.",
+            prefix="fix",
+            repo=pipeline.repo,
         )
         # We deliberately do NOT auto-apply audit corrections: the senior
         # already did its best pass per finding, and a trailing
@@ -703,7 +715,10 @@ def _git_head_sha(workspace: Path) -> str:
     try:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            cwd=str(workspace), capture_output=True, text=True, timeout=10,
+            cwd=str(workspace),
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result.returncode == 0:
             return result.stdout.strip()
@@ -717,12 +732,24 @@ def _git_checkpoint(workspace: Path, message: str) -> None:
     try:
         subprocess.run(
             ["git", "add", "-A"],
-            cwd=str(workspace), capture_output=True, timeout=30,
+            cwd=str(workspace),
+            capture_output=True,
+            timeout=30,
         )
         subprocess.run(
-            ["git", "-c", "commit.gpgsign=false", "commit", "--no-verify",
-             "--allow-empty", "-m", message],
-            cwd=str(workspace), capture_output=True, timeout=30,
+            [
+                "git",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--no-verify",
+                "--allow-empty",
+                "-m",
+                message,
+            ],
+            cwd=str(workspace),
+            capture_output=True,
+            timeout=30,
         )
     except (subprocess.SubprocessError, OSError) as e:
         logger.warning(f"checkpoint commit failed: {e}")
@@ -734,11 +761,15 @@ def _reset_to(workspace: Path, sha: str) -> None:
     try:
         subprocess.run(
             ["git", "reset", "--hard", sha],
-            cwd=str(workspace), capture_output=True, timeout=30,
+            cwd=str(workspace),
+            capture_output=True,
+            timeout=30,
         )
         subprocess.run(
             ["git", "clean", "-fd"],
-            cwd=str(workspace), capture_output=True, timeout=30,
+            cwd=str(workspace),
+            capture_output=True,
+            timeout=30,
         )
     except (subprocess.SubprocessError, OSError) as e:
         logger.warning(f"git reset to {sha[:8]} failed: {e}")

@@ -64,10 +64,7 @@ class TestParseTsc:
         assert result["errors"][0]["code"] == "TS2322"
 
     def test_multiple_errors(self):
-        log = (
-            "a.ts(1,1): error TS1: msg1\n"
-            "b.ts(2,3): error TS2: msg2\n"
-        )
+        log = "a.ts(1,1): error TS1: msg1\nb.ts(2,3): error TS2: msg2\n"
         result = _parse_tsc(log, 1)
         assert result["error_count"] == 2
 
@@ -162,17 +159,19 @@ class TestRunBuildCommandGroups:
             calls.append(args)
             return subprocess.CompletedProcess(args, 0, stdout="ok\n", stderr="")
 
-        with patch("gate.builder.subprocess.run", side_effect=fake_run), \
-             patch(
-                 "gate.builder.profiles.resolve_profile",
-                 return_value={
-                     "project_type": "node",
-                     "typecheck_cmd": "",
-                     "typecheck_cmds": ["npm run type-check", "npm run engine:check"],
-                     "lint_cmd": "",
-                     "test_cmd": "",
-                 },
-             ):
+        with (
+            patch("gate.builder.subprocess.run", side_effect=fake_run),
+            patch(
+                "gate.builder.profiles.resolve_profile",
+                return_value={
+                    "project_type": "node",
+                    "typecheck_cmd": "",
+                    "typecheck_cmds": ["npm run type-check", "npm run engine:check"],
+                    "lint_cmd": "",
+                    "test_cmd": "",
+                },
+            ),
+        ):
             result = run_build(tmp_path)
 
         assert result["overall_pass"] is True
@@ -187,8 +186,10 @@ class TestCompileBuild:
         result = compile_build(
             typecheck_log="src/foo.ts(1,1): error TS2322: msg",
             typecheck_exit=1,
-            lint_log="", lint_exit=0,
-            test_log="", test_exit=0,
+            lint_log="",
+            lint_exit=0,
+            test_log="",
+            test_exit=0,
             project_type="node",
             typecheck_tool="npx",
         )
@@ -197,9 +198,12 @@ class TestCompileBuild:
 
     def test_python_project_uses_generic_parsers(self):
         result = compile_build(
-            typecheck_log="", typecheck_exit=0,
-            lint_log="error: something\n", lint_exit=1,
-            test_log="", test_exit=0,
+            typecheck_log="",
+            typecheck_exit=0,
+            lint_log="error: something\n",
+            lint_exit=1,
+            test_log="",
+            test_exit=0,
             project_type="python",
             lint_tool="ruff",
         )
@@ -208,9 +212,12 @@ class TestCompileBuild:
 
     def test_has_project_type_in_result(self):
         result = compile_build(
-            typecheck_log="", typecheck_exit=0,
-            lint_log="", lint_exit=0,
-            test_log="", test_exit=0,
+            typecheck_log="",
+            typecheck_exit=0,
+            lint_log="",
+            lint_exit=0,
+            test_log="",
+            test_exit=0,
             project_type="go",
         )
         assert result["project_type"] == "go"
@@ -338,8 +345,10 @@ class TestCompileBuildPython:
         """Regression: Python project should parse real pytest counts,
         not return 0/0 like the old generic test parser did."""
         result = compile_build(
-            typecheck_log="", typecheck_exit=0,
-            lint_log="", lint_exit=0,
+            typecheck_log="",
+            typecheck_exit=0,
+            lint_log="",
+            lint_exit=0,
             test_log="624 passed, 6 skipped in 95.89s\n",
             test_exit=0,
             project_type="python",
@@ -351,8 +360,10 @@ class TestCompileBuildPython:
 
     def test_python_failed_tests_captured(self):
         result = compile_build(
-            typecheck_log="", typecheck_exit=0,
-            lint_log="", lint_exit=0,
+            typecheck_log="",
+            typecheck_exit=0,
+            lint_log="",
+            lint_exit=0,
             test_log="1 failed, 20 passed in 3.5s\n",
             test_exit=1,
             project_type="python",
@@ -365,9 +376,12 @@ class TestCompileBuildPython:
     def test_python_no_tests_configured_still_zero(self):
         """If test_log is empty (no pytest run), counts should be 0."""
         result = compile_build(
-            typecheck_log="", typecheck_exit=0,
-            lint_log="", lint_exit=0,
-            test_log="", test_exit=0,
+            typecheck_log="",
+            typecheck_exit=0,
+            lint_log="",
+            lint_exit=0,
+            test_log="",
+            test_exit=0,
             project_type="python",
             test_tool="",
         )
@@ -408,9 +422,12 @@ class TestPr223Regression:
 
     def test_compile_build_surfaces_five_lint_errors(self):
         result = compile_build(
-            typecheck_log="", typecheck_exit=0,
-            lint_log=PR223_ESLINT_LOG, lint_exit=1,
-            test_log="", test_exit=0,
+            typecheck_log="",
+            typecheck_exit=0,
+            lint_log=PR223_ESLINT_LOG,
+            lint_exit=1,
+            test_log="",
+            test_exit=0,
             project_type="node",
         )
         assert result["overall_pass"] is False
@@ -434,28 +451,19 @@ class TestParseLintDefenseInDepth:
         assert result["errors"][0]["file"] == "src/app/page.tsx"
 
     def test_absolute_path_preserved(self):
-        log = (
-            "/private/tmp/proj/src/foo.tsx\n"
-            "  3:1  error  boom  no-boom\n"
-        )
+        log = "/private/tmp/proj/src/foo.tsx\n  3:1  error  boom  no-boom\n"
         result = _parse_lint(log, 1)
         assert result["error_count"] == 1
         assert result["errors"][0]["file"] == "/private/tmp/proj/src/foo.tsx"
 
     def test_capitalised_warning_with_colon(self):
-        log = (
-            "./pkg/util.ts\n"
-            "  5:1  Warning: prefer const  prefer-const\n"
-        )
+        log = "./pkg/util.ts\n  5:1  Warning: prefer const  prefer-const\n"
         result = _parse_lint(log, 0)
         assert result["warning_count"] == 1
         assert result["warnings"][0]["severity"] == "warning"
 
     def test_uppercase_severity(self):
-        log = (
-            "src/foo.ts\n"
-            "  7:2  ERROR  bad stuff  no-bad\n"
-        )
+        log = "src/foo.ts\n  7:2  ERROR  bad stuff  no-bad\n"
         result = _parse_lint(log, 1)
         assert result["error_count"] == 1
 
@@ -484,19 +492,19 @@ class TestCompileBuildParseFailure:
     def test_lint_parse_failure_is_flagged(self):
         log = "npm error Exit handler never called!\nnpm error something went wrong\n"
         result = compile_build(
-            typecheck_log="", typecheck_exit=0,
-            lint_log=log, lint_exit=1,
-            test_log="", test_exit=0,
+            typecheck_log="",
+            typecheck_exit=0,
+            lint_log=log,
+            lint_exit=1,
+            test_log="",
+            test_exit=0,
             project_type="node",
         )
         assert result["overall_pass"] is False
         assert result["lint"]["parse_failure"] is True
         # Synthetic error was appended so lint.errors is not misleadingly empty.
         assert result["lint"]["error_count"] >= 1
-        assert any(
-            e.get("rule") == "gate/unparsed-build-output"
-            for e in result["lint"]["errors"]
-        )
+        assert any(e.get("rule") == "gate/unparsed-build-output" for e in result["lint"]["errors"])
         # blocking_issues cannot be rationalised as a tooling anomaly.
         joined = " ".join(result["blocking_issues"])
         assert "opaque build failure" in joined
@@ -508,25 +516,30 @@ class TestCompileBuildParseFailure:
         """Same treatment for typecheck — e.g. tsc wrapped by a broken script."""
         log = "something unrelated printed to stderr\n"
         result = compile_build(
-            typecheck_log=log, typecheck_exit=2,
-            lint_log="", lint_exit=0,
-            test_log="", test_exit=0,
+            typecheck_log=log,
+            typecheck_exit=2,
+            lint_log="",
+            lint_exit=0,
+            test_log="",
+            test_exit=0,
             project_type="node",
             typecheck_tool="npx",
         )
         assert result["typecheck"]["parse_failure"] is True
         assert any(
-            e.get("rule") == "gate/unparsed-build-output"
-            for e in result["typecheck"]["errors"]
+            e.get("rule") == "gate/unparsed-build-output" for e in result["typecheck"]["errors"]
         )
         assert any("opaque build failure" in b for b in result["blocking_issues"])
 
     def test_tests_parse_failure_is_flagged(self):
         log = "runner crashed with signal 9\n"
         result = compile_build(
-            typecheck_log="", typecheck_exit=0,
-            lint_log="", lint_exit=0,
-            test_log=log, test_exit=137,
+            typecheck_log="",
+            typecheck_exit=0,
+            lint_log="",
+            lint_exit=0,
+            test_log=log,
+            test_exit=137,
             project_type="node",
         )
         assert result["tests"]["parse_failure"] is True
@@ -536,9 +549,12 @@ class TestCompileBuildParseFailure:
     def test_parse_failure_survives_empty_log(self):
         """Empty log + non-zero exit still flags (that's ambiguous too)."""
         result = compile_build(
-            typecheck_log="", typecheck_exit=0,
-            lint_log="", lint_exit=1,
-            test_log="", test_exit=0,
+            typecheck_log="",
+            typecheck_exit=0,
+            lint_log="",
+            lint_exit=1,
+            test_log="",
+            test_exit=0,
             project_type="node",
         )
         assert result["lint"]["parse_failure"] is True
@@ -546,9 +562,12 @@ class TestCompileBuildParseFailure:
     def test_no_false_positive_on_successful_lint(self):
         """Clean run: parse_failure stays False, no synthetic error added."""
         result = compile_build(
-            typecheck_log="", typecheck_exit=0,
-            lint_log="", lint_exit=0,
-            test_log="", test_exit=0,
+            typecheck_log="",
+            typecheck_exit=0,
+            lint_log="",
+            lint_exit=0,
+            test_log="",
+            test_exit=0,
             project_type="node",
         )
         assert result["lint"]["parse_failure"] is False
@@ -559,9 +578,12 @@ class TestCompileBuildParseFailure:
     def test_no_false_positive_when_findings_exist(self):
         """Real parsed errors: not a parse failure, just a normal failed lint."""
         result = compile_build(
-            typecheck_log="", typecheck_exit=0,
-            lint_log=PR223_ESLINT_LOG, lint_exit=1,
-            test_log="", test_exit=0,
+            typecheck_log="",
+            typecheck_exit=0,
+            lint_log=PR223_ESLINT_LOG,
+            lint_exit=1,
+            test_log="",
+            test_exit=0,
             project_type="node",
         )
         assert result["lint"]["parse_failure"] is False
@@ -569,9 +591,12 @@ class TestCompileBuildParseFailure:
     def test_raw_output_tail_is_present_on_passing_build(self):
         """Passing build still preserves raw_output_tail for audit."""
         result = compile_build(
-            typecheck_log="Compiled cleanly.", typecheck_exit=0,
-            lint_log="Lint clean.", lint_exit=0,
-            test_log="Tests 3 passed (3)", test_exit=0,
+            typecheck_log="Compiled cleanly.",
+            typecheck_exit=0,
+            lint_log="Lint clean.",
+            lint_exit=0,
+            test_log="Tests 3 passed (3)",
+            test_exit=0,
             project_type="node",
         )
         assert "Compiled cleanly" in result["typecheck"]["raw_output_tail"]
@@ -582,18 +607,24 @@ class TestCompileBuildParseFailure:
         """raw_output_tail must not blow up build.json — capped at 2000 chars."""
         huge = "x" * 100_000
         result = compile_build(
-            typecheck_log="", typecheck_exit=0,
-            lint_log=huge, lint_exit=1,
-            test_log="", test_exit=0,
+            typecheck_log="",
+            typecheck_exit=0,
+            lint_log=huge,
+            lint_exit=1,
+            test_log="",
+            test_exit=0,
             project_type="node",
         )
         assert len(result["lint"]["raw_output_tail"]) <= 2000
 
     def test_exit_codes_plumbed_through(self):
         result = compile_build(
-            typecheck_log="", typecheck_exit=2,
-            lint_log="", lint_exit=1,
-            test_log="", test_exit=137,
+            typecheck_log="",
+            typecheck_exit=2,
+            lint_log="",
+            lint_exit=1,
+            test_log="",
+            test_exit=137,
             project_type="node",
         )
         assert result["typecheck"]["exit_code"] == 2
@@ -624,17 +655,19 @@ class TestRunBuildTimeoutLogging:
                 raise subprocess.TimeoutExpired(cmd=args, timeout=300)
             return real_run(["true"], capture_output=True, text=True)
 
-        with patch("gate.builder.subprocess.run", side_effect=fake_run), \
-             patch(
-                 "gate.builder.profiles.resolve_profile",
-                 return_value=self._profile_stub(),
-             ):
+        with (
+            patch("gate.builder.subprocess.run", side_effect=fake_run),
+            patch(
+                "gate.builder.profiles.resolve_profile",
+                return_value=self._profile_stub(),
+            ),
+        ):
             with caplog.at_level("WARNING", logger="gate.builder"):
                 result = run_build(tmp_path)
 
-        assert any(
-            "lint timed out" in rec.message for rec in caplog.records
-        ), "expected a WARNING log when lint hits TimeoutExpired"
+        assert any("lint timed out" in rec.message for rec in caplog.records), (
+            "expected a WARNING log when lint hits TimeoutExpired"
+        )
         assert result["lint"]["pass"] is False
 
     def test_typecheck_timeout_emits_warning(self, tmp_path, caplog):
@@ -646,17 +679,17 @@ class TestRunBuildTimeoutLogging:
                 raise subprocess.TimeoutExpired(cmd=args, timeout=300)
             return real_run(["true"], capture_output=True, text=True)
 
-        with patch("gate.builder.subprocess.run", side_effect=fake_run), \
-             patch(
-                 "gate.builder.profiles.resolve_profile",
-                 return_value=self._profile_stub(),
-             ):
+        with (
+            patch("gate.builder.subprocess.run", side_effect=fake_run),
+            patch(
+                "gate.builder.profiles.resolve_profile",
+                return_value=self._profile_stub(),
+            ),
+        ):
             with caplog.at_level("WARNING", logger="gate.builder"):
                 run_build(tmp_path)
 
-        assert any(
-            "typecheck timed out" in rec.message for rec in caplog.records
-        )
+        assert any("typecheck timed out" in rec.message for rec in caplog.records)
 
     def test_tests_timeout_emits_warning(self, tmp_path, caplog):
         (tmp_path / "package.json").write_text("{}")
@@ -667,14 +700,14 @@ class TestRunBuildTimeoutLogging:
                 raise subprocess.TimeoutExpired(cmd=args, timeout=300)
             return real_run(["true"], capture_output=True, text=True)
 
-        with patch("gate.builder.subprocess.run", side_effect=fake_run), \
-             patch(
-                 "gate.builder.profiles.resolve_profile",
-                 return_value=self._profile_stub(),
-             ):
+        with (
+            patch("gate.builder.subprocess.run", side_effect=fake_run),
+            patch(
+                "gate.builder.profiles.resolve_profile",
+                return_value=self._profile_stub(),
+            ),
+        ):
             with caplog.at_level("WARNING", logger="gate.builder"):
                 run_build(tmp_path)
 
-        assert any(
-            "tests timed out" in rec.message for rec in caplog.records
-        )
+        assert any("tests timed out" in rec.message for rec in caplog.records)

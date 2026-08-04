@@ -178,9 +178,7 @@ def render_sticky(verdict: dict, build: dict | None) -> str:
     context = {
         "marker": STICKY_MARKER,
         "decision": decision,
-        "decision_label": _DECISION_LABELS.get(
-            decision, decision.replace("_", " ").title()
-        ),
+        "decision_label": _DECISION_LABELS.get(decision, decision.replace("_", " ").title()),
         "confidence": str(verdict.get("confidence", "unknown") or "unknown"),
         "summary": (str(verdict.get("summary", "")) or "_(no summary)_").strip(),
         "review_time": verdict.get("review_time_seconds"),
@@ -190,9 +188,7 @@ def render_sticky(verdict: dict, build: dict | None) -> str:
         "has_non_blocking": bool(non_blocking),
         "build_summary": _summarise_build(build),
         "stats_line": _stats_line(verdict, len(blocking), len(non_blocking)),
-        "updated_at": _dt.datetime.now(tz=_dt.UTC).strftime(
-            "%Y-%m-%d %H:%M UTC"
-        ),
+        "updated_at": _dt.datetime.now(tz=_dt.UTC).strftime("%Y-%m-%d %H:%M UTC"),
     }
 
     template = env.get_template("sticky.md.j2")
@@ -209,17 +205,19 @@ def _find_sticky_comment(repo: str, pr_number: int) -> int | None:
     from gate.github import _gh
 
     try:
-        out = _gh([
-            "api",
-            f"repos/{repo}/issues/{pr_number}/comments",
-            "--paginate",
-            "-q", ".[] | {id: .id, body: .body}",
-            "--method", "GET",
-        ])
-    except subprocess.CalledProcessError as e:
-        logger.warning(
-            f"PR #{pr_number}: failed to list comments for sticky lookup: {e}"
+        out = _gh(
+            [
+                "api",
+                f"repos/{repo}/issues/{pr_number}/comments",
+                "--paginate",
+                "-q",
+                ".[] | {id: .id, body: .body}",
+                "--method",
+                "GET",
+            ]
         )
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"PR #{pr_number}: failed to list comments for sticky lookup: {e}")
         return None
 
     # `gh api -q` with `.[]` against a paginated array yields one JSON
@@ -270,34 +268,43 @@ def upsert_sticky_summary(
     existing_id = _find_sticky_comment(repo, pr_number)
 
     if existing_id is None:
-        _gh([
-            "api",
-            f"repos/{repo}/issues/{pr_number}/comments",
-            "-X", "POST",
-            "-f", f"body={body}",
-        ])
+        _gh(
+            [
+                "api",
+                f"repos/{repo}/issues/{pr_number}/comments",
+                "-X",
+                "POST",
+                "-f",
+                f"body={body}",
+            ]
+        )
         logger.info(f"PR #{pr_number}: posted sticky summary comment")
         return
 
     try:
-        existing_body = _gh([
-            "api",
-            f"repos/{repo}/issues/comments/{existing_id}",
-            "-q", ".body",
-        ]).strip()
+        existing_body = _gh(
+            [
+                "api",
+                f"repos/{repo}/issues/comments/{existing_id}",
+                "-q",
+                ".body",
+            ]
+        ).strip()
     except subprocess.CalledProcessError:
         existing_body = ""
 
     if existing_body == body.strip():
-        logger.debug(
-            f"PR #{pr_number}: sticky summary unchanged, skipping PATCH"
-        )
+        logger.debug(f"PR #{pr_number}: sticky summary unchanged, skipping PATCH")
         return
 
-    _gh([
-        "api",
-        f"repos/{repo}/issues/comments/{existing_id}",
-        "-X", "PATCH",
-        "-f", f"body={body}",
-    ])
+    _gh(
+        [
+            "api",
+            f"repos/{repo}/issues/comments/{existing_id}",
+            "-X",
+            "PATCH",
+            "-f",
+            f"body={body}",
+        ]
+    )
     logger.info(f"PR #{pr_number}: updated sticky summary comment {existing_id}")

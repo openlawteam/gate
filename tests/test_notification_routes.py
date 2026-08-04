@@ -45,13 +45,9 @@ class TestEnvDefaults:
 
     def test_discord_env_only(self, routes_file, monkeypatch):
         monkeypatch.delenv("GATE_NTFY_TOPIC", raising=False)
-        monkeypatch.setenv(
-            "GATE_DISCORD_WEBHOOK", "https://discord.com/api/webhooks/1/x"
-        )
+        monkeypatch.setenv("GATE_DISCORD_WEBHOOK", "https://discord.com/api/webhooks/1/x")
         targets = route_for("review_complete")
-        assert targets == [
-            Target(kind="discord", endpoint="https://discord.com/api/webhooks/1/x")
-        ]
+        assert targets == [Target(kind="discord", endpoint="https://discord.com/api/webhooks/1/x")]
 
     def test_both_env_vars_emit_two_targets(self, routes_file, monkeypatch):
         monkeypatch.setenv("GATE_NTFY_TOPIC", "ops")
@@ -88,16 +84,11 @@ class TestAuthorOverride:
         assert topics == ["ops"]
 
     def test_author_discord_webhook(self, routes_file, monkeypatch):
-        routes_file(
-            '[authors.alice]\n'
-            'discord = "https://discord.com/api/webhooks/2/y"\n'
-        )
+        routes_file('[authors.alice]\ndiscord = "https://discord.com/api/webhooks/2/y"\n')
         monkeypatch.delenv("GATE_NTFY_TOPIC", raising=False)
         monkeypatch.delenv("GATE_DISCORD_WEBHOOK", raising=False)
         targets = route_for("review_complete", author="alice")
-        assert targets == [
-            Target(kind="discord", endpoint="https://discord.com/api/webhooks/2/y")
-        ]
+        assert targets == [Target(kind="discord", endpoint="https://discord.com/api/webhooks/2/y")]
 
 
 # ── Per-event extras ────────────────────────────────────────
@@ -105,10 +96,7 @@ class TestAuthorOverride:
 
 class TestEventExtras:
     def test_event_extras_only_apply_to_named_event(self, routes_file, monkeypatch):
-        routes_file(
-            '[events.fix_failed]\n'
-            'extra_ntfy = ["on-call"]\n'
-        )
+        routes_file('[events.fix_failed]\nextra_ntfy = ["on-call"]\n')
         monkeypatch.setenv("GATE_NTFY_TOPIC", "ops")
         review_targets = route_for("review_complete")
         fix_targets = route_for("fix_failed")
@@ -124,10 +112,7 @@ class TestEventExtras:
 
 class TestRepoExtras:
     def test_repo_extras_only_apply_to_named_repo(self, routes_file, monkeypatch):
-        routes_file(
-            '[repos."myorg/myrepo"]\n'
-            'extra_ntfy = ["myrepo-channel"]\n'
-        )
+        routes_file('[repos."myorg/myrepo"]\nextra_ntfy = ["myrepo-channel"]\n')
         monkeypatch.setenv("GATE_NTFY_TOPIC", "ops")
         a_targets = route_for("review_complete", repo="myorg/myrepo")
         b_targets = route_for("review_complete", repo="other/repo")
@@ -171,9 +156,7 @@ class TestMalformedConfig:
 
 class TestWrapperAuthor:
     @patch("gate.notify._send_to")
-    def test_review_complete_passes_author_through(
-        self, mock_send, routes_file, monkeypatch
-    ):
+    def test_review_complete_passes_author_through(self, mock_send, routes_file, monkeypatch):
         routes_file('[authors.alice]\nntfy = "alice-prs"\n')
         monkeypatch.delenv("GATE_NTFY_TOPIC", raising=False)
         monkeypatch.delenv("GATE_DISCORD_WEBHOOK", raising=False)
@@ -181,10 +164,10 @@ class TestWrapperAuthor:
         from gate.notify import review_complete
 
         review_complete(
-            42, {"decision": "approve", "summary": "OK", "stats": {}},
-            repo="myorg/myrepo", author="alice",
+            42,
+            {"decision": "approve", "summary": "OK", "stats": {}},
+            repo="myorg/myrepo",
+            author="alice",
         )
-        endpoints = [
-            call.args[0].endpoint for call in mock_send.call_args_list
-        ]
+        endpoints = [call.args[0].endpoint for call in mock_send.call_args_list]
         assert "alice-prs" in endpoints

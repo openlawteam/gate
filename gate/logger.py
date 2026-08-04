@@ -35,9 +35,7 @@ _LOG_FORMATTER = logging.Formatter(
 )
 
 
-def attach_gate_file_handler(
-    log_path: Path, level: int = logging.INFO
-) -> logging.FileHandler:
+def attach_gate_file_handler(log_path: Path, level: int = logging.INFO) -> logging.FileHandler:
     """Attach a FileHandler to the top-level ``gate`` logger.
 
     Used by both the long-running server (``activity.log``) and the

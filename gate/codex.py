@@ -122,9 +122,7 @@ def _kill_and_wait(proc: subprocess.Popen) -> None:
             logger.error("codex pgroup still alive after SIGKILL (pid=%s)", proc.pid)
 
 
-def bootstrap_codex(
-    prompt: str, cwd: str, env: dict | None = None
-) -> tuple[int, str | None, str]:
+def bootstrap_codex(prompt: str, cwd: str, env: dict | None = None) -> tuple[int, str | None, str]:
     """Bootstrap a new Codex session and return its thread ID.
 
     Runs codex exec --json to create a fresh session. Parses the thread_id
@@ -164,9 +162,7 @@ def bootstrap_codex(
         try:
             stdout, stderr = proc.communicate(timeout=BOOTSTRAP_TIMEOUT_S)
         except subprocess.TimeoutExpired:
-            logger.error(
-                "codex bootstrap timed out after %ds", BOOTSTRAP_TIMEOUT_S
-            )
+            logger.error("codex bootstrap timed out after %ds", BOOTSTRAP_TIMEOUT_S)
             _kill_and_wait(proc)
             return 1, None, "bootstrap timed out (possible Gatekeeper block or network issue)"
         except KeyboardInterrupt:
@@ -186,7 +182,8 @@ def bootstrap_codex(
     if proc.returncode != 0:
         logger.error(
             "codex bootstrap failed (rc=%d): %s",
-            proc.returncode, stderr_tail[:500],
+            proc.returncode,
+            stderr_tail[:500],
         )
 
     return proc.returncode, thread_id, stderr_tail
@@ -309,6 +306,7 @@ def _parse_thread_id(stdout: str) -> str | None:
 # Health probe
 # ---------------------------------------------------------------------------
 
+
 def _codex_binary_key() -> tuple[str, float]:
     """Return (path, mtime) for the codex binary, used as cache key."""
     path = shutil.which("codex")
@@ -339,7 +337,9 @@ def _diagnose_macos_gatekeeper(binary_path: str) -> str:
     try:
         xattr_out = subprocess.run(
             ["xattr", "-l", binary_path],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if "com.apple.quarantine" in (xattr_out.stdout or ""):
             hints.append("quarantine xattr present")
@@ -348,7 +348,9 @@ def _diagnose_macos_gatekeeper(binary_path: str) -> str:
     try:
         spctl_out = subprocess.run(
             ["spctl", "-a", "-v", binary_path],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         combined = (spctl_out.stdout or "") + (spctl_out.stderr or "")
         if "rejected" in combined.lower():
@@ -401,7 +403,9 @@ def codex_health_check(force: bool = False) -> tuple[bool, str]:
     try:
         proc = subprocess.run(
             ["codex", "--version"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if proc.returncode == 0:
             version = (proc.stdout or "").strip().split("\n")[0]
@@ -456,7 +460,9 @@ def claude_health_check(force: bool = False) -> tuple[bool, str]:
     try:
         proc = subprocess.run(
             ["claude", "--version"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if proc.returncode == 0:
             version = (proc.stdout or "").strip().split("\n")[0]

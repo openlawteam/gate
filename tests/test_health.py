@@ -62,10 +62,7 @@ class TestCheckGithubApi:
 class TestCheckDiskUsage:
     @patch("gate.health.subprocess.run")
     def test_low_usage(self, mock_run):
-        df_out = (
-            "Filesystem  Size  Used Avail Use% Mounted\n"
-            "/dev/sda1  100G  50G  50G  50% /\n"
-        )
+        df_out = "Filesystem  Size  Used Avail Use% Mounted\n/dev/sda1  100G  50G  50G  50% /\n"
         mock_run.return_value = MagicMock(returncode=0, stdout=df_out)
         result = check_disk_usage()
         assert result["ok"] is True
@@ -82,11 +79,15 @@ class TestCheckStuckReviews:
         pr_dir = state_root / "pr42"
         pr_dir.mkdir(parents=True)
         marker = pr_dir / "active_review.json"
-        marker.write_text(json.dumps({
-            "check_run_id": 123,
-            "started_at": time.time() - 9999,
-            "pid": 99999,
-        }))
+        marker.write_text(
+            json.dumps(
+                {
+                    "check_run_id": 123,
+                    "started_at": time.time() - 9999,
+                    "pid": 99999,
+                }
+            )
+        )
 
         with (
             patch("gate.health.state_dir", lambda: state_root),
@@ -107,19 +108,26 @@ class TestCheckOrphanedCheckRuns:
         pr_dir = state_root / "pr42"
         pr_dir.mkdir(parents=True)
         marker = pr_dir / "active_review.json"
-        marker.write_text(json.dumps({
-            "check_run_id": 123,
-            "started_at": time.time() - 300,
-            "pid": 99999999,
-            "head_sha": "abc123",
-        }))
+        marker.write_text(
+            json.dumps(
+                {
+                    "check_run_id": 123,
+                    "started_at": time.time() - 300,
+                    "pid": 99999999,
+                    "head_sha": "abc123",
+                }
+            )
+        )
 
         with (
             patch("gate.health.state_dir", lambda: state_root),
-            patch("gate.health.load_config", return_value={
-                "timeouts": {"hard_timeout_s": 1200},
-                "repo": {"name": "test/repo"},
-            }),
+            patch(
+                "gate.health.load_config",
+                return_value={
+                    "timeouts": {"hard_timeout_s": 1200},
+                    "repo": {"name": "test/repo"},
+                },
+            ),
             patch("gate.health.github.complete_check_run"),
             patch("gate.health.github.approve_pr"),
             patch("gate.health.notify.review_failed"),
@@ -177,22 +185,30 @@ class TestCheckStaleActivity:
 
     def _make_active_marker(self, pr_dir, started_at):
         import json
+
         pr_dir.mkdir(parents=True, exist_ok=True)
-        (pr_dir / "active_review.json").write_text(json.dumps({
-            "check_run_id": 123,
-            "review_id": pr_dir.name,
-            "started_at": started_at,
-            "head_sha": "abc",
-            "pid": 1,
-            "repo": "a/b",
-        }))
+        (pr_dir / "active_review.json").write_text(
+            json.dumps(
+                {
+                    "check_run_id": 123,
+                    "review_id": pr_dir.name,
+                    "started_at": started_at,
+                    "head_sha": "abc",
+                    "pid": 1,
+                    "repo": "a/b",
+                }
+            )
+        )
 
     def test_no_state(self, tmp_path):
         from unittest.mock import patch
 
         from gate.health import check_stale_activity
-        with patch("gate.health.state_dir", lambda: tmp_path / "nonexistent" / "state"), \
-             patch("gate.health.logs_dir", lambda: tmp_path / "nonexistent" / "logs"):
+
+        with (
+            patch("gate.health.state_dir", lambda: tmp_path / "nonexistent" / "state"),
+            patch("gate.health.logs_dir", lambda: tmp_path / "nonexistent" / "logs"),
+        ):
             assert check_stale_activity()["ok"] is True
 
     def test_fresh_review_never_flags(self, tmp_path):
@@ -206,8 +222,10 @@ class TestCheckStaleActivity:
         pr_dir = tmp_path / "state" / "pr1"
         self._make_active_marker(pr_dir, started_at=time.time() - 30)
 
-        with patch("gate.health.state_dir", lambda: tmp_path / "state"), \
-             patch("gate.health.logs_dir", lambda: tmp_path / "logs"):
+        with (
+            patch("gate.health.state_dir", lambda: tmp_path / "state"),
+            patch("gate.health.logs_dir", lambda: tmp_path / "logs"),
+        ):
             result = check_stale_activity()
         assert result["ok"] is True
 
@@ -229,8 +247,10 @@ class TestCheckStaleActivity:
         log.write_text("recent activity\n")
         os.utime(log, (time.time() - 30, time.time() - 30))
 
-        with patch("gate.health.state_dir", lambda: tmp_path / "state"), \
-             patch("gate.health.logs_dir", lambda: tmp_path / "logs"):
+        with (
+            patch("gate.health.state_dir", lambda: tmp_path / "state"),
+            patch("gate.health.logs_dir", lambda: tmp_path / "logs"),
+        ):
             result = check_stale_activity()
         assert result["ok"] is True, result
 
@@ -253,8 +273,10 @@ class TestCheckStaleActivity:
         stale_time = time.time() - 900
         os.utime(log, (stale_time, stale_time))
 
-        with patch("gate.health.state_dir", lambda: tmp_path / "state"), \
-             patch("gate.health.logs_dir", lambda: tmp_path / "logs"):
+        with (
+            patch("gate.health.state_dir", lambda: tmp_path / "state"),
+            patch("gate.health.logs_dir", lambda: tmp_path / "logs"),
+        ):
             result = check_stale_activity()
         assert result["ok"] is False
         assert "stale" in result["detail"]
@@ -277,8 +299,10 @@ class TestCheckStaleActivity:
         stale_time = time.time() - 900
         os.utime(log, (stale_time, stale_time))
 
-        with patch("gate.health.state_dir", lambda: tmp_path / "state"), \
-             patch("gate.health.logs_dir", lambda: tmp_path / "logs"):
+        with (
+            patch("gate.health.state_dir", lambda: tmp_path / "state"),
+            patch("gate.health.logs_dir", lambda: tmp_path / "logs"),
+        ):
             result = check_stale_activity()
         assert result["ok"] is False
         assert "org-repo/pr7" in result["detail"]
@@ -294,8 +318,10 @@ class TestCheckStaleActivity:
         self._make_active_marker(pr_dir, started_at=time.time() - 1800)
         (tmp_path / "logs" / "live").mkdir(parents=True)
 
-        with patch("gate.health.state_dir", lambda: tmp_path / "state"), \
-             patch("gate.health.logs_dir", lambda: tmp_path / "logs"):
+        with (
+            patch("gate.health.state_dir", lambda: tmp_path / "state"),
+            patch("gate.health.logs_dir", lambda: tmp_path / "logs"),
+        ):
             result = check_stale_activity()
         assert result["ok"] is True
 
@@ -309,8 +335,10 @@ class TestCheckStaleActivity:
         (pr_dir / "active_review.json").write_text("{not json")
         (tmp_path / "logs" / "live").mkdir(parents=True)
 
-        with patch("gate.health.state_dir", lambda: tmp_path / "state"), \
-             patch("gate.health.logs_dir", lambda: tmp_path / "logs"):
+        with (
+            patch("gate.health.state_dir", lambda: tmp_path / "state"),
+            patch("gate.health.logs_dir", lambda: tmp_path / "logs"),
+        ):
             result = check_stale_activity()
         assert result["ok"] is True
 
@@ -353,10 +381,13 @@ class TestHealthConfigThreading:
         from unittest.mock import patch
 
         from gate.health import check_disk_usage
+
         # Simulate disk full so the cleanup branch fires
-        with patch("gate.health.subprocess.run") as mr, \
-             patch("gate.health._cleanup_old_worktrees") as cleanup, \
-             patch("gate.health.load_config") as load:
+        with (
+            patch("gate.health.subprocess.run") as mr,
+            patch("gate.health._cleanup_old_worktrees") as cleanup,
+            patch("gate.health.load_config") as load,
+        ):
             mr.return_value.stdout = "Filesystem\n/dev/x  100 90 10 95% /\n"
             mr.return_value.returncode = 0
             cfg = {"repos": [{"worktree_base": "/tmp/x"}]}
@@ -371,9 +402,12 @@ class TestHealthConfigThreading:
         from unittest.mock import patch
 
         from gate.health import check_disk_usage
-        with patch("gate.health.subprocess.run") as mr, \
-             patch("gate.health._cleanup_old_worktrees") as cleanup, \
-             patch("gate.health.load_config", return_value={"fallback": True}) as load:
+
+        with (
+            patch("gate.health.subprocess.run") as mr,
+            patch("gate.health._cleanup_old_worktrees") as cleanup,
+            patch("gate.health.load_config", return_value={"fallback": True}) as load,
+        ):
             mr.return_value.stdout = "Filesystem\n/dev/x  100 90 10 95% /\n"
             mr.return_value.returncode = 0
             check_disk_usage()
@@ -384,9 +418,9 @@ class TestHealthConfigThreading:
         from unittest.mock import patch
 
         from gate.health import _cleanup_old_worktrees
+
         cfg = {"repos": [{"worktree_base": "/tmp/custom"}]}
-        with patch("gate.health.subprocess.run") as mr, \
-             patch("gate.health.load_config") as load:
+        with patch("gate.health.subprocess.run") as mr, patch("gate.health.load_config") as load:
             _cleanup_old_worktrees(cfg)
             load.assert_not_called()
             assert mr.called
@@ -398,6 +432,7 @@ class TestHealthConfigThreading:
         from unittest.mock import patch
 
         from gate.health import run_health_check
+
         call_count = {"n": 0}
 
         def count_load():
@@ -405,21 +440,23 @@ class TestHealthConfigThreading:
             return {"repos": []}
 
         stub = {"ok": True, "detail": "stub"}
-        with patch("gate.health.load_config", side_effect=count_load), \
-             patch("gate.health.check_sleep_disabled", return_value=stub), \
-             patch("gate.health.check_runner", return_value=stub), \
-             patch("gate.health.check_github_api", return_value=stub), \
-             patch("gate.health.check_tailscale", return_value=stub), \
-             patch("gate.health.check_disk_usage", return_value=stub) as disk, \
-             patch("gate.health.check_tmux_session", return_value=stub), \
-             patch("gate.health.check_gate_server", return_value=stub), \
-             patch("gate.health.check_stuck_reviews", return_value=stub), \
-             patch("gate.health.check_stale_activity", return_value=stub), \
-             patch("gate.health.check_orphaned_check_runs", return_value=stub), \
-             patch("gate.health.check_orphaned_tmux_windows", return_value=stub), \
-             patch("gate.health.check_circuit_breaker", return_value=stub), \
-             patch("gate.health.check_quota_freshness", return_value=stub), \
-             patch("gate.health.check_recent_errors", return_value=stub):
+        with (
+            patch("gate.health.load_config", side_effect=count_load),
+            patch("gate.health.check_sleep_disabled", return_value=stub),
+            patch("gate.health.check_runner", return_value=stub),
+            patch("gate.health.check_github_api", return_value=stub),
+            patch("gate.health.check_tailscale", return_value=stub),
+            patch("gate.health.check_disk_usage", return_value=stub) as disk,
+            patch("gate.health.check_tmux_session", return_value=stub),
+            patch("gate.health.check_gate_server", return_value=stub),
+            patch("gate.health.check_stuck_reviews", return_value=stub),
+            patch("gate.health.check_stale_activity", return_value=stub),
+            patch("gate.health.check_orphaned_check_runs", return_value=stub),
+            patch("gate.health.check_orphaned_tmux_windows", return_value=stub),
+            patch("gate.health.check_circuit_breaker", return_value=stub),
+            patch("gate.health.check_quota_freshness", return_value=stub),
+            patch("gate.health.check_recent_errors", return_value=stub),
+        ):
             run_health_check()
         # Exactly one load_config per cycle; disk check got it via kwarg
         assert call_count["n"] == 1

@@ -30,9 +30,7 @@ class TestIsInsideTmux:
 class TestGetTmuxSessions:
     @patch("gate.tmux.subprocess.run")
     def test_returns_sessions(self, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="gate\ndev\n"
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout="gate\ndev\n")
         assert get_tmux_sessions() == ["gate", "dev"]
 
     @patch("gate.tmux.subprocess.run")

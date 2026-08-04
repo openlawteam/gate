@@ -83,17 +83,21 @@ class TestSetupArtifactExclusions:
         subprocess.run(["git", "init"], cwd=str(repo), capture_output=True, check=True)
         subprocess.run(
             ["git", "config", "user.email", "test@test.com"],
-            cwd=str(repo), capture_output=True,
+            cwd=str(repo),
+            capture_output=True,
         )
         subprocess.run(
             ["git", "config", "user.name", "test"],
-            cwd=str(repo), capture_output=True,
+            cwd=str(repo),
+            capture_output=True,
         )
         (repo / "README.md").write_text("hello")
         subprocess.run(["git", "add", "."], cwd=str(repo), capture_output=True, check=True)
         subprocess.run(
             ["git", "commit", "-m", "init"],
-            cwd=str(repo), capture_output=True, check=True,
+            cwd=str(repo),
+            capture_output=True,
+            check=True,
         )
         return repo
 
@@ -101,7 +105,9 @@ class TestSetupArtifactExclusions:
         """Create a worktree from the repo's HEAD."""
         subprocess.run(
             ["git", "worktree", "add", str(wt_path), "HEAD"],
-            cwd=str(repo), capture_output=True, check=True,
+            cwd=str(repo),
+            capture_output=True,
+            check=True,
         )
 
     def test_artifacts_excluded_from_git_status(self, tmp_path):
@@ -119,7 +125,9 @@ class TestSetupArtifactExclusions:
 
         result = subprocess.run(
             ["git", "status", "--porcelain"],
-            cwd=str(wt), capture_output=True, text=True,
+            cwd=str(wt),
+            capture_output=True,
+            text=True,
         )
         # Artifact files must not appear in git status
         assert "diff.txt" not in result.stdout
@@ -142,7 +150,9 @@ class TestSetupArtifactExclusions:
 
         result = subprocess.run(
             ["git", "status", "--porcelain"],
-            cwd=str(wt), capture_output=True, text=True,
+            cwd=str(wt),
+            capture_output=True,
+            text=True,
         )
         # git status --porcelain may show "src/" or "src/app.ts" depending on config
         assert "src" in result.stdout
@@ -160,7 +170,9 @@ class TestSetupArtifactExclusions:
 
         result = subprocess.run(
             ["git", "status", "--porcelain"],
-            cwd=str(repo), capture_output=True, text=True,
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
         )
         assert "diff.txt" in result.stdout
 
@@ -181,7 +193,9 @@ class TestSetupArtifactExclusions:
 
         result = subprocess.run(
             ["git", "diff", "--cached", "--name-only"],
-            cwd=str(wt), capture_output=True, text=True,
+            cwd=str(wt),
+            capture_output=True,
+            text=True,
         )
         # Real file staged, artifacts not
         assert "src/fix.ts" in result.stdout
@@ -202,7 +216,9 @@ class TestSetupArtifactExclusions:
 
         result = subprocess.run(
             ["git", "status", "--porcelain"],
-            cwd=str(wt), capture_output=True, text=True,
+            cwd=str(wt),
+            capture_output=True,
+            text=True,
         )
         assert "implement.codex.log" not in result.stdout
         assert "audit_2.codex.log" not in result.stdout
@@ -221,7 +237,9 @@ class TestSetupArtifactExclusions:
 
         result = subprocess.run(
             ["git", "status", "--porcelain"],
-            cwd=str(wt), capture_output=True, text=True,
+            cwd=str(wt),
+            capture_output=True,
+            text=True,
         )
         assert "gate-directions.md" not in result.stdout
 
@@ -239,7 +257,9 @@ class TestSetupArtifactExclusions:
 
         result = subprocess.run(
             ["git", "status", "--porcelain"],
-            cwd=str(wt), capture_output=True, text=True,
+            cwd=str(wt),
+            capture_output=True,
+            text=True,
         )
         assert "postconditions.json" not in result.stdout
 
@@ -260,6 +280,7 @@ class TestCreateWorktreeDepInstall:
         wt.mkdir()
         (wt / "package.json").write_text("{}")
         from gate.profiles import resolve_profile
+
         profile = resolve_profile({}, wt)
         assert profile["dep_install_cmd"] == "npm ci"
 
@@ -300,9 +321,14 @@ class TestGitFetchRetry:
             patch("gate.workspace.time.sleep"),
         ):
             _git_fetch_with_retry(str(tmp_path), "feat", max_retries=4)
-        assert any(c[:3] == ["git", "fetch"] and "--prune" in c for c in (
-            (call + ["--prune"]) if "--prune" in call else call for call in calls
-        )) or any("--prune" in c for c in calls) or True
+        assert (
+            any(
+                c[:3] == ["git", "fetch"] and "--prune" in c
+                for c in ((call + ["--prune"]) if "--prune" in call else call for call in calls)
+            )
+            or any("--prune" in c for c in calls)
+            or True
+        )
 
 
 class TestInstallDepsWithRetry:

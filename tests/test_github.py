@@ -327,7 +327,8 @@ class TestCompleteCheckRun:
     def test_maps_success_to_success_state(self, mock_gh):
         mock_gh.return_value = ""
         complete_check_run(
-            "owner/repo", "gate-review",
+            "owner/repo",
+            "gate-review",
             conclusion="success",
             output_title="Approved",
             sha="deadbeef",
@@ -342,7 +343,8 @@ class TestCompleteCheckRun:
     def test_maps_cancelled_to_failure_state(self, mock_gh):
         mock_gh.return_value = ""
         complete_check_run(
-            "owner/repo", "gate-review",
+            "owner/repo",
+            "gate-review",
             conclusion="cancelled",
             output_title="Superseded",
             sha="abc1234",
@@ -355,7 +357,8 @@ class TestCompleteCheckRun:
         mock_gh.return_value = ""
         long_title = "x" * 200
         complete_check_run(
-            "owner/repo", "gate-review",
+            "owner/repo",
+            "gate-review",
             conclusion="failure",
             output_title=long_title,
             sha="abc",
@@ -388,9 +391,7 @@ class TestApprovePr:
 
     @patch("gate.github.comment_pr")
     @patch("gate.github._gh")
-    def test_falls_back_to_comment_when_self_approval_blocked(
-        self, mock_gh, mock_comment
-    ):
+    def test_falls_back_to_comment_when_self_approval_blocked(self, mock_gh, mock_comment):
         err = subprocess.CalledProcessError(1, ["gh"])
         err.stderr = "cannot approve your own pull request"
         mock_gh.side_effect = err
@@ -399,9 +400,7 @@ class TestApprovePr:
 
     @patch("gate.github.comment_pr")
     @patch("gate.github._gh")
-    def test_swallows_other_errors_without_commenting(
-        self, mock_gh, mock_comment
-    ):
+    def test_swallows_other_errors_without_commenting(self, mock_gh, mock_comment):
         err = subprocess.CalledProcessError(1, ["gh"])
         err.stderr = "permission denied"
         mock_gh.side_effect = err
@@ -412,17 +411,18 @@ class TestApprovePr:
 
     @patch("gate.github.comment_pr")
     @patch("gate.github._gh")
-    def test_bot_authored_pr_skips_gh_review_and_comments_directly(
-        self, mock_gh, mock_comment
-    ):
+    def test_bot_authored_pr_skips_gh_review_and_comments_directly(self, mock_gh, mock_comment):
         """When ``pr_author == bot_account``, we know GitHub will reject
         the self-review GraphQL call. Skip the wasted round-trip and
         post as a comment directly.
         """
         config = {"repo": {"bot_account": "openlawbot"}}
         approve_pr(
-            "owner/repo", 42, "Looks good",
-            pr_author="openlawbot", config=config,
+            "owner/repo",
+            42,
+            "Looks good",
+            pr_author="openlawbot",
+            config=config,
         )
         mock_gh.assert_not_called()
         mock_comment.assert_called_once_with("owner/repo", 42, "Looks good")
@@ -433,17 +433,18 @@ class TestApprovePr:
         config = {"repo": {"bot_account": "openlawbot"}}
         mock_gh.return_value = ""
         approve_pr(
-            "owner/repo", 42, "Looks good",
-            pr_author="alice", config=config,
+            "owner/repo",
+            42,
+            "Looks good",
+            pr_author="alice",
+            config=config,
         )
         mock_gh.assert_called_once()
         mock_comment.assert_not_called()
 
     @patch("gate.github.comment_pr")
     @patch("gate.github._gh")
-    def test_empty_pr_author_falls_through_to_legacy_path(
-        self, mock_gh, mock_comment
-    ):
+    def test_empty_pr_author_falls_through_to_legacy_path(self, mock_gh, mock_comment):
         """``pr_author=""`` (the default) preserves legacy behavior —
         the helper still attempts ``gh pr review`` and relies on the
         stderr fallback if the bot is actually the author. This is the
@@ -487,9 +488,7 @@ class TestPostReview:
     @patch("gate.github.upsert_sticky_summary")
     @patch("gate.github.comment_pr")
     @patch("gate.github._gh")
-    def test_bot_authored_request_changes_skips_gh_review(
-        self, mock_gh, mock_comment, mock_sticky
-    ):
+    def test_bot_authored_request_changes_skips_gh_review(self, mock_gh, mock_comment, mock_sticky):
         """Bot-authored PR + request_changes: post as a comment up front,
         do not attempt the failing ``gh pr review --request-changes``.
         Escalation still runs (label + reviewer) because humans need to
@@ -505,16 +504,20 @@ class TestPostReview:
         }
 
         post_review(
-            "owner/repo", 42, verdict, None, "deadbeef",
-            config=config, pr_author="openlawbot",
+            "owner/repo",
+            42,
+            verdict,
+            None,
+            "deadbeef",
+            config=config,
+            pr_author="openlawbot",
         )
 
         # No `pr review` calls at all — the bot path bypasses gh entirely
         # for the review step. (Other `_gh` calls — e.g. escalation
         # labels — are also gated, since no reviewers are configured.)
         review_calls = [
-            c for c in mock_gh.call_args_list
-            if c.args and c.args[0][:2] == ["pr", "review"]
+            c for c in mock_gh.call_args_list if c.args and c.args[0][:2] == ["pr", "review"]
         ]
         assert review_calls == []
         mock_comment.assert_called_once()
@@ -523,9 +526,7 @@ class TestPostReview:
     @patch("gate.github.upsert_sticky_summary")
     @patch("gate.github.comment_pr")
     @patch("gate.github._gh")
-    def test_bot_authored_approve_skips_gh_review(
-        self, mock_gh, mock_comment, mock_sticky
-    ):
+    def test_bot_authored_approve_skips_gh_review(self, mock_gh, mock_comment, mock_sticky):
         """Bot-authored PR + approve: same routing — comment, no
         ``gh pr review --approve`` round-trip.
         """
@@ -539,13 +540,17 @@ class TestPostReview:
         }
 
         post_review(
-            "owner/repo", 42, verdict, None, "deadbeef",
-            config=config, pr_author="openlawbot",
+            "owner/repo",
+            42,
+            verdict,
+            None,
+            "deadbeef",
+            config=config,
+            pr_author="openlawbot",
         )
 
         review_calls = [
-            c for c in mock_gh.call_args_list
-            if c.args and c.args[0][:2] == ["pr", "review"]
+            c for c in mock_gh.call_args_list if c.args and c.args[0][:2] == ["pr", "review"]
         ]
         assert review_calls == []
         mock_comment.assert_called_once()
@@ -580,6 +585,7 @@ class TestCommitAndPush:
             if cmd[:4] == ["git", "diff", "--cached", "--quiet"]:
                 return subprocess.CompletedProcess(cmd, 0)
             return subprocess.CompletedProcess(cmd, 0)
+
         mock_run.side_effect = fake_run
         result = commit_and_push(tmp_path, "msg", branch="feat")
         assert result.status == "no_diff"
@@ -598,6 +604,7 @@ class TestCommitAndPush:
                 e.stderr = b"denied: network down\n"
                 raise e
             return subprocess.CompletedProcess(cmd, 0)
+
         mock_run.side_effect = fake_run
         result = commit_and_push(tmp_path, "msg", branch="feat")
         assert result.status == "push_failed"
@@ -614,6 +621,7 @@ class TestCommitAndPush:
             if cmd[:2] == ["git", "rev-parse"]:
                 return subprocess.CompletedProcess(cmd, 0, stdout="abcdef1234\n")
             return subprocess.CompletedProcess(cmd, 0)
+
         mock_run.side_effect = fake_run
         result = commit_and_push(tmp_path, "msg", branch="feat")
         assert result.status == "pushed"

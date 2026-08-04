@@ -85,6 +85,7 @@ def _sanitize_pane_line(line: str, width: int = 72) -> str:
         cleaned = cleaned[:width] + "..."
     return cleaned
 
+
 STATUS_ICONS = {
     "running": "●",
     "completed": "✓",
@@ -586,9 +587,7 @@ class ReviewDetailScreen(ModalScreen):
         elif event.button.id == "btn-cancel":
             review_id = self._review.get("id", "")
             if review_id and self._server:
-                self._server.enqueue(
-                    {"type": "review_cancelled", "review_id": review_id}
-                )
+                self._server.enqueue({"type": "review_cancelled", "review_id": review_id})
                 self.notify(f"Cancel requested for {review_id}")
             self.dismiss()
 
@@ -703,7 +702,8 @@ class CompletedDetailScreen(ModalScreen):
         build_ok = e.get("build_pass", True)
         build_style = "bright_green" if build_ok else "bright_red"
         t.append(
-            "pass\n" if build_ok else "fail\n", style=build_style,
+            "pass\n" if build_ok else "fail\n",
+            style=build_style,
         )
         t.append("Fast-track: ", style="dim")
         t.append(f"{'yes' if e.get('fast_track_eligible') else 'no'}\n")
@@ -1027,7 +1027,13 @@ class GateTUI(App):
 
         reviews_table = self.query_one("#reviews-table", DataTable)
         self._reviews_cols = reviews_table.add_columns(
-            "", "Repo", "PR", "Stage", "Pipeline", "Status", "Elapsed",
+            "",
+            "Repo",
+            "PR",
+            "Stage",
+            "Pipeline",
+            "Status",
+            "Elapsed",
         )
         # Hidden until we have at least one review; _refresh_reviews_table
         # toggles this back on when rows are added.
@@ -1103,7 +1109,11 @@ class GateTUI(App):
                 self._active_empty_row_key = table.add_row(
                     "",
                     Text("No active reviews", style="dim"),
-                    "", "", "", "", "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
                 )
             table.show_cursor = False
             return
@@ -1340,9 +1350,7 @@ class GateTUI(App):
             reviews = list(self.server.reviews) if self.server and self.server.reviews else []
 
         active_reviews: list[tuple[str, int]] = [
-            (r.get("repo", ""), r.get("pr_number"))
-            for r in reviews
-            if r.get("pr_number")
+            (r.get("repo", ""), r.get("pr_number")) for r in reviews if r.get("pr_number")
         ]
 
         desired_keys: set[str] = set()
@@ -1388,16 +1396,10 @@ class GateTUI(App):
                         # the first pane (idx == 0) fall back to the
                         # following separator so we don't leave a stale
                         # leading divider.
-                        if (
-                            idx > 0
-                            and "log-pane-separator"
-                            in (siblings[idx - 1].classes or set())
-                        ):
+                        if idx > 0 and "log-pane-separator" in (siblings[idx - 1].classes or set()):
                             siblings[idx - 1].remove()
-                        elif (
-                            idx + 1 < len(siblings)
-                            and "log-pane-separator"
-                            in (siblings[idx + 1].classes or set())
+                        elif idx + 1 < len(siblings) and "log-pane-separator" in (
+                            siblings[idx + 1].classes or set()
                         ):
                             siblings[idx + 1].remove()
                         container.remove()
@@ -1413,9 +1415,7 @@ class GateTUI(App):
                 label_widget.update("Log [activity]")
                 pane_id = "log-pane-activity"
                 widget = RichLog(id=pane_id, max_lines=50, wrap=True, classes="log-pane-widget")
-                panes_container.mount(
-                    Vertical(widget, classes="log-pane-container")
-                )
+                panes_container.mount(Vertical(widget, classes="log-pane-container"))
                 self._log_panes["activity"] = {"widget_id": pane_id, "file_pos": 0}
             elif "activity" not in desired_keys:
                 keys_to_add = desired_keys - set(self._log_panes.keys())
@@ -1433,15 +1433,11 @@ class GateTUI(App):
                     title_text = f"{short}/#{pr}" if short else f"PR #{pr}"
                     title = Static(title_text, classes="log-pane-title")
                     widget = RichLog(id=pane_id, max_lines=50, wrap=True, classes="log-pane-widget")
-                    panes_container.mount(
-                        Vertical(title, widget, classes="log-pane-container")
-                    )
+                    panes_container.mount(Vertical(title, widget, classes="log-pane-container"))
                     self._log_panes[key] = {"widget_id": pane_id, "file_pos": 0}
                 has_multi_repos = len(set(r for r, _ in active_reviews if r)) > 1
                 if has_multi_repos:
-                    pr_list = " ".join(
-                        f"{_short_repo(r)}/#{p}" for r, p in active_reviews
-                    )
+                    pr_list = " ".join(f"{_short_repo(r)}/#{p}" for r, p in active_reviews)
                 else:
                     pr_list = " ".join(f"#{p}" for _, p in active_reviews)
                 label_widget.update(f"Log [following {pr_list}]")
@@ -1558,6 +1554,7 @@ class GateTUI(App):
         table = self.query_one("#reviews-table", DataTable)
         try:
             from textual.widgets._data_table import Coordinate
+
             row_key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key
         except Exception:
             self.notify("Cannot identify review", severity="warning")
@@ -1568,9 +1565,7 @@ class GateTUI(App):
                 review_id = rid
                 break
         if review_id:
-            self.server.enqueue(
-                {"type": "review_cancelled", "review_id": review_id}
-            )
+            self.server.enqueue({"type": "review_cancelled", "review_id": review_id})
             self.notify(f"Cancel requested for {review_id}")
         else:
             self.notify("Cannot identify review", severity="warning")
@@ -1590,6 +1585,7 @@ class GateTUI(App):
         table = self.query_one("#reviews-table", DataTable)
         try:
             from textual.widgets._data_table import Coordinate
+
             row_key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key
         except Exception:
             return

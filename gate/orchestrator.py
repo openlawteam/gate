@@ -204,8 +204,10 @@ class ReviewOrchestrator:
         self.start_time = time.monotonic()
         review_id = self._review_id()
         write_live_log(
-            self.pr_number, f"Review started sha={self.head_sha[:8]}",
-            "orchestrator", repo=self.repo,
+            self.pr_number,
+            f"Review started sha={self.head_sha[:8]}",
+            "orchestrator",
+            repo=self.repo,
         )
 
         self._emit(
@@ -252,12 +254,15 @@ class ReviewOrchestrator:
             if "gate-skip" in self.labels or "gate-emergency-bypass" in self.labels:
                 action = "skip" if "gate-skip" in self.labels else "bypass"
                 github.approve_pr(
-                    self.repo, self.pr_number,
+                    self.repo,
+                    self.pr_number,
                     f"**Gate: {action}** — review skipped by label.",
-                    pr_author=self.pr_author, config=self.config,
+                    pr_author=self.pr_author,
+                    config=self.config,
                 )
                 github.complete_check_run(
-                    self.repo, self.check_run_id,
+                    self.repo,
+                    self.check_run_id,
                     conclusion="neutral",
                     output_title=f"Gate: {action}",
                     output_summary="Review skipped by label.",
@@ -273,13 +278,16 @@ class ReviewOrchestrator:
             # === GATE 2: Circuit breaker ===
             if self._circuit_breaker_tripped():
                 github.approve_pr(
-                    self.repo, self.pr_number,
+                    self.repo,
+                    self.pr_number,
                     "**Gate (circuit breaker)** — last 3 reviews were errors. "
                     "Auto-approving. Investigate the gate machine.",
-                    pr_author=self.pr_author, config=self.config,
+                    pr_author=self.pr_author,
+                    config=self.config,
                 )
                 github.complete_check_run(
-                    self.repo, self.check_run_id,
+                    self.repo,
+                    self.check_run_id,
                     conclusion="neutral",
                     output_title="Gate: circuit breaker",
                     output_summary="Last 3 reviews were errors. Auto-approved.",
@@ -322,17 +330,17 @@ class ReviewOrchestrator:
                 # PR is effectively gone. Skip quietly; no fail-open
                 # approval spam on a branch that no longer exists
                 # (Group 3A).
-                logger.info(
-                    f"PR #{self.pr_number}: branch {self.branch!r} gone, skipping ({e})"
-                )
+                logger.info(f"PR #{self.pr_number}: branch {self.branch!r} gone, skipping ({e})")
                 write_live_log(
                     self.pr_number,
                     f"Branch gone, skipping: {e}",
-                    "orchestrator", repo=self.repo,
+                    "orchestrator",
+                    repo=self.repo,
                 )
                 if self.check_run_id:
                     github.complete_check_run(
-                        self.repo, self.check_run_id,
+                        self.repo,
+                        self.check_run_id,
                         conclusion="neutral",
                         output_title="Gate: branch not found",
                         output_summary="PR branch no longer exists on origin.",
@@ -343,9 +351,7 @@ class ReviewOrchestrator:
             except WorkspaceVanishedError as e:
                 # Superseded before workspace finished setting up
                 # (Group 3B). Treat as a quiet cancel.
-                logger.info(
-                    f"PR #{self.pr_number}: workspace vanished during setup: {e}"
-                )
+                logger.info(f"PR #{self.pr_number}: workspace vanished during setup: {e}")
                 self._cancelled.set()
                 self._emit("review_completed", review_id=review_id, decision="cancelled")
                 return
@@ -372,17 +378,21 @@ class ReviewOrchestrator:
             quota = quota_mod.check_quota()
             if not quota["quota_ok"]:
                 github.comment_pr(
-                    self.repo, self.pr_number,
+                    self.repo,
+                    self.pr_number,
                     f"**Gate: Quota low** — {quota.get('reason', '')}. "
                     "Review deferred. PR is not blocked.",
                 )
                 github.approve_pr(
-                    self.repo, self.pr_number,
+                    self.repo,
+                    self.pr_number,
                     "**Gate (quota pause)** — auto-approved, quota low.",
-                    pr_author=self.pr_author, config=self.config,
+                    pr_author=self.pr_author,
+                    config=self.config,
                 )
                 github.complete_check_run(
-                    self.repo, self.check_run_id,
+                    self.repo,
+                    self.check_run_id,
                     conclusion="neutral",
                     output_title="Gate: quota pause",
                     output_summary=f"Quota at {quota.get('five_hour_pct', '?')}%. Deferred.",
@@ -395,16 +405,20 @@ class ReviewOrchestrator:
             max_cycles = self.config.get("limits", {}).get("max_review_cycles", 5)
             if prior.get("review_count", 0) >= max_cycles:
                 github.comment_pr(
-                    self.repo, self.pr_number,
+                    self.repo,
+                    self.pr_number,
                     f"**Gate: Review cycle limit reached** — {max_cycles} reviews on this PR.",
                 )
                 github.approve_pr(
-                    self.repo, self.pr_number,
+                    self.repo,
+                    self.pr_number,
                     "**Gate (cycle limit)** — auto-approved after max review cycles.",
-                    pr_author=self.pr_author, config=self.config,
+                    pr_author=self.pr_author,
+                    config=self.config,
                 )
                 github.complete_check_run(
-                    self.repo, self.check_run_id,
+                    self.repo,
+                    self.check_run_id,
                     conclusion="neutral",
                     output_title="Gate: cycle limit",
                     output_summary=f"Reached {max_cycles} review cycles.",
@@ -423,8 +437,10 @@ class ReviewOrchestrator:
             else:
                 self._update_check("Stage 1: Triage (Sonnet)...")
                 self._emit(
-                    "review_stage_update", review_id=review_id,
-                    stage="triage", status="running",
+                    "review_stage_update",
+                    review_id=review_id,
+                    stage="triage",
+                    status="running",
                 )
                 write_live_log(self.pr_number, "Triage starting", "stage", repo=self.repo)
                 triage = self._run_structured_stage("triage")
@@ -448,25 +464,16 @@ class ReviewOrchestrator:
                 self._emit("review_completed", review_id=review_id, decision="skip")
                 return
             try:
-                (self.workspace / "build.json").write_text(
-                    json.dumps(build_result, indent=2)
-                )
+                (self.workspace / "build.json").write_text(json.dumps(build_result, indent=2))
             except (FileNotFoundError, OSError) as e:
                 if self._cancelled.is_set() or not self.workspace.exists():
-                    logger.info(
-                        f"build.json write failed after cancel/teardown: {e}"
-                    )
-                    self._emit(
-                        "review_completed", review_id=review_id, decision="skip"
-                    )
+                    logger.info(f"build.json write failed after cancel/teardown: {e}")
+                    self._emit("review_completed", review_id=review_id, decision="skip")
                     return
                 raise
 
             # === Fast-track check ===
-            fast_track = (
-                triage.data.get("fast_track_eligible")
-                and build_result.get("overall_pass")
-            )
+            fast_track = triage.data.get("fast_track_eligible") and build_result.get("overall_pass")
 
             if not fast_track:
                 # === STAGE 2.5: POSTCONDITIONS (structured — inline) ===
@@ -487,21 +494,22 @@ class ReviewOrchestrator:
                 else:
                     repo_cfg = self.config.get("repo", {})
                     risk = triage.data.get("risk_level")
-                    if (
-                        repo_cfg.get("enable_postconditions", True)
-                        and risk in ("high", "critical")
-                    ):
+                    if repo_cfg.get("enable_postconditions", True) and risk in ("high", "critical"):
                         if self._cancelled.is_set():
                             self._emit("review_completed", review_id=review_id, decision="skip")
                             return
                         self._update_check("Stage 2.5: Postconditions (Sonnet)...")
                         self._emit(
-                            "review_stage_update", review_id=review_id,
-                            stage="postconditions", status="running",
+                            "review_stage_update",
+                            review_id=review_id,
+                            stage="postconditions",
+                            status="running",
                         )
                         write_live_log(
-                            self.pr_number, "Postconditions starting",
-                            "stage", repo=self.repo,
+                            self.pr_number,
+                            "Postconditions starting",
+                            "stage",
+                            repo=self.repo,
                         )
                         pc_result = self._run_structured_stage("postconditions")
                         self._save_stage_result("postconditions", pc_result)
@@ -513,8 +521,10 @@ class ReviewOrchestrator:
                         return
                     self._update_check("Stage 3: Architecture review (Sonnet)...")
                     self._emit(
-                        "review_stage_update", review_id=review_id,
-                        stage="architecture", status="running",
+                        "review_stage_update",
+                        review_id=review_id,
+                        stage="architecture",
+                        status="running",
                     )
                     write_live_log(self.pr_number, "Architecture starting", "stage", repo=self.repo)
                     arch_result = self._run_agent_stage("architecture")
@@ -527,8 +537,10 @@ class ReviewOrchestrator:
                         return
                     self._update_check("Stage 4: Security review (Opus)...")
                     self._emit(
-                        "review_stage_update", review_id=review_id,
-                        stage="security", status="running",
+                        "review_stage_update",
+                        review_id=review_id,
+                        stage="security",
+                        status="running",
                     )
                     write_live_log(self.pr_number, "Security starting", "stage", repo=self.repo)
                     sec_result = self._run_agent_stage("security")
@@ -540,8 +552,10 @@ class ReviewOrchestrator:
                     return
                 self._update_check("Stage 5: Logic review (Opus)...")
                 self._emit(
-                    "review_stage_update", review_id=review_id,
-                    stage="logic", status="running",
+                    "review_stage_update",
+                    review_id=review_id,
+                    stage="logic",
+                    status="running",
                 )
                 write_live_log(self.pr_number, "Logic starting", "stage", repo=self.repo)
                 logic_result = self._run_agent_stage("logic")
@@ -553,8 +567,10 @@ class ReviewOrchestrator:
             # === STAGE 6: VERDICT (structured — inline) ===
             self._update_check("Stage 6: Rendering verdict (Sonnet)...")
             self._emit(
-                "review_stage_update", review_id=review_id,
-                stage="verdict", status="running",
+                "review_stage_update",
+                review_id=review_id,
+                stage="verdict",
+                status="running",
             )
             write_live_log(self.pr_number, "Verdict starting", "stage", repo=self.repo)
             verdict = self._run_structured_stage("verdict")
@@ -568,16 +584,16 @@ class ReviewOrchestrator:
             # (file, line, source_stage, message) hash scheme — critical
             # for cross-review matching in post-fix re-reviews.
             from gate.extract import _dedupe_findings
+
             if isinstance(verdict.data.get("findings"), list):
-                verdict.data["findings"] = _dedupe_findings(
-                    verdict.data["findings"]
-                )
+                verdict.data["findings"] = _dedupe_findings(verdict.data["findings"])
 
             # Stamp stable finding_ids on every finding BEFORE we persist
             # verdict.json. Without this, the ROI diff in post-fix
             # re-reviews can't match prior→current findings
             # (Group 2D, audit-revealed).
             from gate.finding_id import compute_finding_id as _cfi
+
             for _f in verdict.data.get("findings") or []:
                 if isinstance(_f, dict) and not _f.get("finding_id"):
                     _f["finding_id"] = _cfi(_f)
@@ -608,8 +624,13 @@ class ReviewOrchestrator:
 
             # === POST REVIEW ===
             github.post_review(
-                self.repo, self.pr_number, verdict.data, build_result, self.head_sha,
-                config=self.config, pr_author=self.pr_author,
+                self.repo,
+                self.pr_number,
+                verdict.data,
+                build_result,
+                self.head_sha,
+                config=self.config,
+                pr_author=self.pr_author,
             )
 
             # Complete check run
@@ -620,7 +641,9 @@ class ReviewOrchestrator:
                 conclusion = "action_required"
             findings_count = verdict.data.get("stats", {}).get("total_findings", 0)
             github.complete_check_run(
-                self.repo, self.check_run_id, conclusion,
+                self.repo,
+                self.check_run_id,
+                conclusion,
                 output_title=f"Gate Review: {decision} ({findings_count} findings)",
                 output_summary=verdict.data.get("summary", ""),
                 sha=self.head_sha,
@@ -634,11 +657,11 @@ class ReviewOrchestrator:
             roi_kwargs: dict = {}
             if prior and prior.get("has_prior"):
                 prior_ids = {
-                    f["finding_id"] for f in prior.get("prior_findings", [])
-                    if f.get("finding_id")
+                    f["finding_id"] for f in prior.get("prior_findings", []) if f.get("finding_id")
                 }
                 current_ids = {
-                    f["finding_id"] for f in verdict.data.get("findings", []) or []
+                    f["finding_id"]
+                    for f in verdict.data.get("findings", []) or []
                     if f.get("finding_id")
                 }
                 roi_kwargs = {
@@ -650,20 +673,31 @@ class ReviewOrchestrator:
                 }
 
             log_review(
-                self.pr_number, verdict.data, build_result,
-                elapsed, quota, triage=triage.data, repo=self.repo,
+                self.pr_number,
+                verdict.data,
+                build_result,
+                elapsed,
+                quota,
+                triage=triage.data,
+                repo=self.repo,
                 **roi_kwargs,
             )
             notify.review_complete(
-                self.pr_number, verdict.data, self.repo,
+                self.pr_number,
+                verdict.data,
+                self.repo,
                 author=self.pr_author or None,
             )
 
             # === PERSIST STATE ===
             clone_path = self._clone_path()
             state.persist_review_state(
-                self.pr_number, self.head_sha, self.workspace,
-                decision, clone_path=clone_path, repo=self.repo,
+                self.pr_number,
+                self.head_sha,
+                self.workspace,
+                decision,
+                clone_path=clone_path,
+                repo=self.repo,
                 is_post_fix_rereview=self.is_post_fix_rereview,
             )
 
@@ -703,20 +737,28 @@ class ReviewOrchestrator:
                 self._refresh_force_safest_flag()
 
                 self._emit(
-                    "review_stage_update", review_id=review_id,
-                    stage="fix-bootstrap", status="fixing",
+                    "review_stage_update",
+                    review_id=review_id,
+                    stage="fix-bootstrap",
+                    status="fixing",
                 )
                 fix_check_id = github.create_check_run(
-                    self.repo, self.head_sha,
-                    name="Gate Auto-Fix", status="in_progress",
+                    self.repo,
+                    self.head_sha,
+                    name="Gate Auto-Fix",
+                    status="in_progress",
                 )
                 try:
                     from gate.fixer import FixPipeline
                     from gate.logger import log_fix_result
 
                     fixer = FixPipeline(
-                        self.pr_number, self.repo, self.workspace,
-                        verdict.data, build_result, self.config,
+                        self.pr_number,
+                        self.repo,
+                        self.workspace,
+                        verdict.data,
+                        build_result,
+                        self.config,
                         check_run_id=fix_check_id,
                         cancelled=self._cancelled,
                         socket_path=self.socket_path,
@@ -725,8 +767,10 @@ class ReviewOrchestrator:
                     fixer.branch = self.branch
 
                     self._emit(
-                        "review_stage_update", review_id=review_id,
-                        stage="fix-session", status="fixing",
+                        "review_stage_update",
+                        review_id=review_id,
+                        stage="fix-session",
+                        status="fixing",
                     )
                     fix_start = time.monotonic()
                     fix_result = fixer.run()
@@ -740,9 +784,7 @@ class ReviewOrchestrator:
                     # Report as a success ("no mechanical changes needed")
                     # to GitHub but log as ``no_op`` so reviews.jsonl
                     # consumers can tell the difference (audit A10).
-                    is_no_op = bool(
-                        fix_result.success and not fix_result.pushed
-                    )
+                    is_no_op = bool(fix_result.success and not fix_result.pushed)
                     # Distinguish partial success ("pushed but some findings
                     # require human action") from clean success so humans can
                     # see it on the PR without opening the comment. The legacy
@@ -780,58 +822,56 @@ class ReviewOrchestrator:
                         check_title = "Gate Auto-Fix: all findings resolved"
 
                     self._emit(
-                        "review_stage_update", review_id=review_id,
-                        stage="fix-commit", status="fixing",
+                        "review_stage_update",
+                        review_id=review_id,
+                        stage="fix-commit",
+                        status="fixing",
                     )
                     github.complete_check_run(
-                        self.repo, fix_check_id, fix_conclusion,
+                        self.repo,
+                        fix_check_id,
+                        fix_conclusion,
                         output_title=check_title,
                         output_summary=fix_result.summary,
                         sha=self.head_sha,
                     )
                     self._emit(
                         "review_completed",
-                        review_id=review_id, decision=decision,
+                        review_id=review_id,
+                        decision=decision,
                     )
                     fix_completed = True
                     log_fix_result(
-                        self.pr_number, fix_result.success,
-                        fix_result.summary, decision, repo=self.repo,
+                        self.pr_number,
+                        fix_result.success,
+                        fix_result.summary,
+                        decision,
+                        repo=self.repo,
                         fix_elapsed_seconds=fix_elapsed,
                         status=(
-                            "skipped" if fix_result.skipped
-                            else "no_op" if is_no_op
+                            "skipped"
+                            if fix_result.skipped
+                            else "no_op"
+                            if is_no_op
                             else ("succeeded" if fix_result.success else "failed")
                         ),
                         pipeline_mode=fix_result.pipeline_mode or None,
                         sub_scope_total=(
-                            fix_result.sub_scope_total
-                            if fix_result.sub_scope_total
-                            else None
+                            fix_result.sub_scope_total if fix_result.sub_scope_total else None
                         ),
                         sub_scope_committed=(
-                            fix_result.sub_scope_committed
-                            if fix_result.sub_scope_total
-                            else None
+                            fix_result.sub_scope_committed if fix_result.sub_scope_total else None
                         ),
                         sub_scope_reverted=(
-                            fix_result.sub_scope_reverted
-                            if fix_result.sub_scope_total
-                            else None
+                            fix_result.sub_scope_reverted if fix_result.sub_scope_total else None
                         ),
                         sub_scope_empty=(
-                            fix_result.sub_scope_empty
-                            if fix_result.sub_scope_total
-                            else None
+                            fix_result.sub_scope_empty if fix_result.sub_scope_total else None
                         ),
                         wall_clock_seconds=(
-                            fix_result.wall_clock_seconds
-                            if fix_result.wall_clock_seconds
-                            else None
+                            fix_result.wall_clock_seconds if fix_result.wall_clock_seconds else None
                         ),
-                        runaway_guard_hit=(
-                            True if fix_result.runaway_guard_hit else None
-                        ),
+                        runaway_guard_hit=(True if fix_result.runaway_guard_hit else None),
                         fixed_count=(
                             fix_result.fixed_count
                             if fix_result.fixed_count or fix_result.not_fixed_count
@@ -842,19 +882,17 @@ class ReviewOrchestrator:
                             if fix_result.fixed_count or fix_result.not_fixed_count
                             else None
                         ),
-                        commit_message_source=(
-                            fix_result.commit_message_source or None
-                        ),
+                        commit_message_source=(fix_result.commit_message_source or None),
                         commit_message_reject_reason=(
                             fix_result.commit_message_reject_reason or None
                         ),
                     )
                 except Exception as fix_err:
-                    logger.exception(
-                        f"Fix pipeline crashed for PR #{self.pr_number}"
-                    )
+                    logger.exception(f"Fix pipeline crashed for PR #{self.pr_number}")
                     github.complete_check_run(
-                        self.repo, fix_check_id, "failure",
+                        self.repo,
+                        fix_check_id,
+                        "failure",
                         output_title="Gate Auto-Fix: crashed",
                         output_summary=str(fix_err),
                         sha=self.head_sha,
@@ -870,7 +908,8 @@ class ReviewOrchestrator:
             if not fix_completed:
                 self._emit(
                     "review_completed",
-                    review_id=review_id, decision=decision,
+                    review_id=review_id,
+                    decision=decision,
                 )
 
         except Exception as e:
@@ -880,29 +919,32 @@ class ReviewOrchestrator:
             # clobber the ``cancelled`` marker the cancel() wrote
             # (Group 2C).
             if self._cancelled.is_set():
-                logger.info(
-                    f"Review cancelled mid-stage for PR #{self.pr_number}: {e}"
-                )
+                logger.info(f"Review cancelled mid-stage for PR #{self.pr_number}: {e}")
                 self._emit("review_completed", review_id=review_id, decision="cancelled")
             else:
                 # Fail-open
                 self._emit("review_completed", review_id=review_id, decision="error")
                 logger.exception(f"Review failed for PR #{self.pr_number}")
                 github.approve_pr(
-                    self.repo, self.pr_number,
+                    self.repo,
+                    self.pr_number,
                     f"**Gate (error)** — review failed: {e}. Auto-approving.",
-                    pr_author=self.pr_author, config=self.config,
+                    pr_author=self.pr_author,
+                    config=self.config,
                 )
                 if self.check_run_id:
                     github.complete_check_run(
-                        self.repo, self.check_run_id,
+                        self.repo,
+                        self.check_run_id,
                         conclusion="cancelled",
                         output_title="Gate Review: error",
                         output_summary=f"Review crashed: {e}. PR auto-approved (fail-open).",
                         sha=self.head_sha,
                     )
                 notify.review_failed(
-                    self.pr_number, str(e), repo=self.repo,
+                    self.pr_number,
+                    str(e),
+                    repo=self.repo,
                     author=self.pr_author or None,
                 )
                 write_live_log(self.pr_number, f"FAILED: {e}", "orchestrator", repo=self.repo)
@@ -1024,6 +1066,7 @@ class ReviewOrchestrator:
           per-repo in ``gate.toml`` (Group 1D).
         """
         from gate.config import get_repo_bool
+
         if "gate-no-fix" in self.labels:
             return False
         decision = verdict.get("decision")
@@ -1037,8 +1080,10 @@ class ReviewOrchestrator:
         """Update check run with stage progress."""
         if self.check_run_id:
             github.update_check_run(
-                self.repo, self.check_run_id,
-                status="in_progress", output_title=title,
+                self.repo,
+                self.check_run_id,
+                status="in_progress",
+                output_title=title,
             )
 
     def _save_stage_result(self, stage_name: str, result: StageResult) -> None:
@@ -1117,8 +1162,7 @@ class ReviewOrchestrator:
             return
         try:
             count_path = (
-                state.get_pr_state_dir(self.pr_number, self.repo)
-                / "disambig_stale_count.txt"
+                state.get_pr_state_dir(self.pr_number, self.repo) / "disambig_stale_count.txt"
             )
             if not count_path.exists():
                 return
@@ -1126,11 +1170,7 @@ class ReviewOrchestrator:
                 count = int(count_path.read_text().strip() or "0")
             except ValueError:
                 return
-            threshold = int(
-                self.config.get("repo", {}).get(
-                    "max_disambig_stale_retries", 3
-                )
-            )
+            threshold = int(self.config.get("repo", {}).get("max_disambig_stale_retries", 3))
             if count < threshold:
                 return
             meta_path = self.workspace / "pr-metadata.json"
@@ -1144,10 +1184,7 @@ class ReviewOrchestrator:
                 f"after {count} fix-reruns without author response"
             )
         except Exception as e:  # noqa: BLE001
-            logger.info(
-                f"PR #{self.pr_number}: could not set "
-                f"force_safest_interpretation: {e}"
-            )
+            logger.info(f"PR #{self.pr_number}: could not set force_safest_interpretation: {e}")
 
     def _load_cached_postconditions(self) -> StageResult | None:
         """Load postconditions.json from prior review state (for fix reruns).
@@ -1163,9 +1200,7 @@ class ReviewOrchestrator:
         try:
             data = json.loads(pc_path.read_text())
             if self.workspace:
-                (self.workspace / "postconditions.json").write_text(
-                    json.dumps(data, indent=2)
-                )
+                (self.workspace / "postconditions.json").write_text(json.dumps(data, indent=2))
             return StageResult(stage="postconditions", success=True, data=data)
         except (OSError, json.JSONDecodeError):
             return None
@@ -1193,7 +1228,7 @@ class ReviewOrchestrator:
 
         if not external_checks.external_checks_enabled(self.config):
             return False
-        repo_config = (self.config.get("repo") or {})
+        repo_config = self.config.get("repo") or {}
         required = external_checks.required_from_config(repo_config)
         if not required:
             return False
@@ -1222,8 +1257,11 @@ class ReviewOrchestrator:
             )
             try:
                 classification = external_checks.wait_for_pending(
-                    self.head_sha, self.repo, required,
-                    self._cancelled, timeout_s=wait_s,
+                    self.head_sha,
+                    self.repo,
+                    required,
+                    self._cancelled,
+                    timeout_s=wait_s,
                 )
             except Exception as e:  # noqa: BLE001
                 logger.warning(
@@ -1236,56 +1274,61 @@ class ReviewOrchestrator:
 
         new_findings: list[dict] = []
         for failing in classification.blocking_failures:
-            new_findings.append({
-                "severity": "error",
-                "file": "<external>",
-                "message": f"External blocking check failed: {failing.name}",
-                "category": "external_check",
-                "rule_source": f"external:{failing.name}",
-                "suggestion": (
-                    f"Review the failing check and fix before approval: "
-                    f"{failing.url}" if failing.url else
-                    f"Review the failing check and fix before approval: {failing.name}"
-                ),
-                "source_stage": "external_checks",
-            })
+            new_findings.append(
+                {
+                    "severity": "error",
+                    "file": "<external>",
+                    "message": f"External blocking check failed: {failing.name}",
+                    "category": "external_check",
+                    "rule_source": f"external:{failing.name}",
+                    "suggestion": (
+                        f"Review the failing check and fix before approval: {failing.url}"
+                        if failing.url
+                        else f"Review the failing check and fix before approval: {failing.name}"
+                    ),
+                    "source_stage": "external_checks",
+                }
+            )
         for pending in classification.blocking_pending:
-            new_findings.append({
-                "severity": "error",
-                "file": "<external>",
-                "message": (
-                    f"External blocking check still pending after "
-                    f"{wait_s}s: {pending.name}"
-                ),
-                "category": "external_check",
-                "rule_source": f"external:{pending.name}",
-                "suggestion": (
-                    f"Check took longer than external_check_wait_seconds; "
-                    f"fail-closed. See {pending.url}" if pending.url else
-                    "Check took longer than external_check_wait_seconds; "
-                    "fail-closed."
-                ),
-                "source_stage": "external_checks",
-            })
+            new_findings.append(
+                {
+                    "severity": "error",
+                    "file": "<external>",
+                    "message": (
+                        f"External blocking check still pending after {wait_s}s: {pending.name}"
+                    ),
+                    "category": "external_check",
+                    "rule_source": f"external:{pending.name}",
+                    "suggestion": (
+                        f"Check took longer than external_check_wait_seconds; "
+                        f"fail-closed. See {pending.url}"
+                        if pending.url
+                        else "Check took longer than external_check_wait_seconds; fail-closed."
+                    ),
+                    "source_stage": "external_checks",
+                }
+            )
         for missing in classification.unknown:
             # Only blocking-policy missing checks translate to findings.
             if missing.policy != "blocking":
                 continue
-            new_findings.append({
-                "severity": "error",
-                "file": "<external>",
-                "message": (
-                    f"Required external check never reported: {missing.name} "
-                    f"(wait exhausted after {wait_s}s)"
-                ),
-                "category": "external_check",
-                "rule_source": f"external:{missing.name}",
-                "suggestion": (
-                    "The configured CI provider did not report this check "
-                    "within the wait window; fail-closed."
-                ),
-                "source_stage": "external_checks",
-            })
+            new_findings.append(
+                {
+                    "severity": "error",
+                    "file": "<external>",
+                    "message": (
+                        f"Required external check never reported: {missing.name} "
+                        f"(wait exhausted after {wait_s}s)"
+                    ),
+                    "category": "external_check",
+                    "rule_source": f"external:{missing.name}",
+                    "suggestion": (
+                        "The configured CI provider did not report this check "
+                        "within the wait window; fail-closed."
+                    ),
+                    "source_stage": "external_checks",
+                }
+            )
 
         if not new_findings:
             return False
@@ -1325,12 +1368,13 @@ class ReviewOrchestrator:
 
         if not external_checks.external_checks_enabled(self.config):
             return
-        repo_config = (self.config.get("repo") or {})
+        repo_config = self.config.get("repo") or {}
         required = external_checks.required_from_config(repo_config)
         if not required:
             return
         recheck_minutes = external_checks.get_recheck_minutes(
-            self.config, repo_config,
+            self.config,
+            repo_config,
         )
         if recheck_minutes <= 0:
             return
@@ -1400,22 +1444,23 @@ class ReviewOrchestrator:
                     required,
                 )
             except Exception as e:  # noqa: BLE001
-                logger.warning(
-                    f"PR #{self.pr_number}: post-hoc poll failed "
-                    f"({e}); continuing."
-                )
+                logger.warning(f"PR #{self.pr_number}: post-hoc poll failed ({e}); continuing.")
                 continue
 
-            new_failures = (
-                [cs for cs in classification.blocking_failures
-                 if cs.name not in baseline_failures and cs.name not in reported]
-                + [cs for cs in classification.advisory_failures
-                   if cs.name not in baseline_failures and cs.name not in reported]
-            )
+            new_failures = [
+                cs
+                for cs in classification.blocking_failures
+                if cs.name not in baseline_failures and cs.name not in reported
+            ] + [
+                cs
+                for cs in classification.advisory_failures
+                if cs.name not in baseline_failures and cs.name not in reported
+            ]
             for failure in new_failures:
                 reported.add(failure.name)
                 self._record_contradiction(
-                    failure, verdict_snapshot,
+                    failure,
+                    verdict_snapshot,
                     seconds_to_flip=int(
                         recheck_minutes * 60 - max(0.0, deadline - time.monotonic())
                     ),
@@ -1430,27 +1475,27 @@ class ReviewOrchestrator:
                         ),
                     )
                 except Exception as e:  # noqa: BLE001
-                    logger.warning(
-                        f"PR #{self.pr_number}: ntfy for contradiction failed "
-                        f"({e})"
-                    )
+                    logger.warning(f"PR #{self.pr_number}: ntfy for contradiction failed ({e})")
                 try:
                     alerts_path = logs_dir() / "alerts.jsonl"
                     alerts_path.parent.mkdir(parents=True, exist_ok=True)
                     with alerts_path.open("a", encoding="utf-8") as fp:
-                        fp.write(json.dumps({
-                            "kind": "external_check_contradiction",
-                            "pr": self.pr_number,
-                            "repo": self.repo,
-                            "sha": self.head_sha,
-                            "check": failure.name,
-                            "conclusion": failure.conclusion,
-                            "at": time.time(),
-                        }) + "\n")
+                        fp.write(
+                            json.dumps(
+                                {
+                                    "kind": "external_check_contradiction",
+                                    "pr": self.pr_number,
+                                    "repo": self.repo,
+                                    "sha": self.head_sha,
+                                    "check": failure.name,
+                                    "conclusion": failure.conclusion,
+                                    "at": time.time(),
+                                }
+                            )
+                            + "\n"
+                        )
                 except OSError as e:
-                    logger.warning(
-                        f"PR #{self.pr_number}: alerts.jsonl append failed ({e})"
-                    )
+                    logger.warning(f"PR #{self.pr_number}: alerts.jsonl append failed ({e})")
 
         if reported:
             logger.info(
@@ -1492,9 +1537,7 @@ class ReviewOrchestrator:
             }
             atomic_write(fname, json.dumps(payload, indent=2))
         except OSError as e:
-            logger.warning(
-                f"PR #{self.pr_number}: contradiction record write failed ({e})"
-            )
+            logger.warning(f"PR #{self.pr_number}: contradiction record write failed ({e})")
 
     def _cleanup_underscore_gate_tests(self) -> None:
         """Phase 5: narrower cleanup for ``__gate_test_*`` /
@@ -1574,8 +1617,7 @@ class ReviewOrchestrator:
                     continue
                 rel_name = Path(rel).name
                 if not (
-                    rel_name.startswith("__gate_test_")
-                    or rel_name.startswith("__gate_fix_test_")
+                    rel_name.startswith("__gate_test_") or rel_name.startswith("__gate_fix_test_")
                 ):
                     logger.info(
                         f"PR #{self.pr_number}: spec test {rel!r} does not "
@@ -1589,7 +1631,8 @@ class ReviewOrchestrator:
                     continue
                 if not src.exists() or not resolved_src.is_relative_to(workspace_root):
                     matches = [
-                        m for m in self.workspace.glob(f"**/{rel_name}")
+                        m
+                        for m in self.workspace.glob(f"**/{rel_name}")
                         if m.resolve().is_relative_to(workspace_root)
                     ]
                     if matches:
@@ -1607,19 +1650,14 @@ class ReviewOrchestrator:
                     shutil.copy2(src, dst)
                     captured.append(dst)
                 except OSError as e:
-                    logger.info(
-                        f"PR #{self.pr_number}: spec sidecar copy failed "
-                        f"for {src}: {e}"
-                    )
+                    logger.info(f"PR #{self.pr_number}: spec sidecar copy failed for {src}: {e}")
             if not captured:
                 return
 
             try:
                 from gate import spec_pr
-                base_sha = (
-                    self.config.get("repo", {}).get("default_branch_sha")
-                    or self.head_sha
-                )
+
+                base_sha = self.config.get("repo", {}).get("default_branch_sha") or self.head_sha
                 pr_num = spec_pr.create_spec_pr(
                     repo=self.repo,
                     pr_number=self.pr_number,
@@ -1629,30 +1667,29 @@ class ReviewOrchestrator:
                     config=self.config,
                 )
                 if pr_num:
-                    logger.info(
-                        f"PR #{self.pr_number}: opened spec PR #{pr_num}"
-                    )
+                    logger.info(f"PR #{self.pr_number}: opened spec PR #{pr_num}")
             except Exception as e:  # noqa: BLE001
                 logger.warning(
-                    f"PR #{self.pr_number}: spec PR creation failed "
-                    f"(original PR unaffected): {e}"
+                    f"PR #{self.pr_number}: spec PR creation failed (original PR unaffected): {e}"
                 )
         except Exception as e:  # noqa: BLE001
-            logger.warning(
-                f"PR #{self.pr_number}: _promote_spec_tests crashed: {e}"
-            )
+            logger.warning(f"PR #{self.pr_number}: _promote_spec_tests crashed: {e}")
 
     def _write_active_marker(self) -> None:
         """Write marker for orphaned check run recovery."""
         marker = state.get_pr_state_dir(self.pr_number, self.repo) / "active_review.json"
-        marker.write_text(json.dumps({
-            "check_run_id": self.check_run_id,
-            "review_id": self._review_id(),
-            "started_at": time.time(),
-            "head_sha": self.head_sha,
-            "pid": os.getpid(),
-            "repo": self.repo,
-        }))
+        marker.write_text(
+            json.dumps(
+                {
+                    "check_run_id": self.check_run_id,
+                    "review_id": self._review_id(),
+                    "started_at": time.time(),
+                    "head_sha": self.head_sha,
+                    "pid": os.getpid(),
+                    "repo": self.repo,
+                }
+            )
+        )
 
     def _remove_active_marker(self) -> None:
         marker = state.get_pr_state_dir(self.pr_number, self.repo) / "active_review.json"

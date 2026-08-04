@@ -140,17 +140,13 @@ class _EventRingBuffer:
             if last_id < oldest_id - 1:
                 return [], False
             return [
-                e for e in self._buf
-                if isinstance(e.get("id"), int) and e["id"] > last_id
+                e for e in self._buf if isinstance(e.get("id"), int) and e["id"] > last_id
             ], True
 
     def newer_than(self, last_seen_id: int) -> list[dict]:
         """Snapshot of events with ``id`` strictly greater than ``last_seen_id``."""
         with self._lock:
-            return [
-                e for e in self._buf
-                if isinstance(e.get("id"), int) and e["id"] > last_seen_id
-            ]
+            return [e for e in self._buf if isinstance(e.get("id"), int) and e["id"] > last_seen_id]
 
 
 class _SubscriberPump:
@@ -169,9 +165,7 @@ class _SubscriberPump:
         self._ring = ring
         self._queue = server.subscribe(maxsize=SUBSCRIBER_QUEUE_SIZE)
         self._stop_event = threading.Event()
-        self._thread = threading.Thread(
-            target=self._run, name="sse-pump", daemon=True
-        )
+        self._thread = threading.Thread(target=self._run, name="sse-pump", daemon=True)
 
     def start(self) -> None:
         self._thread.start()
@@ -301,11 +295,13 @@ def create_app(
 
     @app.get("/v1/health")
     def health() -> JSONResponse:
-        return JSONResponse({
-            "ok": True,
-            "started_at": server.started_at,
-            "version": 1,
-        })
+        return JSONResponse(
+            {
+                "ok": True,
+                "started_at": server.started_at,
+                "version": 1,
+            }
+        )
 
     @app.get("/v1/state")
     def state(request: Request) -> JSONResponse:
@@ -316,8 +312,7 @@ def create_app(
     async def events(request: Request) -> StreamingResponse:
         _check_auth(request)
         last_event_id = _parse_last_event_id(
-            request.headers.get("last-event-id")
-            or request.query_params.get("last_event_id")
+            request.headers.get("last-event-id") or request.query_params.get("last_event_id")
         )
         return StreamingResponse(
             _event_stream(request, ring, last_event_id),
@@ -418,9 +413,7 @@ async def _event_stream(
 
             if wakeup_task in done:
                 wakeup.clear()
-                wakeup_task = asyncio.create_task(
-                    wakeup.wait(), name="sse-wakeup"
-                )
+                wakeup_task = asyncio.create_task(wakeup.wait(), name="sse-wakeup")
                 continue
 
             yield b": heartbeat\n\n"
@@ -440,9 +433,7 @@ def _split_addr(addr: str) -> tuple[str, int]:
     on the same box) must say so explicitly.
     """
     if ":" not in addr:
-        raise ValueError(
-            f"--serve-events expects HOST:PORT or :PORT, got: {addr!r}"
-        )
+        raise ValueError(f"--serve-events expects HOST:PORT or :PORT, got: {addr!r}")
     host, _, port = addr.rpartition(":")
     if not host:
         host = "127.0.0.1"
@@ -475,8 +466,7 @@ def run_sse_server(
         import uvicorn
     except ImportError as e:
         raise ImportError(
-            "gate up --serve-events requires the 'web' extra. Install with: "
-            "pip install 'gate[web]'"
+            "gate up --serve-events requires the 'web' extra. Install with: pip install 'gate[web]'"
         ) from e
 
     host, port = _split_addr(addr)

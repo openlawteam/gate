@@ -91,13 +91,24 @@ CONCLUSION_NEUTRAL = "neutral"
 CONCLUSION_UNKNOWN = "unknown"
 
 _SUCCESS_VALUES: frozenset[str] = frozenset({"success", "passed"})
-_FAILURE_VALUES: frozenset[str] = frozenset({
-    "failure", "failed", "cancelled", "timed_out", "action_required",
-    "startup_failure", "error",
-})
-_NEUTRAL_VALUES: frozenset[str] = frozenset({
-    "neutral", "skipped", "stale",
-})
+_FAILURE_VALUES: frozenset[str] = frozenset(
+    {
+        "failure",
+        "failed",
+        "cancelled",
+        "timed_out",
+        "action_required",
+        "startup_failure",
+        "error",
+    }
+)
+_NEUTRAL_VALUES: frozenset[str] = frozenset(
+    {
+        "neutral",
+        "skipped",
+        "stale",
+    }
+)
 
 # ── Fine-grained PAT Checks-API gap (see module docstring) ───────────
 #
@@ -314,9 +325,7 @@ def _paginate_check_runs(repo: str, sha: str) -> list[dict[str, Any]]:
             break
         page += 1
         if page > 10:
-            logger.warning(
-                f"check-runs pagination capped at 10 pages for {repo}@{sha[:8]}"
-            )
+            logger.warning(f"check-runs pagination capped at 10 pages for {repo}@{sha[:8]}")
             break
     return all_runs
 

@@ -59,43 +59,54 @@ class TestExtractJsonFromText:
 
 class TestExtractFromTranscript:
     def test_json_array_transcript(self):
-        transcript = json.dumps([
-            {"role": "user", "content": "Review this"},
-            {
-                "role": "assistant",
-                "content": '```json\n{"findings": [{"message": "bug"}], "pass": false}\n```',
-            },
-        ])
+        transcript = json.dumps(
+            [
+                {"role": "user", "content": "Review this"},
+                {
+                    "role": "assistant",
+                    "content": '```json\n{"findings": [{"message": "bug"}], "pass": false}\n```',
+                },
+            ]
+        )
         result = extract_from_transcript(transcript)
         assert result is not None
         assert len(result["findings"]) == 1
 
     def test_transcript_with_content_blocks(self):
-        transcript = json.dumps([
-            {"role": "user", "content": "Review"},
-            {
-                "role": "assistant",
-                "content": [
-                    {"type": "text", "text": '{"findings": [], "pass": true}'},
-                ],
-            },
-        ])
+        transcript = json.dumps(
+            [
+                {"role": "user", "content": "Review"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": '{"findings": [], "pass": true}'},
+                    ],
+                },
+            ]
+        )
         result = extract_from_transcript(transcript)
         assert result["pass"] is True
 
     def test_last_assistant_message_wins(self):
-        transcript = json.dumps([
-            {"role": "assistant", "content": '{"findings": [{"message": "old"}]}'},
-            {"role": "user", "content": "Continue"},
-            {"role": "assistant", "content": '{"findings": [{"message": "new"}], "pass": true}'},
-        ])
+        transcript = json.dumps(
+            [
+                {"role": "assistant", "content": '{"findings": [{"message": "old"}]}'},
+                {"role": "user", "content": "Continue"},
+                {
+                    "role": "assistant",
+                    "content": '{"findings": [{"message": "new"}], "pass": true}',
+                },
+            ]
+        )
         result = extract_from_transcript(transcript)
         assert result["findings"][0]["message"] == "new"
 
     def test_transcript_result_field(self):
-        transcript = json.dumps({
-            "result": '{"findings": [], "pass": true}',
-        })
+        transcript = json.dumps(
+            {
+                "result": '{"findings": [], "pass": true}',
+            }
+        )
         result = extract_from_transcript(transcript)
         assert result["pass"] is True
 
@@ -189,10 +200,15 @@ class TestValidateStageOutput:
 
 class TestExtractStageOutput:
     def test_extracts_from_raw_file(self, tmp_path):
-        raw = json.dumps([
-            {"role": "user", "content": "Review"},
-            {"role": "assistant", "content": '{"findings": [{"message": "bug"}], "pass": false}'},
-        ])
+        raw = json.dumps(
+            [
+                {"role": "user", "content": "Review"},
+                {
+                    "role": "assistant",
+                    "content": '{"findings": [{"message": "bug"}], "pass": false}',
+                },
+            ]
+        )
         raw_path = tmp_path / "architecture-raw.json"
         raw_path.write_text(raw)
         result = extract_stage_output(raw_path, "architecture")
@@ -204,9 +220,11 @@ class TestExtractStageOutput:
         assert result is None
 
     def test_fix_stage_normalization(self, tmp_path):
-        raw = json.dumps({
-            "result": '{"fixed": [{"id": 1}], "not_fixed": []}',
-        })
+        raw = json.dumps(
+            {
+                "result": '{"fixed": [{"id": 1}], "not_fixed": []}',
+            }
+        )
         raw_path = tmp_path / "fix-raw.json"
         raw_path.write_text(raw)
         result = extract_stage_output(raw_path, "fix")
@@ -214,17 +232,21 @@ class TestExtractStageOutput:
         assert result["pass"] is True
 
     def test_security_applies_exploit_enforcement(self, tmp_path):
-        raw = json.dumps([
-            {
-                "role": "assistant",
-                "content": json.dumps({
-                    "findings": [
-                        {"message": "SQLi", "severity": "critical", "exploit_scenario": ""},
-                    ],
-                    "pass": False,
-                }),
-            },
-        ])
+        raw = json.dumps(
+            [
+                {
+                    "role": "assistant",
+                    "content": json.dumps(
+                        {
+                            "findings": [
+                                {"message": "SQLi", "severity": "critical", "exploit_scenario": ""},
+                            ],
+                            "pass": False,
+                        }
+                    ),
+                },
+            ]
+        )
         raw_path = tmp_path / "security-raw.json"
         raw_path.write_text(raw)
         result = extract_stage_output(raw_path, "security")
@@ -289,24 +311,14 @@ class TestParseDiffHunks:
         assert starts == [17, 1015]
 
     def test_ignores_dev_null_files(self):
-        diff = (
-            "diff --git a/x b/x\n"
-            "--- a/x\n"
-            "+++ /dev/null\n"
-            "@@ -1,3 +0,0 @@\n"
-            "-a\n-b\n-c\n"
-        )
+        diff = "diff --git a/x b/x\n--- a/x\n+++ /dev/null\n@@ -1,3 +0,0 @@\n-a\n-b\n-c\n"
         assert parse_diff_hunks(diff) == {}
 
     def test_empty_diff_returns_empty(self):
         assert parse_diff_hunks("") == {}
 
     def test_malformed_hunk_header_ignored(self):
-        diff = (
-            "diff --git a/x b/x\n--- a/x\n+++ b/x\n"
-            "@@ not a real header @@\n"
-            "+content\n"
-        )
+        diff = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ not a real header @@\n+content\n"
         # Parser must not crash — and should report no hunks for x.
         assert parse_diff_hunks(diff) == {"x": []}
 
@@ -323,8 +335,12 @@ class TestValidateIntroducedByPr:
     def test_keeps_true_when_line_inside_hunk(self, tmp_path):
         self._write_diff(tmp_path, SIMPLE_DIFF)
         findings = [
-            {"file": "gate/fixer.py", "line": 1018, "introduced_by_pr": True,
-             "message": "inside second hunk"},
+            {
+                "file": "gate/fixer.py",
+                "line": 1018,
+                "introduced_by_pr": True,
+                "message": "inside second hunk",
+            },
         ]
         out = validate_introduced_by_pr(findings, tmp_path, "architecture")
         assert out[0]["introduced_by_pr"] is True
@@ -335,8 +351,12 @@ class TestValidateIntroducedByPr:
         17 and 1015-1021 were actually changed."""
         self._write_diff(tmp_path, SIMPLE_DIFF)
         findings = [
-            {"file": "gate/fixer.py", "line": 1367, "introduced_by_pr": True,
-             "message": "write_baseline_diff should use atomic_write"},
+            {
+                "file": "gate/fixer.py",
+                "line": 1367,
+                "introduced_by_pr": True,
+                "message": "write_baseline_diff should use atomic_write",
+            },
         ]
         out = validate_introduced_by_pr(findings, tmp_path, "architecture")
         assert out[0]["introduced_by_pr"] is False
@@ -347,8 +367,12 @@ class TestValidateIntroducedByPr:
     def test_downgrades_when_file_not_in_diff(self, tmp_path):
         self._write_diff(tmp_path, SIMPLE_DIFF)
         findings = [
-            {"file": "gate/other.py", "line": 5, "introduced_by_pr": True,
-             "message": "untouched file"},
+            {
+                "file": "gate/other.py",
+                "line": 5,
+                "introduced_by_pr": True,
+                "message": "untouched file",
+            },
         ]
         out = validate_introduced_by_pr(findings, tmp_path, "architecture")
         assert out[0]["introduced_by_pr"] is False
@@ -357,8 +381,12 @@ class TestValidateIntroducedByPr:
     def test_downgrades_when_no_line_number(self, tmp_path):
         self._write_diff(tmp_path, SIMPLE_DIFF)
         findings = [
-            {"file": "gate/fixer.py", "line": None, "introduced_by_pr": True,
-             "message": "whole-file claim"},
+            {
+                "file": "gate/fixer.py",
+                "line": None,
+                "introduced_by_pr": True,
+                "message": "whole-file claim",
+            },
         ]
         out = validate_introduced_by_pr(findings, tmp_path, "architecture")
         assert out[0]["introduced_by_pr"] is False
@@ -367,8 +395,7 @@ class TestValidateIntroducedByPr:
     def test_downgrades_when_no_file(self, tmp_path):
         self._write_diff(tmp_path, SIMPLE_DIFF)
         findings = [
-            {"file": "", "line": 5, "introduced_by_pr": True,
-             "message": "no file"},
+            {"file": "", "line": 5, "introduced_by_pr": True, "message": "no file"},
         ]
         out = validate_introduced_by_pr(findings, tmp_path, "architecture")
         assert out[0]["introduced_by_pr"] is False
@@ -380,10 +407,13 @@ class TestValidateIntroducedByPr:
         direction."""
         self._write_diff(tmp_path, SIMPLE_DIFF)
         findings = [
-            {"file": "gate/other.py", "line": 5, "introduced_by_pr": False,
-             "message": "legacy debt"},
-            {"file": "gate/other.py", "line": 5,
-             "message": "flag missing entirely"},
+            {
+                "file": "gate/other.py",
+                "line": 5,
+                "introduced_by_pr": False,
+                "message": "legacy debt",
+            },
+            {"file": "gate/other.py", "line": 5, "message": "flag missing entirely"},
         ]
         out = validate_introduced_by_pr(findings, tmp_path, "architecture")
         assert "_classifier_downgraded" not in out[0]
@@ -412,8 +442,7 @@ class TestValidateIntroducedByPr:
         findings = [
             "not a dict",
             None,
-            {"file": "gate/fixer.py", "line": 17, "introduced_by_pr": True,
-             "message": "ok"},
+            {"file": "gate/fixer.py", "line": 17, "introduced_by_pr": True, "message": "ok"},
         ]
         out = validate_introduced_by_pr(findings, tmp_path, "architecture")
         assert out[0] == "not a dict"
@@ -557,10 +586,22 @@ class TestDedupeFindings:
         # Same (stage, category, message) should collapse even when
         # rule_source is unset.
         f = [
-            {"severity": "warning", "file": "a.py", "line": 1,
-             "message": "x", "category": "style", "source_stage": "arch"},
-            {"severity": "warning", "file": "a.py", "line": 2,
-             "message": "x", "category": "style", "source_stage": "arch"},
+            {
+                "severity": "warning",
+                "file": "a.py",
+                "line": 1,
+                "message": "x",
+                "category": "style",
+                "source_stage": "arch",
+            },
+            {
+                "severity": "warning",
+                "file": "a.py",
+                "line": 2,
+                "message": "x",
+                "category": "style",
+                "source_stage": "arch",
+            },
         ]
         out = _dedupe_findings(f)
         assert len(out) == 1
@@ -570,6 +611,7 @@ class TestDedupeFindings:
         # verify that no stable hash gets blown away by a second dedup
         # pass on already-stamped findings.
         from gate.finding_id import compute_finding_id
+
         f = [
             self._sample(file="a.py", line=10, finding_id="abc123"),
             self._sample(file="a.py", line=50, finding_id="def456"),
@@ -582,16 +624,22 @@ class TestDedupeFindings:
         assert out[0].get("finding_id") == "abc123"
         # A fresh hash on the deduped finding would match the primary
         # location's original hash input.
-        primary_hash = compute_finding_id({
-            "file": out[0]["file"], "line": out[0]["line"],
-            "source_stage": out[0]["source_stage"],
-            "message": out[0]["message"],
-        })
-        first_original_hash = compute_finding_id({
-            "file": f[0]["file"], "line": f[0]["line"],
-            "source_stage": f[0]["source_stage"],
-            "message": f[0]["message"],
-        })
+        primary_hash = compute_finding_id(
+            {
+                "file": out[0]["file"],
+                "line": out[0]["line"],
+                "source_stage": out[0]["source_stage"],
+                "message": out[0]["message"],
+            }
+        )
+        first_original_hash = compute_finding_id(
+            {
+                "file": f[0]["file"],
+                "line": f[0]["line"],
+                "source_stage": f[0]["source_stage"],
+                "message": f[0]["message"],
+            }
+        )
         # Identical — stable hash scheme across dedup.
         assert primary_hash == first_original_hash
 

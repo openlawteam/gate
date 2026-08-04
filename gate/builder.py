@@ -34,12 +34,21 @@ def run_build(worktree: Path, config: dict | None = None) -> dict:
         return {
             "typecheck": {"pass": True, "errors": [], "error_count": 0, "tool": ""},
             "lint": {
-                "pass": True, "warnings": [], "errors": [],
-                "warning_count": 0, "error_count": 0, "tool": "",
+                "pass": True,
+                "warnings": [],
+                "errors": [],
+                "warning_count": 0,
+                "error_count": 0,
+                "tool": "",
             },
             "tests": {
-                "pass": True, "total": 0, "passed": 0,
-                "failed": 0, "skipped": 0, "failures": [], "tool": "",
+                "pass": True,
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "skipped": 0,
+                "failures": [],
+                "tool": "",
             },
             "overall_pass": True,
             "blocking_issues": [],
@@ -103,27 +112,31 @@ def run_command_group(
             args = shlex.split(cmd)
             result = subprocess.run(
                 args,
-                capture_output=True, text=True, cwd=cwd, timeout=timeout,
+                capture_output=True,
+                text=True,
+                cwd=cwd,
+                timeout=timeout,
             )
         except subprocess.TimeoutExpired:
-            logger.warning(
-                f"{label} timed out after {timeout}s in {cwd} "
-                f"(cmd: {cmd})"
-            )
+            logger.warning(f"{label} timed out after {timeout}s in {cwd} (cmd: {cmd})")
             result = subprocess.CompletedProcess(
-                args, 1, stdout="", stderr=f"{label} timed out after {timeout}s",
+                args,
+                1,
+                stdout="",
+                stderr=f"{label} timed out after {timeout}s",
             )
         except (OSError, ValueError) as exc:
             result = subprocess.CompletedProcess(
-                args, 1, stdout="", stderr=f"{label} failed to start: {exc}",
+                args,
+                1,
+                stdout="",
+                stderr=f"{label} failed to start: {exc}",
             )
         outputs.append(f"$ {cmd}\n{result.stdout}{result.stderr}")
         if result.returncode != 0 and first_nonzero == 0:
             first_nonzero = result.returncode
 
-    return subprocess.CompletedProcess(
-        cmds, first_nonzero, stdout="\n".join(outputs), stderr=""
-    )
+    return subprocess.CompletedProcess(cmds, first_nonzero, stdout="\n".join(outputs), stderr="")
 
 
 def compile_build(
@@ -265,13 +278,15 @@ def _parse_tsc(log: str, exit_code: int) -> dict:
     """Parse TypeScript compiler output. Ported from parseTsc()."""
     errors = []
     for m in re.finditer(r"^(.+)\((\d+),(\d+)\):\s+error\s+(TS\d+):\s+(.+)$", log, re.MULTILINE):
-        errors.append({
-            "file": m.group(1),
-            "line": int(m.group(2)),
-            "column": int(m.group(3)),
-            "code": m.group(4),
-            "message": m.group(5),
-        })
+        errors.append(
+            {
+                "file": m.group(1),
+                "line": int(m.group(2)),
+                "column": int(m.group(3)),
+                "code": m.group(4),
+                "message": m.group(5),
+            }
+        )
     return {
         "pass": exit_code == 0,
         "exit_code": exit_code,
@@ -288,9 +303,7 @@ def _parse_lint(log: str, exit_code: int) -> dict:
     current_file = None
     for line in log.split("\n"):
         # Accept optional ./ prefix (next lint) and mjs/cjs extensions.
-        file_match = re.match(
-            r"^(?:\./)?([^\s].*\.(?:ts|tsx|js|jsx|mjs|cjs))$", line
-        )
+        file_match = re.match(r"^(?:\./)?([^\s].*\.(?:ts|tsx|js|jsx|mjs|cjs))$", line)
         if file_match:
             current_file = file_match.group(1)
             continue
@@ -335,7 +348,8 @@ def _parse_test(log: str, exit_code: int) -> dict:
 
     summary = re.search(
         r"Tests\s+(\d+)\s+passed\s*(?:\|\s*(\d+)\s+failed)?\s*(?:\|\s*(\d+)\s+skipped)?\s*\((\d+)\)",
-        log, re.IGNORECASE,
+        log,
+        re.IGNORECASE,
     )
     if summary:
         passed = int(summary.group(1) or 0)
@@ -466,9 +480,8 @@ def compare_builds(before: dict, after: dict) -> dict:
     tc_after = after.get("typecheck", after.get("typescript", {}))
     tc_same = tc_before.get("pass") == tc_after.get("pass")
     lint_same = before.get("lint", {}).get("pass") == after.get("lint", {}).get("pass")
-    test_not_worse = (
-        after.get("tests", {}).get("failed", 0)
-        <= before.get("tests", {}).get("failed", 0)
+    test_not_worse = after.get("tests", {}).get("failed", 0) <= before.get("tests", {}).get(
+        "failed", 0
     )
 
     if tc_same and lint_same and test_not_worse:

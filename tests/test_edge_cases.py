@@ -142,9 +142,7 @@ class TestPartialState:
         monkeypatch.setattr("gate.state.state_dir", lambda: tmp_path)
         pr_dir = tmp_path / "pr42"
         pr_dir.mkdir(parents=True)
-        (pr_dir / "verdict.json").write_text(
-            json.dumps({"decision": "approve", "findings": []})
-        )
+        (pr_dir / "verdict.json").write_text(json.dumps({"decision": "approve", "findings": []}))
         result = load_prior_review(42, tmp_workspace)
         assert result["has_prior"] is True
         assert result["prior_sha"] == ""  # missing last_sha.txt
@@ -275,10 +273,7 @@ class TestConfigRobustness:
         from gate import config as cfg
 
         toml = tmp_path / "gate.toml"
-        toml.write_text(
-            '[repo]\nname = "x/y"\nfrobnicate = "hello"\n'
-            "[future_section]\nkey = 1\n"
-        )
+        toml.write_text('[repo]\nname = "x/y"\nfrobnicate = "hello"\n[future_section]\nkey = 1\n')
         cfg.GATE_DIR = tmp_path.parent  # won't be used
         # Parse directly, since load_config looks at gate_dir()/config/gate.toml
         import tomllib
@@ -292,6 +287,7 @@ class TestConfigRobustness:
         # conftest copied the real toml in; remove it to simulate missing
         import gate.config as cfg
         from gate.config import load_config
+
         toml_path = cfg.gate_dir() / "config" / "gate.toml"
         if toml_path.exists():
             toml_path.unlink()

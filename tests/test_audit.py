@@ -31,7 +31,10 @@ class TestRetroScan:
     def test_no_hits_on_clean_archives(self, tmp_path):
         repo_dir = tmp_path / "org-repo" / "pr10"
         _write_archive(
-            repo_dir, "20260422T120000Z", "abc123ab", "pre-fix",
+            repo_dir,
+            "20260422T120000Z",
+            "abc123ab",
+            "pre-fix",
             verdict={"decision": "approve", "findings": []},
             build={
                 "lint": {"pass": True},
@@ -46,7 +49,10 @@ class TestRetroScan:
     def test_flags_silent_approval_on_lint_failure(self, tmp_path):
         repo_dir = tmp_path / "org-repo" / "pr11"
         _write_archive(
-            repo_dir, "20260422T121500Z", "def456cd", "pre-fix",
+            repo_dir,
+            "20260422T121500Z",
+            "def456cd",
+            "pre-fix",
             verdict={"decision": "approve", "findings": []},
             build={
                 "lint": {"pass": False, "exit_code": 1},
@@ -63,7 +69,10 @@ class TestRetroScan:
     def test_flags_parse_failure(self, tmp_path):
         repo_dir = tmp_path / "org-repo" / "pr12"
         _write_archive(
-            repo_dir, "20260422T122200Z", "ab11ab11", "post-fix",
+            repo_dir,
+            "20260422T122200Z",
+            "ab11ab11",
+            "post-fix",
             verdict={"decision": "approve_with_notes", "findings": []},
             build={"lint": {"pass": True, "parse_failure": True}},
         )
@@ -75,7 +84,10 @@ class TestRetroScan:
     def test_skips_request_changes_verdicts(self, tmp_path):
         repo_dir = tmp_path / "org-repo" / "pr13"
         _write_archive(
-            repo_dir, "20260422T122500Z", "12345678", "pre-fix",
+            repo_dir,
+            "20260422T122500Z",
+            "12345678",
+            "pre-fix",
             verdict={"decision": "request_changes", "findings": []},
             build={"lint": {"pass": False}},
         )
@@ -86,7 +98,10 @@ class TestRetroScan:
     def test_skips_archives_with_missing_build(self, tmp_path):
         repo_dir = tmp_path / "org-repo" / "pr14"
         _write_archive(
-            repo_dir, "20260422T122700Z", "aaaabbbb", "pre-fix",
+            repo_dir,
+            "20260422T122700Z",
+            "aaaabbbb",
+            "pre-fix",
             verdict={"decision": "approve", "findings": []},
             build=None,
         )
@@ -100,11 +115,16 @@ class TestListContradictions:
         c_dir = tmp_path / f"pr{pr}" / "contradictions"
         c_dir.mkdir(parents=True, exist_ok=True)
         fname = c_dir / f"20260422T120000Z-{name}.json"
-        fname.write_text(json.dumps({
-            "pr": pr,
-            "check": {"name": name, "conclusion": "failure"},
-        }))
+        fname.write_text(
+            json.dumps(
+                {
+                    "pr": pr,
+                    "check": {"name": name, "conclusion": "failure"},
+                }
+            )
+        )
         import os as _os
+
         _os.utime(fname, (when, when))
 
     def test_empty_dir(self, tmp_path):

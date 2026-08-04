@@ -65,19 +65,33 @@ class TestLoadReviews:
 
     def test_filters_by_since(self, tmp_path):
         path = tmp_path / "reviews.jsonl"
-        _write_reviews(path, [
-            {"timestamp": _ts_ago(_dt.timedelta(hours=1)), "decision": "approve"},
-            {"timestamp": _ts_ago(_dt.timedelta(days=10)), "decision": "approve"},
-        ])
+        _write_reviews(
+            path,
+            [
+                {"timestamp": _ts_ago(_dt.timedelta(hours=1)), "decision": "approve"},
+                {"timestamp": _ts_ago(_dt.timedelta(days=10)), "decision": "approve"},
+            ],
+        )
         rows = load_reviews(since=_dt.timedelta(days=2), path=path)
         assert len(rows) == 1
 
     def test_filters_by_repo(self, tmp_path):
         path = tmp_path / "reviews.jsonl"
-        _write_reviews(path, [
-            {"timestamp": _ts_ago(_dt.timedelta(hours=1)), "repo": "o/a", "decision": "approve"},
-            {"timestamp": _ts_ago(_dt.timedelta(hours=1)), "repo": "o/b", "decision": "approve"},
-        ])
+        _write_reviews(
+            path,
+            [
+                {
+                    "timestamp": _ts_ago(_dt.timedelta(hours=1)),
+                    "repo": "o/a",
+                    "decision": "approve",
+                },
+                {
+                    "timestamp": _ts_ago(_dt.timedelta(hours=1)),
+                    "repo": "o/b",
+                    "decision": "approve",
+                },
+            ],
+        )
         rows = load_reviews(repo="o/a", path=path)
         assert [r["repo"] for r in rows] == ["o/a"]
 
@@ -85,8 +99,7 @@ class TestLoadReviews:
         path = tmp_path / "reviews.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
-            json.dumps({"timestamp": _ts_ago(_dt.timedelta(hours=1)), "decision": "approve"})
-            + "\n"
+            json.dumps({"timestamp": _ts_ago(_dt.timedelta(hours=1)), "decision": "approve"}) + "\n"
             "this is not json\n"
             + json.dumps({"timestamp": _ts_ago(_dt.timedelta(hours=2)), "decision": "approve"})
             + "\n"
@@ -98,10 +111,16 @@ class TestLoadReviews:
 # ── Aggregation ─────────────────────────────────────────────
 
 
-def _review(decision: str, *, repo: str = "o/r", findings: int = 0,
-            severities: dict | None = None,
-            categories: list[str] | None = None,
-            seconds: int = 30, fast: bool = False) -> dict:
+def _review(
+    decision: str,
+    *,
+    repo: str = "o/r",
+    findings: int = 0,
+    severities: dict | None = None,
+    categories: list[str] | None = None,
+    seconds: int = 30,
+    fast: bool = False,
+) -> dict:
     return {
         "timestamp": _ts_ago(_dt.timedelta(hours=1)),
         "repo": repo,
@@ -119,8 +138,11 @@ def _review(decision: str, *, repo: str = "o/r", findings: int = 0,
 def _fix(outcome: str = "fix_succeeded", *, repo: str = "o/r") -> dict:
     return {
         "timestamp": _ts_ago(_dt.timedelta(hours=1)),
-        "repo": repo, "pr": 1, "decision": outcome,
-        "is_fix_followup": True, "review_time_seconds": 60,
+        "repo": repo,
+        "pr": 1,
+        "decision": outcome,
+        "is_fix_followup": True,
+        "review_time_seconds": 60,
     }
 
 
@@ -213,8 +235,11 @@ class TestSummarize:
         assert report.fix_success_rate == 2 / 3
 
     def test_review_time_avg_and_p95(self):
-        rows = [_review("approve", seconds=10), _review("approve", seconds=20),
-                _review("approve", seconds=30)]
+        rows = [
+            _review("approve", seconds=10),
+            _review("approve", seconds=20),
+            _review("approve", seconds=30),
+        ]
         report = summarize(rows)
         assert report.avg_review_seconds == 20.0
         # With 3 samples sorted [10,20,30], p95 hits the top index → 30.
@@ -222,8 +247,7 @@ class TestSummarize:
 
     def test_findings_aggregated_across_severities(self):
         rows = [
-            _review("request_changes", findings=3,
-                    severities={"critical": 1, "error": 2}),
+            _review("request_changes", findings=3, severities={"critical": 1, "error": 2}),
             _review("approve_with_notes", findings=1, severities={"warning": 1}),
         ]
         report = summarize(rows)
@@ -263,21 +287,27 @@ class TestFormatJSON:
         report = summarize([_review("approve"), _fix()])
         payload = format_json(report)
         for key in (
-            "since", "repo_filter", "totals", "decisions",
-            "decisions_by_repo", "fix", "review_seconds",
-            "findings_by_severity", "top_finding_categories",
+            "since",
+            "repo_filter",
+            "totals",
+            "decisions",
+            "decisions_by_repo",
+            "fix",
+            "review_seconds",
+            "findings_by_severity",
+            "top_finding_categories",
         ):
             assert key in payload, f"missing JSON key {key}"
 
     def test_top_finding_categories_is_list_of_objects(self):
-        report = summarize([
-            _review("request_changes", categories=["security"]),
-            _review("request_changes", categories=["security"]),
-        ])
+        report = summarize(
+            [
+                _review("request_changes", categories=["security"]),
+                _review("request_changes", categories=["security"]),
+            ]
+        )
         payload = format_json(report)
-        assert payload["top_finding_categories"] == [
-            {"category": "security", "count": 2}
-        ]
+        assert payload["top_finding_categories"] == [{"category": "security", "count": 2}]
 
     def test_serialisable_to_json(self):
         report = summarize([_review("approve"), _fix()])

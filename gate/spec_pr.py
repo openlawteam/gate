@@ -112,17 +112,13 @@ def create_spec_pr(
 
     repo_cfg = config.get("repo", {})
     target_dir = repo_cfg.get("spec_tests_dir", "tests/gate-specs")
-    base_branch = (
-        repo_cfg.get("spec_pr_base_branch")
-        or repo_cfg.get("default_branch", "main")
-    )
+    base_branch = repo_cfg.get("spec_pr_base_branch") or repo_cfg.get("default_branch", "main")
     max_files = int(repo_cfg.get("spec_pr_max_files", 5))
     spec_files = list(spec_files)[: max(0, max_files)]
 
     if _target_dir_blocked(target_dir, config):
         logger.warning(
-            f"PR #{pr_number}: spec promotion skipped — "
-            f"target_dir {target_dir!r} is blocklisted"
+            f"PR #{pr_number}: spec promotion skipped — target_dir {target_dir!r} is blocklisted"
         )
         return None
 
@@ -131,15 +127,15 @@ def create_spec_pr(
     # Idempotency: if the branch already exists on the remote, assume a
     # prior run succeeded. Never re-open a second PR for the same SHA.
     if github.branch_exists(repo, branch):
-        logger.info(
-            f"PR #{pr_number}: spec branch {branch} already exists — skipping"
-        )
+        logger.info(f"PR #{pr_number}: spec branch {branch} already exists — skipping")
         return None
 
     worktree_path: Path | None = None
     try:
         worktree_path = workspace.create_auxiliary_worktree(
-            clone_path, branch=branch, base_sha=base_sha,
+            clone_path,
+            branch=branch,
+            base_sha=base_sha,
             label=f"spec-pr{pr_number}",
             config=config,
         )
@@ -148,9 +144,7 @@ def create_spec_pr(
         if getattr(e, "stderr", None):
             raw = e.stderr if isinstance(e.stderr, bytes) else str(e.stderr).encode()
             stderr = raw.decode("utf-8", errors="replace")[:200]
-        logger.warning(
-            f"PR #{pr_number}: could not create spec worktree: {stderr}"
-        )
+        logger.warning(f"PR #{pr_number}: could not create spec worktree: {stderr}")
         return None
     except Exception as e:  # noqa: BLE001
         logger.warning(f"PR #{pr_number}: spec worktree error: {e}")
@@ -174,14 +168,10 @@ def create_spec_pr(
             logger.info(f"PR #{pr_number}: no spec files copied; aborting PR")
             return None
 
-        message = (
-            f"chore(gate-specs): persist verified intent tests from PR #{pr_number}"
-        )
+        message = f"chore(gate-specs): persist verified intent tests from PR #{pr_number}"
         commit = github.commit_and_push(worktree_path, message, branch=branch)
         if commit.status != "pushed":
-            logger.warning(
-                f"PR #{pr_number}: spec push returned status={commit.status}"
-            )
+            logger.warning(f"PR #{pr_number}: spec push returned status={commit.status}")
             return None
 
         title = f"[Gate] spec tests from PR #{pr_number}"
@@ -210,6 +200,4 @@ def create_spec_pr(
             try:
                 workspace.remove_worktree(worktree_path)
             except Exception as e:  # noqa: BLE001
-                logger.info(
-                    f"PR #{pr_number}: spec worktree teardown failed: {e}"
-                )
+                logger.info(f"PR #{pr_number}: spec worktree teardown failed: {e}")

@@ -112,6 +112,7 @@ def run_code_stage(
         repo_name = meta.get("repo", "")
         if repo_name:
             from gate.config import resolve_repo_config
+
             try:
                 full_cfg = resolve_repo_config(repo_name, config)
                 repo_config = full_cfg.get("repo", {})
@@ -121,11 +122,13 @@ def run_code_stage(
     profile = profiles.resolve_profile(repo_config, workspace_path)
     vars_dict = {"request": request}
     vars_dict.update({k: v for k, v in profile.items() if isinstance(v, str)})
-    vars_dict.update({
-        "typecheck_cmd": profiles.command_display(profile, "typecheck_cmd"),
-        "lint_cmd": profiles.command_display(profile, "lint_cmd"),
-        "test_cmd": profiles.command_display(profile, "test_cmd"),
-    })
+    vars_dict.update(
+        {
+            "typecheck_cmd": profiles.command_display(profile, "typecheck_cmd"),
+            "lint_cmd": profiles.command_display(profile, "lint_cmd"),
+            "test_cmd": profiles.command_display(profile, "test_cmd"),
+        }
+    )
     prompt_text = safe_substitute(template, vars_dict, f"gate-code-{stage}")
 
     version = _next_version(workspace, stage)
@@ -220,7 +223,8 @@ def main() -> int:
     def _handle_signal(signum: int, _frame) -> None:
         logger.warning(
             "gate-code %s received signal %s — terminating active codex",
-            stage, signum,
+            stage,
+            signum,
         )
         _codex.terminate_active(signal.SIGTERM)
         sys.exit(128 + signum)
@@ -253,5 +257,6 @@ def main() -> int:
         return 1
 
     from gate.config import load_config
+
     config = load_config()
     return run_code_stage(stage, request, Path(workspace_str), thread_id, config=config)

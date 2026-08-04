@@ -391,6 +391,7 @@ def build_vars(
     # Import lazily to avoid a fixer → prompt → fixer cycle at module load.
     try:
         import gate.fixer as fixer_mod
+
         fixable_findings = fixer_mod.select_actionable_findings(
             fixable_findings, verdict or {}, config or {}
         )
@@ -433,27 +434,19 @@ def build_vars(
         "triage_summary": _stage_summary(triage, "Triage: not yet run"),
         "change_intent_json": change_intent_json,
         "postconditions_json": postconditions_json,
-        "postconditions_max_functions": str(
-            limits.get("postconditions_max_functions", 10)
-        ),
+        "postconditions_max_functions": str(limits.get("postconditions_max_functions", 10)),
         "risk_level": str((triage or {}).get("risk_level") or "medium"),
         "architecture_json": architecture_json,
         "architecture_summary": _stage_summary(
             architecture, "Architecture review: skipped by triage"
         ),
         "security_json": security_json,
-        "security_summary": _stage_summary(
-            security, "Security review: skipped by triage"
-        ),
+        "security_summary": _stage_summary(security, "Security review: skipped by triage"),
         "logic_json": logic_json,
         "prior_review_json": prior_review_json or '{ "has_prior": false }',
         "fix_diff": _read_file(workspace / "fix-diff.txt"),
-        "tsc_errors": (
-            _read_file(workspace / "fix-build-tsc-errors.txt") or "(no build errors)"
-        ),
-        "lint_errors": (
-            _read_file(workspace / "fix-build-lint-errors.txt") or "(no lint errors)"
-        ),
+        "tsc_errors": (_read_file(workspace / "fix-build-tsc-errors.txt") or "(no build errors)"),
+        "lint_errors": (_read_file(workspace / "fix-build-lint-errors.txt") or "(no lint errors)"),
         "findings_json": json.dumps(fixable_findings, indent=2),
         "fix_mode": fix_mode,
         "fixability_summary": summary_line,
@@ -467,8 +460,7 @@ def build_vars(
         "prep_context": prep_context or "(prep phase skipped)",
         "fix_plan": fix_plan or "(plan phase skipped — fix all findings using your judgment)",
         "previous_attempt_context": (
-            _read_file(workspace / "fix-previous-attempt.txt")
-            or "(first attempt)"
+            _read_file(workspace / "fix-previous-attempt.txt") or "(first attempt)"
         ),
         "bot_account": (config or {}).get("repo", {}).get("bot_account", "gate-bot"),
         # Phase 4: ambiguity halt knobs surfaced to fix-senior.md so the
@@ -477,9 +469,7 @@ def build_vars(
         # is flipped by the orchestrator after too many fix-reruns with
         # no author response — tells the senior to pick the safest
         # interpretation rather than halt indefinitely.
-        "halt_on_ambiguity": json.dumps(
-            bool(repo_cfg.get("halt_on_ambiguity", True))
-        ),
+        "halt_on_ambiguity": json.dumps(bool(repo_cfg.get("halt_on_ambiguity", True))),
         "force_safest_interpretation": json.dumps(
             bool(env_vars.get("force_safest_interpretation", False))
         ),

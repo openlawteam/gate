@@ -114,14 +114,16 @@ def retro_scan(root: Path | None = None) -> list[dict[str, Any]]:
         parts = archive.name.split("-", 2)
         timestamp = parts[0] if parts else ""
         sha = parts[1] if len(parts) > 1 else ""
-        hits.append({
-            "path": str(archive),
-            "pr_dir": str(archive.parent.parent),
-            "decision": decision,
-            "reasons": reasons,
-            "sha": sha,
-            "timestamp": timestamp,
-        })
+        hits.append(
+            {
+                "path": str(archive),
+                "pr_dir": str(archive.parent.parent),
+                "decision": decision,
+                "reasons": reasons,
+                "sha": sha,
+                "timestamp": timestamp,
+            }
+        )
     return hits
 
 
@@ -160,12 +162,14 @@ def list_contradictions(
             if cutoff is not None and mtime < cutoff:
                 continue
             doc = _read_json(child)
-            hits.append({
-                "path": str(child),
-                "pr_dir": str(contradiction_dir.parent),
-                "name": child.stem,
-                "mtime": mtime,
-                "data": doc or {},
-            })
+            hits.append(
+                {
+                    "path": str(child),
+                    "pr_dir": str(contradiction_dir.parent),
+                    "name": child.stem,
+                    "mtime": mtime,
+                    "data": doc or {},
+                }
+            )
     hits.sort(key=lambda h: h["mtime"], reverse=True)
     return hits

@@ -14,7 +14,10 @@ from gate.codex import (
 
 
 def _make_popen_mock(
-    returncode: int = 0, stdout: str = "", stderr: str = "", pid: int = 12345,
+    returncode: int = 0,
+    stdout: str = "",
+    stderr: str = "",
+    pid: int = 12345,
 ):
     """Build a MagicMock that mimics subprocess.Popen's attributes and
     ``communicate()`` contract used by gate.codex.
@@ -69,9 +72,7 @@ class TestBootstrapCodex:
 
     @patch("gate.codex.subprocess.Popen")
     def test_no_thread_id(self, mock_popen):
-        mock_popen.return_value = _make_popen_mock(
-            returncode=0, stdout="no events\n"
-        )
+        mock_popen.return_value = _make_popen_mock(returncode=0, stdout="no events\n")
         exit_code, thread_id, _ = bootstrap_codex("prompt", "/tmp")
         assert exit_code == 0
         assert thread_id is None
@@ -94,7 +95,9 @@ class TestBootstrapCodex:
     @patch("gate.codex.subprocess.Popen")
     def test_stderr_captured(self, mock_popen):
         mock_popen.return_value = _make_popen_mock(
-            returncode=1, stdout="", stderr="rate limit exceeded\nplease wait",
+            returncode=1,
+            stdout="",
+            stderr="rate limit exceeded\nplease wait",
         )
         _, _, stderr_tail = bootstrap_codex("prompt", "/tmp")
         assert "rate limit exceeded" in stderr_tail
@@ -111,10 +114,9 @@ class TestBootstrapCodex:
     @patch("gate.codex.subprocess.Popen")
     def test_timeout_returns_hint(self, mock_popen, mock_kill):
         import subprocess as _subprocess
+
         proc = _make_popen_mock(returncode=0)
-        proc.communicate.side_effect = _subprocess.TimeoutExpired(
-            cmd=["codex"], timeout=120
-        )
+        proc.communicate.side_effect = _subprocess.TimeoutExpired(cmd=["codex"], timeout=120)
         mock_popen.return_value = proc
         exit_code, thread_id, stderr_tail = bootstrap_codex("prompt", "/tmp")
         assert exit_code == 1
@@ -135,6 +137,7 @@ class TestBootstrapCodex:
     @patch("gate.codex.subprocess.Popen")
     def test_stderr_pipe_is_set(self, mock_popen):
         import subprocess as _subprocess
+
         mock_popen.return_value = _make_popen_mock(returncode=0, stdout="")
         bootstrap_codex("prompt", "/tmp")
         kwargs = mock_popen.call_args.kwargs
@@ -196,9 +199,7 @@ class TestRunCodex:
         assert "stdout" not in kwargs
 
     @patch("gate.codex.subprocess.Popen")
-    def test_stdout_log_open_error_falls_back_to_inherited_stdout(
-        self, mock_popen, tmp_path
-    ):
+    def test_stdout_log_open_error_falls_back_to_inherited_stdout(self, mock_popen, tmp_path):
         mock_popen.return_value = _make_popen_mock(returncode=0)
         bad_log_path = tmp_path / "missing-parent" / "implement.codex.log"
         exit_code, cmd = run_codex(
@@ -218,9 +219,7 @@ class TestRunCodex:
         import subprocess as _subprocess
 
         proc = _make_popen_mock(returncode=0)
-        proc.communicate.side_effect = _subprocess.TimeoutExpired(
-            cmd=["codex"], timeout=2400
-        )
+        proc.communicate.side_effect = _subprocess.TimeoutExpired(cmd=["codex"], timeout=2400)
         mock_popen.return_value = proc
 
         exit_code, cmd = run_codex("prompt", str(tmp_path), "out.md", "tid")
@@ -314,6 +313,7 @@ class TestCodexHealthCheck:
 
     def _clear_cache(self):
         from gate import codex
+
         with codex._health_lock:
             codex._health_cache.clear()
 
@@ -386,7 +386,8 @@ class TestCodexHealthCheck:
     @patch(
         "gate.codex.subprocess.run",
         side_effect=__import__("subprocess").TimeoutExpired(
-            cmd=["codex"], timeout=10,
+            cmd=["codex"],
+            timeout=10,
         ),
     )
     @patch("gate.codex._codex_binary_key", return_value=("/usr/bin/codex", 100.0))
@@ -403,6 +404,7 @@ class TestClaudeHealthCheck:
 
     def _clear_cache(self):
         from gate import codex
+
         with codex._health_lock:
             codex._health_cache.clear()
 

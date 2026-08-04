@@ -24,16 +24,10 @@ class TestGetFixPipelineMode:
         assert get_fix_pipeline_mode({}) == "polish_legacy"
 
     def test_fix_pipeline_section_wins(self):
-        assert (
-            get_fix_pipeline_mode({"fix_pipeline": {"mode": "hopper"}})
-            == "hopper"
-        )
+        assert get_fix_pipeline_mode({"fix_pipeline": {"mode": "hopper"}}) == "hopper"
 
     def test_repo_mode_is_honoured(self):
-        assert (
-            get_fix_pipeline_mode({"repo": {"fix_pipeline_mode": "hopper"}})
-            == "hopper"
-        )
+        assert get_fix_pipeline_mode({"repo": {"fix_pipeline_mode": "hopper"}}) == "hopper"
 
     def test_fix_pipeline_overrides_repo(self):
         cfg = {
@@ -43,16 +37,10 @@ class TestGetFixPipelineMode:
         assert get_fix_pipeline_mode(cfg) == "hopper"
 
     def test_invalid_mode_falls_back_to_default(self):
-        assert (
-            get_fix_pipeline_mode({"fix_pipeline": {"mode": "bogus"}})
-            == "polish_legacy"
-        )
+        assert get_fix_pipeline_mode({"fix_pipeline": {"mode": "bogus"}}) == "polish_legacy"
 
     def test_case_insensitive(self):
-        assert (
-            get_fix_pipeline_mode({"fix_pipeline": {"mode": "HOPPER"}})
-            == "hopper"
-        )
+        assert get_fix_pipeline_mode({"fix_pipeline": {"mode": "HOPPER"}}) == "hopper"
 
     def test_garbage_config_does_not_crash(self):
         assert get_fix_pipeline_mode(None) == "polish_legacy"  # type: ignore[arg-type]
@@ -64,18 +52,11 @@ class TestGetFixPipelineMaxWallClockS:
         assert get_fix_pipeline_max_wall_clock_s({}) == 14400
 
     def test_overrides(self):
-        assert (
-            get_fix_pipeline_max_wall_clock_s(
-                {"fix_pipeline": {"max_wall_clock_s": 60}}
-            )
-            == 60
-        )
+        assert get_fix_pipeline_max_wall_clock_s({"fix_pipeline": {"max_wall_clock_s": 60}}) == 60
 
     def test_bad_value_falls_back(self):
         assert (
-            get_fix_pipeline_max_wall_clock_s(
-                {"fix_pipeline": {"max_wall_clock_s": "not-an-int"}}
-            )
+            get_fix_pipeline_max_wall_clock_s({"fix_pipeline": {"max_wall_clock_s": "not-an-int"}})
             == 14400
         )
 
@@ -115,16 +96,10 @@ class TestGetFixMaxIterations:
         assert get_fix_max_iterations({}) == 3
 
     def test_fix_pipeline_section_wins(self):
-        assert (
-            get_fix_max_iterations({"fix_pipeline": {"max_iterations": 5}})
-            == 5
-        )
+        assert get_fix_max_iterations({"fix_pipeline": {"max_iterations": 5}}) == 5
 
     def test_repo_override(self):
-        assert (
-            get_fix_max_iterations({"repo": {"max_fix_iterations": 4}})
-            == 4
-        )
+        assert get_fix_max_iterations({"repo": {"max_fix_iterations": 4}}) == 4
 
     def test_fix_pipeline_overrides_repo(self):
         cfg = {
@@ -134,12 +109,7 @@ class TestGetFixMaxIterations:
         assert get_fix_max_iterations(cfg) == 10
 
     def test_bad_value_falls_back(self):
-        assert (
-            get_fix_max_iterations(
-                {"fix_pipeline": {"max_iterations": "not-an-int"}}
-            )
-            == 3
-        )
+        assert get_fix_max_iterations({"fix_pipeline": {"max_iterations": "not-an-int"}}) == 3
 
     def test_garbage_config_does_not_crash(self):
         assert get_fix_max_iterations(None) == 3  # type: ignore[arg-type]
@@ -158,39 +128,29 @@ class TestGetPrePushConfig:
         assert cfg["timeout_s"] == 600
 
     def test_reads_strict_flag(self):
-        cfg = get_pre_push_config(
-            {"repo": {"build": {"pre_push_strict": False}}}
-        )
+        cfg = get_pre_push_config({"repo": {"build": {"pre_push_strict": False}}})
         assert cfg["strict"] is False
 
     def test_reads_disable_flag(self):
-        cfg = get_pre_push_config(
-            {"repo": {"build": {"pre_push_disable": True}}}
-        )
+        cfg = get_pre_push_config({"repo": {"build": {"pre_push_disable": True}}})
         assert cfg["disable"] is True
 
     def test_reads_cmds_list(self):
-        cfg = get_pre_push_config({
-            "repo": {"build": {"pre_push_verify_cmds": ["npm test", "npm run drift"]}}
-        })
+        cfg = get_pre_push_config(
+            {"repo": {"build": {"pre_push_verify_cmds": ["npm test", "npm run drift"]}}}
+        )
         assert cfg["cmds"] == ["npm test", "npm run drift"]
 
     def test_reads_timeout(self):
-        cfg = get_pre_push_config(
-            {"repo": {"build": {"pre_push_timeout_s": 1200}}}
-        )
+        cfg = get_pre_push_config({"repo": {"build": {"pre_push_timeout_s": 1200}}})
         assert cfg["timeout_s"] == 1200
 
     def test_garbage_timeout_falls_back(self):
-        cfg = get_pre_push_config(
-            {"repo": {"build": {"pre_push_timeout_s": "not-an-int"}}}
-        )
+        cfg = get_pre_push_config({"repo": {"build": {"pre_push_timeout_s": "not-an-int"}}})
         assert cfg["timeout_s"] == 600
 
     def test_garbage_cmds_falls_back_to_empty(self):
-        cfg = get_pre_push_config(
-            {"repo": {"build": {"pre_push_verify_cmds": "not-a-list"}}}
-        )
+        cfg = get_pre_push_config({"repo": {"build": {"pre_push_verify_cmds": "not-a-list"}}})
         assert cfg["cmds"] == []
 
     def test_none_config_does_not_crash(self):

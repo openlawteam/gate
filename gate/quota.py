@@ -132,10 +132,7 @@ def _fail_open(reason: str, auth_drift: bool = False) -> dict:
     if auth_drift and _auth_drift_marker_fresh():
         logger.debug(f"Quota check fail-open: {reason}")
     else:
-        suffix = (
-            " — run `claude auth login --method browser` to refresh"
-            if auth_drift else ""
-        )
+        suffix = " — run `claude auth login --method browser` to refresh" if auth_drift else ""
         logger.warning(f"Quota check fail-open: {reason}{suffix}")
     if auth_drift:
         _maybe_alert_auth_drift(reason)

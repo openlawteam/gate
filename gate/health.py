@@ -80,15 +80,14 @@ def check_sleep_disabled() -> dict:
     import re
 
     try:
-        result = subprocess.run(
-            ["pmset", "-g"], capture_output=True, text=True, timeout=5
-        )
+        result = subprocess.run(["pmset", "-g"], capture_output=True, text=True, timeout=5)
         match = re.search(r"SleepDisabled\s+(\d)", result.stdout)
         disabled = match is not None and match.group(1) == "1"
         if not disabled:
             subprocess.run(
                 ["sudo", "pmset", "-a", "disablesleep", "1"],
-                capture_output=True, timeout=10,
+                capture_output=True,
+                timeout=10,
             )
         detail = "sleep disabled" if disabled else "sleep NOT disabled — fix attempted"
         return {"ok": disabled, "detail": detail}
@@ -110,14 +109,18 @@ def check_runner() -> dict:
     try:
         result = subprocess.run(
             ["./svc.sh", "status"],
-            capture_output=True, text=True,
-            cwd=str(runner_dir), timeout=10,
+            capture_output=True,
+            text=True,
+            cwd=str(runner_dir),
+            timeout=10,
         )
         is_running = "started" in result.stdout.lower() or "active" in result.stdout.lower()
         if not is_running:
             subprocess.run(
                 ["./svc.sh", "start"],
-                capture_output=True, cwd=str(runner_dir), timeout=30,
+                capture_output=True,
+                cwd=str(runner_dir),
+                timeout=30,
             )
             notify.runner_down(runner_name)
             return {"ok": False, "detail": "runner was stopped, restarted"}
@@ -131,7 +134,9 @@ def check_github_api() -> dict:
     try:
         result = subprocess.run(
             ["curl", "-s", "--max-time", "5", "https://api.github.com/zen"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         ok = result.returncode == 0 and len(result.stdout.strip()) > 0
         return {"ok": ok, "detail": "reachable" if ok else "unreachable"}
@@ -150,7 +155,8 @@ def check_tailscale() -> dict:
     try:
         result = subprocess.run(
             ["pgrep", "-f", "Tailscale"],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
         )
         ok = result.returncode == 0
         return {"ok": ok, "detail": "running" if ok else "not running"}
@@ -166,9 +172,7 @@ def check_disk_usage(config: dict | None = None) -> dict:
     and threaded through to ``_cleanup_old_worktrees``.
     """
     try:
-        result = subprocess.run(
-            ["df", "-P", "/"], capture_output=True, text=True, timeout=5
-        )
+        result = subprocess.run(["df", "-P", "/"], capture_output=True, text=True, timeout=5)
         lines = result.stdout.strip().split("\n")
         if len(lines) >= 2:
             pct_str = lines[1].split()[4].replace("%", "")
@@ -187,7 +191,8 @@ def check_tmux_session() -> dict:
     try:
         result = subprocess.run(
             ["tmux", "has-session", "-t", "gate"],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
         )
         ok = result.returncode == 0
         return {"ok": ok, "detail": "session exists" if ok else "no session"}
@@ -368,7 +373,8 @@ def check_orphaned_check_runs() -> dict:
             head_sha = data.get("head_sha", "")
             if check_run_id and head_sha:
                 github.complete_check_run(
-                    repo, check_run_id,
+                    repo,
+                    check_run_id,
                     conclusion="cancelled",
                     output_title="Gate Review: orphaned",
                     output_summary="Review process died. PR auto-approved (fail-open).",
@@ -386,7 +392,8 @@ def check_orphaned_check_runs() -> dict:
                 # round-trip and a WARNING log line per orphaned bot
                 # PR, which is acceptable for a recovery path.
                 github.approve_pr(
-                    repo, pr_number,
+                    repo,
+                    pr_number,
                     "**Gate (error)** — review process died. Auto-approving.",
                     config=config,
                 )
@@ -427,7 +434,9 @@ def check_orphaned_tmux_windows() -> dict:
     try:
         result = subprocess.run(
             ["tmux", "list-windows", "-a", "-F", "#{window_name} #{pane_id}"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.returncode != 0:
             return {"ok": True, "detail": "no tmux"}
@@ -559,6 +568,7 @@ def check_codex_cli() -> dict:
     within a 5-minute window are essentially free.
     """
     from gate.codex import codex_health_check
+
     ok, detail = codex_health_check()
     return {"ok": ok, "detail": detail}
 
@@ -571,6 +581,7 @@ def check_claude_cli() -> dict:
     Gatekeeper diagnostics on failure.
     """
     from gate.codex import claude_health_check
+
     ok, detail = claude_health_check()
     return {"ok": ok, "detail": detail}
 
@@ -604,9 +615,21 @@ def _cleanup_old_worktrees(config: dict | None = None) -> None:
     for worktree_base in bases:
         try:
             subprocess.run(
-                ["find", worktree_base, "-maxdepth", "1", "-mmin", "+120",
-                 "-exec", "rm", "-rf", "{}", ";"],
-                capture_output=True, timeout=30,
+                [
+                    "find",
+                    worktree_base,
+                    "-maxdepth",
+                    "1",
+                    "-mmin",
+                    "+120",
+                    "-exec",
+                    "rm",
+                    "-rf",
+                    "{}",
+                    ";",
+                ],
+                capture_output=True,
+                timeout=30,
             )
         except (subprocess.SubprocessError, OSError):
             pass

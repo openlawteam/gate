@@ -122,9 +122,7 @@ class _MockRequest:
         return {"type": "http.disconnect"}
 
 
-async def _drain_generator(
-    gen, *, max_frames: int, timeout: float = 2.0
-) -> list[dict]:
+async def _drain_generator(gen, *, max_frames: int, timeout: float = 2.0) -> list[dict]:
     """Pull up to ``max_frames`` complete SSE frames out of an async generator."""
     frames: list[dict] = []
     deadline = time.monotonic() + timeout
@@ -282,9 +280,7 @@ async def test_querystring_token_explicitly_rejected(app_and_server):
     """A misconfigured client must fail loud, not silently authenticate."""
     app, _ = app_and_server
     async with _make_client(app) as client:
-        r = await client.get(
-            "/v1/state?token=test-token", headers=_bearer("test-token")
-        )
+        r = await client.get("/v1/state?token=test-token", headers=_bearer("test-token"))
     assert r.status_code == 400
     assert "Authorization" in r.json()["detail"]
 
@@ -329,14 +325,17 @@ async def test_event_stream_replays_backlog_then_emits_live(running_server):
     gen = _event_stream(req, ring, last_event_id=0)
 
     backlog = await _drain_generator(gen, max_frames=2, timeout=2.0)
-    assert [json.loads(b["data"])["review"]["id"] for b in backlog] == [
-        "early-1", "early-2"
-    ]
+    assert [json.loads(b["data"])["review"]["id"] for b in backlog] == ["early-1", "early-2"]
 
-    ring.append({
-        "v": 1, "id": 3, "ts": 3,
-        "type": "review_updated", "review": {"id": "live-1"},
-    })
+    ring.append(
+        {
+            "v": 1,
+            "id": 3,
+            "ts": 3,
+            "type": "review_updated",
+            "review": {"id": "live-1"},
+        }
+    )
     live = await _drain_generator(gen, max_frames=1, timeout=2.0)
     assert live, "expected live event"
     assert json.loads(live[0]["data"])["review"]["id"] == "live-1"
@@ -351,10 +350,15 @@ async def test_event_stream_resume_in_range_serves_from_buffer():
 
     ring = _EventRingBuffer(50)
     for i in range(5):
-        ring.append({
-            "v": 1, "id": i + 1, "ts": i,
-            "type": "review_updated", "review": {"id": f"e-{i}"},
-        })
+        ring.append(
+            {
+                "v": 1,
+                "id": i + 1,
+                "ts": i,
+                "type": "review_updated",
+                "review": {"id": f"e-{i}"},
+            }
+        )
 
     req = _MockRequest()
     gen = _event_stream(req, ring, last_event_id=3)
@@ -373,10 +377,15 @@ async def test_event_stream_resume_out_of_range_emits_state_resync():
 
     ring = _EventRingBuffer(20)
     for i in range(20):
-        ring.append({
-            "v": 1, "id": 100 + i, "ts": 0,
-            "type": "review_updated", "review": {},
-        })
+        ring.append(
+            {
+                "v": 1,
+                "id": 100 + i,
+                "ts": 0,
+                "type": "review_updated",
+                "review": {},
+            }
+        )
 
     req = _MockRequest()
     gen = _event_stream(req, ring, last_event_id=1)
@@ -412,10 +421,15 @@ async def test_event_stream_shutdown_event_terminates_stream():
     from gate.web_events import _event_stream, _EventRingBuffer
 
     ring = _EventRingBuffer(10)
-    ring.append({
-        "v": 1, "id": 1, "ts": 0,
-        "type": "review_updated", "review": {"id": "x"},
-    })
+    ring.append(
+        {
+            "v": 1,
+            "id": 1,
+            "ts": 0,
+            "type": "review_updated",
+            "review": {"id": "x"},
+        }
+    )
     req = _MockRequest()
     gen = _event_stream(req, ring, last_event_id=0)
 

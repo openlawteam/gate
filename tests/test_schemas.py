@@ -228,77 +228,117 @@ class TestFinding:
     def test_title_is_not_aliased_to_message(self):
         # title and message are distinct fields; neither should
         # silently fall back to the other.
-        f = Finding.from_dict({
-            "severity": "info", "file": "x.py",
-            "message": "the message", "title": "the title",
-        })
+        f = Finding.from_dict(
+            {
+                "severity": "info",
+                "file": "x.py",
+                "message": "the message",
+                "title": "the title",
+            }
+        )
         assert f.title == "the title"
         assert f.message == "the message"
 
     def test_unknown_keys_preserved_in_extra(self):
-        f = Finding.from_dict({
-            "severity": "warning", "file": "a.py", "message": "m",
-            "ambiguity": "high", "fixability": "trivial",
-        })
+        f = Finding.from_dict(
+            {
+                "severity": "warning",
+                "file": "a.py",
+                "message": "m",
+                "ambiguity": "high",
+                "fixability": "trivial",
+            }
+        )
         assert f.extra == {"ambiguity": "high", "fixability": "trivial"}
 
     def test_stringy_line_coerced(self):
-        f = Finding.from_dict({
-            "severity": "error", "file": "a.py", "message": "m",
-            "line": "42", "column": "7",
-        })
+        f = Finding.from_dict(
+            {
+                "severity": "error",
+                "file": "a.py",
+                "message": "m",
+                "line": "42",
+                "column": "7",
+            }
+        )
         assert f.line == 42
         assert f.column == 7
 
     def test_invalid_line_becomes_none(self):
-        f = Finding.from_dict({
-            "severity": "error", "file": "a.py", "message": "m",
-            "line": "not-a-number",
-        })
+        f = Finding.from_dict(
+            {
+                "severity": "error",
+                "file": "a.py",
+                "message": "m",
+                "line": "not-a-number",
+            }
+        )
         assert f.line is None
 
     def test_locations_parsed_when_present(self):
-        f = Finding.from_dict({
-            "severity": "warning", "file": "a.py", "message": "m",
-            "locations": [
-                {"file": "a.py", "line": 10},
-                {"file": "b.py", "line": 20, "column": 4},
-                {"no_file": "skip"},  # dropped
-                "not a dict",  # dropped
-            ],
-        })
+        f = Finding.from_dict(
+            {
+                "severity": "warning",
+                "file": "a.py",
+                "message": "m",
+                "locations": [
+                    {"file": "a.py", "line": 10},
+                    {"file": "b.py", "line": 20, "column": 4},
+                    {"no_file": "skip"},  # dropped
+                    "not a dict",  # dropped
+                ],
+            }
+        )
         assert len(f.locations) == 2
         assert f.locations[0] == FindingLocation(file="a.py", line=10)
         assert f.locations[1] == FindingLocation(file="b.py", line=20, column=4)
 
     def test_iter_locations_synthesises_for_pre_dedup(self):
-        f = Finding.from_dict({
-            "severity": "warning", "file": "a.py", "message": "m", "line": 5,
-        })
+        f = Finding.from_dict(
+            {
+                "severity": "warning",
+                "file": "a.py",
+                "message": "m",
+                "line": 5,
+            }
+        )
         locs = f.iter_locations()
         assert len(locs) == 1
         assert locs[0].file == "a.py"
         assert locs[0].line == 5
 
     def test_primary_location_prefers_locations_array(self):
-        f = Finding.from_dict({
-            "severity": "warning", "file": "a.py", "message": "m", "line": 99,
-            "locations": [{"file": "b.py", "line": 1}],
-        })
+        f = Finding.from_dict(
+            {
+                "severity": "warning",
+                "file": "a.py",
+                "message": "m",
+                "line": 99,
+                "locations": [{"file": "b.py", "line": 1}],
+            }
+        )
         primary = f.primary_location()
         assert primary.file == "b.py"
         assert primary.line == 1
 
     def test_introduced_by_pr_coerced(self):
-        f = Finding.from_dict({
-            "severity": "error", "file": "a.py", "message": "m",
-            "introduced_by_pr": True,
-        })
+        f = Finding.from_dict(
+            {
+                "severity": "error",
+                "file": "a.py",
+                "message": "m",
+                "introduced_by_pr": True,
+            }
+        )
         assert f.introduced_by_pr is True
-        f2 = Finding.from_dict({
-            "severity": "error", "file": "a.py", "message": "m",
-            "introduced_by_pr": "true",  # non-bool — dropped
-        })
+        f2 = Finding.from_dict(
+            {
+                "severity": "error",
+                "file": "a.py",
+                "message": "m",
+                "introduced_by_pr": "true",  # non-bool — dropped
+            }
+        )
         assert f2.introduced_by_pr is None
 
     def test_severity_rank(self):

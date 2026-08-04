@@ -114,10 +114,7 @@ def test_many_unix_clients_all_receive_all_events_in_order(running_server):
     def _drain_one(c, idx):
         received.append([])
         msgs = _drain_socket(c, EVENT_COUNT, timeout=8.0)
-        review_msgs = [
-            m for m in msgs
-            if m.get("type") == "review_updated" and "review" in m
-        ]
+        review_msgs = [m for m in msgs if m.get("type") == "review_updated" and "review" in m]
         received[idx] = review_msgs
 
     for idx, c in enumerate(clients):
@@ -131,16 +128,14 @@ def test_many_unix_clients_all_receive_all_events_in_order(running_server):
         c.close()
 
     for idx, msgs in enumerate(received):
-        assert len(msgs) == EVENT_COUNT, (
-            f"client {idx} got {len(msgs)} of {EVENT_COUNT} events"
-        )
+        assert len(msgs) == EVENT_COUNT, f"client {idx} got {len(msgs)} of {EVENT_COUNT} events"
         ids = [m["id"] for m in msgs]
         assert ids == sorted(ids), f"client {idx} received events out of order"
         assert len(set(ids)) == len(ids), f"client {idx} received duplicate ids"
         first = received[0]
-        assert [m["review"]["i"] for m in msgs] == [
-            m["review"]["i"] for m in first
-        ], f"client {idx} received different payload sequence than client 0"
+        assert [m["review"]["i"] for m in msgs] == [m["review"]["i"] for m in first], (
+            f"client {idx} received different payload sequence than client 0"
+        )
 
 
 # ── In-process subscribe() multi-subscriber ─────────────────
@@ -167,9 +162,7 @@ def test_many_inprocess_subscribers_all_receive_all_events_in_order(running_serv
         time.sleep(0.01)
 
     for idx, msgs in enumerate(received):
-        assert len(msgs) == EVENT_COUNT, (
-            f"subscriber {idx} got {len(msgs)} of {EVENT_COUNT}"
-        )
+        assert len(msgs) == EVENT_COUNT, f"subscriber {idx} got {len(msgs)} of {EVENT_COUNT}"
         ids = [m["id"] for m in msgs]
         assert ids == sorted(ids), f"subscriber {idx} out of order"
         assert len(set(ids)) == len(ids), f"subscriber {idx} duplicates"

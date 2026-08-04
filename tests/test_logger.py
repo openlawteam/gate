@@ -52,9 +52,7 @@ class TestLogReview:
 
         with _patch_logs(logs_dir):
             for i in range(3):
-                log_review(
-                    i, {"decision": "approve", "findings": [], "stats": {}}, None, 60
-                )
+                log_review(i, {"decision": "approve", "findings": [], "stats": {}}, None, 60)
             lines = jsonl.read_text().strip().split("\n")
             assert len(lines) == 3
 
@@ -125,8 +123,12 @@ class TestLogFixResult:
 
         with _patch_logs(logs_dir):
             log_fix_result(
-                42, True, "Fixed 3 issues", "request_changes",
-                repo="org/repo", fix_elapsed_seconds=120,
+                42,
+                True,
+                "Fixed 3 issues",
+                "request_changes",
+                repo="org/repo",
+                fix_elapsed_seconds=120,
             )
             entry = json.loads(jsonl.read_text().strip())
             assert entry["review_time_seconds"] == 120
@@ -152,13 +154,19 @@ class TestLogFixResult:
 
         with _patch_logs(logs_dir):
             log_fix_result(
-                17, True, "hopper ok", "approve_with_notes",
+                17,
+                True,
+                "hopper ok",
+                "approve_with_notes",
                 pipeline_mode="hopper",
-                sub_scope_total=3, sub_scope_committed=2,
-                sub_scope_reverted=1, sub_scope_empty=0,
+                sub_scope_total=3,
+                sub_scope_committed=2,
+                sub_scope_reverted=1,
+                sub_scope_empty=0,
                 wall_clock_seconds=900,
                 runaway_guard_hit=False,
-                fixed_count=5, not_fixed_count=2,
+                fixed_count=5,
+                not_fixed_count=2,
             )
             entry = json.loads(jsonl.read_text().strip())
             assert entry["pipeline_mode"] == "hopper"
@@ -182,9 +190,15 @@ class TestLogFixResult:
             log_fix_result(99, True, "ok", "approve_with_notes")
             entry = json.loads(jsonl.read_text().strip())
             for key in (
-                "pipeline_mode", "sub_scope_total", "sub_scope_committed",
-                "sub_scope_reverted", "sub_scope_empty", "wall_clock_seconds",
-                "runaway_guard_hit", "fixed_count", "not_fixed_count",
+                "pipeline_mode",
+                "sub_scope_total",
+                "sub_scope_committed",
+                "sub_scope_reverted",
+                "sub_scope_empty",
+                "wall_clock_seconds",
+                "runaway_guard_hit",
+                "fixed_count",
+                "not_fixed_count",
             ):
                 assert key not in entry
 
@@ -202,7 +216,9 @@ class TestLogFixResult:
 
         with _patch_logs(logs_dir):
             log_fix_result(
-                340, False, "Fix cooldown active (268s remaining)",
+                340,
+                False,
+                "Fix cooldown active (268s remaining)",
                 "approve_with_notes",
                 repo="org/repo",
                 fix_elapsed_seconds=1,
@@ -247,6 +263,7 @@ class TestWriteSidecarMetaErrorHandling:
 
     def test_oserror_is_swallowed(self, tmp_path, monkeypatch, caplog):
         import logging
+
         bad_path = tmp_path / "nonexistent-dir" / "does" / "not" / "exist"
         bad_path.mkdir(parents=True)  # but we'll make the file write fail by
 

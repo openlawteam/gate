@@ -188,7 +188,7 @@ def list_checkpoints(cwd: Path) -> list[CheckpointInfo]:
             break
         if not subject.startswith(CHECKPOINT_PREFIX):
             break
-        name = subject[len(CHECKPOINT_PREFIX):].strip()
+        name = subject[len(CHECKPOINT_PREFIX) :].strip()
         out.append(CheckpointInfo(sha=sha, name=name, subject=subject))
     return out
 
@@ -204,9 +204,7 @@ def _resolve_workspace() -> Path:
     """
     r = _run(["git", "rev-parse", "--show-toplevel"], Path.cwd())
     if r.returncode != 0 or not r.stdout.strip():
-        raise RuntimeError(
-            "gate checkpoint must be run inside a Gate review worktree"
-        )
+        raise RuntimeError("gate checkpoint must be run inside a Gate review worktree")
     return Path(r.stdout.strip())
 
 
@@ -394,9 +392,7 @@ def _cmd_save(args: argparse.Namespace) -> int:
     # the build check later fails — that way the senior can still call
     # ``gate checkpoint revert`` to unwind.
     _run(["git", "add", "-A"], workspace)
-    have_staged = _run(
-        ["git", "diff", "--cached", "--quiet"], workspace
-    ).returncode != 0
+    have_staged = _run(["git", "diff", "--cached", "--quiet"], workspace).returncode != 0
     if not have_staged:
         print("no changes to checkpoint", file=sys.stderr)
         return 3
@@ -423,6 +419,7 @@ def _cmd_save(args: argparse.Namespace) -> int:
     # Resolve config once at the CLI entry point and thread it through,
     # rather than having scoped_build_verify call load_config() itself.
     from gate.config import load_config
+
     config = load_config() or {}
     result = scoped_build_verify(workspace, touched, config)
     if not result["pass"]:
@@ -551,8 +548,13 @@ def _cmd_finalize(args: argparse.Namespace) -> int:
 
     commit = _run(
         [
-            "git", "-c", "commit.gpgsign=false",
-            "commit", "--no-verify", "-m", body,
+            "git",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--no-verify",
+            "-m",
+            body,
         ],
         workspace,
     )
@@ -602,16 +604,12 @@ def cli_main(argv: list[str]) -> int:
     )
     p_save.set_defaults(func=_cmd_save)
 
-    p_revert = sub.add_parser(
-        "revert", help="revert to the previous clean checkpoint"
-    )
+    p_revert = sub.add_parser("revert", help="revert to the previous clean checkpoint")
     p_revert.add_argument("--to-last-clean", action="store_true")
     p_revert.add_argument("--to-baseline", action="store_true")
     p_revert.set_defaults(func=_cmd_revert)
 
-    p_final = sub.add_parser(
-        "finalize", help="squash all sub-scope checkpoints into one commit"
-    )
+    p_final = sub.add_parser("finalize", help="squash all sub-scope checkpoints into one commit")
     p_final.add_argument("--message", default="")
     p_final.add_argument(
         "--message-file",

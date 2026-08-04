@@ -255,7 +255,12 @@ def persist_review_state(
                 except OSError:
                     pass
         _write_stage_log(
-            archive_path, workspace, verdict, sha, decision, is_post_fix_rereview,
+            archive_path,
+            workspace,
+            verdict,
+            sha,
+            decision,
+            is_post_fix_rereview,
         )
     except OSError as e:
         logger.warning(
@@ -281,7 +286,8 @@ def persist_review_state(
         try:
             subprocess.run(
                 ["git", "merge-base", "--is-ancestor", last_sha, sha],
-                capture_output=True, timeout=5,
+                capture_output=True,
+                timeout=5,
                 cwd=merge_base_cwd,
             ).check_returncode()
             is_ancestor = True
@@ -355,14 +361,16 @@ def list_review_archives(pr_number: int, repo: str = "") -> list[dict[str, Any]]
                 summary = json.loads(stage_log.read_text())
             except (OSError, json.JSONDecodeError):
                 summary = None
-        archives.append({
-            "name": child.name,
-            "path": child,
-            "timestamp": timestamp,
-            "sha": sha,
-            "suffix": suffix,
-            "summary": summary,
-        })
+        archives.append(
+            {
+                "name": child.name,
+                "path": child,
+                "timestamp": timestamp,
+                "sha": sha,
+                "suffix": suffix,
+                "summary": summary,
+            }
+        )
     return archives
 
 

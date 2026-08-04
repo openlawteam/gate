@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "review_id": "demo-gate-pr42-pre-fix",
+  "repo": "acme/launch-control",
+  "pr_number": 42,
+  "head_sha": "7f8e9d0c12345678",
+  "started_at": "2026-08-04T12:00:00+00:00",
+  "completed_at": "2026-08-04T12:00:09+00:00",
+  "duration_s": 9,
+  "outcome": "reviewed",
+  "decision": "request_changes",
+  "phase": "pre-fix",
+  "parent_review_id": null,
+  "findings_count": 1,
+  "audit_flags": [],
+  "stages": {
+    "triage.json": {"elapsed_s": 1.1, "findings_count": 1},
+    "build.json": {"elapsed_s": 1.4, "pass": true},
+    "postconditions.json": {"elapsed_s": 1.3, "findings_count": 1},
+    "security.json": {"elapsed_s": 1.6, "findings_count": 1},
+    "logic.json": {"elapsed_s": 1.5, "findings_count": 1},
+    "verdict.json": {"elapsed_s": 1.4, "decision": "request_changes", "findings_count": 1}
+  }
+}

@@ -2,8 +2,8 @@
 
 Single source of truth for review-volume / verdict / fix-pipeline
 metrics. The CLI subcommand in :mod:`gate.cli` is a thin wrapper over
-the functions here so the dashboard can reuse the same aggregations
-later (e.g. via the SSE adapter exposing a ``/v1/report`` JSON view).
+the functions here so the TUI and authenticated SSE integration API
+can reuse the same aggregations.
 
 Schema notes — see :mod:`gate.logger` for the writer side. The two
 record kinds in ``reviews.jsonl`` are differentiated by:

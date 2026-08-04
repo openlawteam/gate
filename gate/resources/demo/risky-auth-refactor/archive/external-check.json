@@ -1,0 +1,6 @@
+{
+  "pass": false,
+  "name": "authorization integration",
+  "summary": "A post-hoc integration test contradicted the clean fix re-review.",
+  "test": "integration/auth_revocation_test.py::test_revoked_session_cannot_refresh"
+}

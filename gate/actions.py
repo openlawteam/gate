@@ -6,8 +6,7 @@ Distinct on purpose from:
   (silent approvals, retro contradictions). Asks "did Gate get it
   right?".
 * ``reviews.jsonl`` (via :mod:`gate.logger`) — review-result history,
-  the source of truth for ``gate report`` and the dashboard's trend
-  charts.
+  the source of truth for ``gate report`` and Flight Recorder metrics.
 
 The actions log answers a third question — "who did what, when, and
 to which PR?" — that neither of the other two captures. Slash command

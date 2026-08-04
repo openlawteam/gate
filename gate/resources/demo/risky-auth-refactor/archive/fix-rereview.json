@@ -1,0 +1,6 @@
+{
+  "decision": "approve",
+  "summary": "The scoped patch closes the directly traced path and the build is clean.",
+  "checkpoint": "checkpoint/auth-refresh-guard",
+  "fixed_count": 1
+}

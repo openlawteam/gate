@@ -1,0 +1,20 @@
+{
+  "decision": "request_changes",
+  "confidence": "high",
+  "summary": "The authentication refactor leaves a compatibility refresh path outside revocation enforcement.",
+  "findings": [
+    {
+      "finding_id": "gate-demo-auth-pre-001",
+      "source_stage": "security",
+      "severity": "error",
+      "category": "authentication",
+      "file": "src/auth/session.py",
+      "line": 104,
+      "message": "The compatibility refresh path does not consult revocation state.",
+      "evidence_level": "code_trace",
+      "evidence": "The branch returns a refreshed session before calling the shared revocation guard."
+    }
+  ],
+  "stats": {"total_findings": 1, "stages_run": 6},
+  "review_time_seconds": 9
+}

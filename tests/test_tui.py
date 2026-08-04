@@ -79,8 +79,8 @@ class TestTableColumns:
             from textual.widgets import DataTable
 
             table = app.query_one("#reviews-table", DataTable)
-            # 7 columns: icon, Repo, PR, Stage, Pipeline, Status, Elapsed
-            assert len(table.columns) == 7
+            # 8 columns: icon, Repo, PR, Stage, Pipeline, Status, Elapsed, Mode
+            assert len(table.columns) == 8
 
     async def test_queue_table_has_three_columns(self):
         server = MockServer()

@@ -1,0 +1,7 @@
+{
+  "pass": true,
+  "summary": "Unit tests and static checks passed before and after the bounded fix.",
+  "tests": {"pass": true, "count": 428},
+  "lint": {"pass": true},
+  "typecheck": {"pass": true}
+}

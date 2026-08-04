@@ -1,0 +1,12 @@
+{"at_ms":0,"event":{"v":1,"type":"queue_updated","queue":[{"pr_number":42,"repo":"acme/launch-control","head_sha":"7f8e9d0c12345678"}]}}
+{"at_ms":700,"event":{"v":1,"type":"review_started","review":{"id":"demo-gate-pr42","pr_number":42,"repo":"acme/launch-control","head_sha":"7f8e9d0c12345678","status":"running","stage":"triage","auto_fix_enabled":true,"synthetic":true}}}
+{"at_ms":1800,"event":{"v":1,"type":"review_stage_update","review_id":"demo-gate-pr42","stage":"build","status":"running"}}
+{"at_ms":3200,"event":{"v":1,"type":"review_stage_update","review_id":"demo-gate-pr42","stage":"postconditions","status":"running"}}
+{"at_ms":4500,"event":{"v":1,"type":"review_stage_update","review_id":"demo-gate-pr42","stage":"security","status":"running"}}
+{"at_ms":6100,"event":{"v":1,"type":"review_stage_update","review_id":"demo-gate-pr42","stage":"logic","status":"running"}}
+{"at_ms":7600,"event":{"v":1,"type":"review_stage_update","review_id":"demo-gate-pr42","stage":"verdict","status":"running"}}
+{"at_ms":9000,"event":{"v":1,"type":"review_stage_update","review_id":"demo-gate-pr42","stage":"fix-bootstrap","status":"fixing"}}
+{"at_ms":10800,"event":{"v":1,"type":"review_stage_update","review_id":"demo-gate-pr42","stage":"fix-session","status":"fixing"}}
+{"at_ms":12600,"event":{"v":1,"type":"review_stage_update","review_id":"demo-gate-pr42","stage":"fix-build","status":"fixing"}}
+{"at_ms":14400,"event":{"v":1,"type":"review_stage_update","review_id":"demo-gate-pr42","stage":"fix-rereview","status":"fixing"}}
+{"at_ms":16800,"event":{"v":1,"type":"review_completed","review_id":"demo-gate-pr42","decision":"request_changes","outcome":"reviewed","review":{"id":"demo-gate-pr42","pr_number":42,"repo":"acme/launch-control","head_sha":"b1c2d3e4f5678901","status":"completed","stage":"external-check","auto_fix_enabled":true,"synthetic":true}}}

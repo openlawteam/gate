@@ -1,0 +1,22 @@
+{
+  "decision": "request_changes",
+  "confidence": "high",
+  "summary": "The bounded authentication fix passed local review, but the post-hoc authorization integration check contradicted the clean verdict. Human attention is required.",
+  "review_time_seconds": 17,
+  "audit_flags": ["external_check_contradiction"],
+  "findings": [
+    {
+      "finding_id": "gate-demo-auth-001",
+      "source_stage": "external-check",
+      "severity": "error",
+      "category": "authorization",
+      "file": "src/auth/session.py",
+      "line": 118,
+      "message": "Revoked sessions can still refresh through the compatibility path.",
+      "evidence_level": "test_confirmed",
+      "introduced_by_pr": true,
+      "evidence": "integration/auth_revocation_test.py::test_revoked_session_cannot_refresh failed after the fix re-review passed."
+    }
+  ],
+  "stats": {"total_findings": 1, "stages_run": 11}
+}

@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
+from typing import Any, cast
 
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -24,6 +25,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.theme import Theme
+from textual.widget import Widget
 from textual.widgets import Button, DataTable, Footer, Header, RichLog, Static
 
 from gate import __version__
@@ -94,6 +96,8 @@ STATUS_ICONS = {
     "stuck": "◷",
     "queued": "⋯",
     "fixing": "⚒",
+    "blocked": "!",
+    "untrusted": "⊘",
 }
 
 STATUS_COLORS = {
@@ -104,6 +108,8 @@ STATUS_COLORS = {
     "stuck": "bright_yellow",
     "queued": "bright_black",
     "fixing": "bright_yellow",
+    "blocked": "bright_red",
+    "untrusted": "bright_yellow",
 }
 
 DECISION_ICONS = {
@@ -342,7 +348,7 @@ def compute_metrics() -> dict:
         lines = path.read_text().strip().split("\n")
         total = approved = errors = 0
         durations: list[int] = []
-        total_findings = 0
+        total_findings: float = 0.0
         for line in reversed(lines):
             if not line.strip():
                 continue
@@ -424,6 +430,7 @@ class HelpScreen(ModalScreen):
         keys = [
             ("q", "Quit"),
             ("r / F5", "Refresh all panels"),
+            ("d / h", "Dashboard / review history"),
             ("Enter", "Detail for selected review"),
             ("c", "Cancel selected active review"),
             ("l", "Toggle log tail visibility"),
@@ -969,6 +976,8 @@ class GateTUI(App):
         Binding("enter", "detail", "Detail"),
         Binding("l", "toggle_log", "Log"),
         Binding("o", "open_pr", "Open PR"),
+        Binding("d", "dashboard", "Dashboard"),
+        Binding("h", "history", "History"),
         Binding("question_mark", "help", "Help"),
         Binding("tab", "focus_next", "Next", show=False),
         Binding("shift+tab", "focus_previous", "Prev", show=False),
@@ -979,13 +988,13 @@ class GateTUI(App):
         self.server = server
         self._log_visible = True
         self._log_panes: dict[str, dict] = {}
-        self._active_row_keys: dict[str, object] = {}
+        self._active_row_keys: dict[str, Any] = {}
         # Row key for the "No active reviews" placeholder row. Tracked
         # separately from ``_active_row_keys`` so the incremental
         # diffing in ``_refresh_reviews_table`` stays simple — real
         # reviews come and go via that dict; the placeholder is a
         # purely cosmetic sentinel.
-        self._active_empty_row_key: object | None = None
+        self._active_empty_row_key: Any | None = None
         self._recent_entries: list[dict] = []
         self._window_title = "gate"
         self._last_jsonl_mtime: float = 0.0
@@ -1034,6 +1043,7 @@ class GateTUI(App):
             "Pipeline",
             "Status",
             "Elapsed",
+            "Mode",
         )
         # Hidden until we have at least one review; _refresh_reviews_table
         # toggles this back on when rows are added.
@@ -1114,6 +1124,7 @@ class GateTUI(App):
                     "",
                     "",
                     "",
+                    "",
                 )
             table.show_cursor = False
             return
@@ -1146,6 +1157,7 @@ class GateTUI(App):
             pr = str(r.get("pr_number", "?"))
             repo_short = _short_repo(r.get("repo", ""))
             elapsed = format_elapsed(r.get("started_at", 0))
+            mode = "Auto-fix" if r.get("auto_fix_enabled") else "Review only"
 
             pipeline = format_fix_pipeline(stage) if status == "fixing" else format_pipeline(stage)
 
@@ -1159,6 +1171,7 @@ class GateTUI(App):
                     table.update_cell(row_key, cols[4], pipeline)
                     table.update_cell(row_key, cols[5], format_status_label(status))
                     table.update_cell(row_key, cols[6], elapsed)
+                    table.update_cell(row_key, cols[7], mode)
                 except Exception:
                     pass
             else:
@@ -1170,6 +1183,7 @@ class GateTUI(App):
                     pipeline,
                     format_status_label(status),
                     elapsed,
+                    mode,
                 )
                 self._active_row_keys[rid] = row_key
 
@@ -1349,9 +1363,11 @@ class GateTUI(App):
         if reviews is None:
             reviews = list(self.server.reviews) if self.server and self.server.reviews else []
 
-        active_reviews: list[tuple[str, int]] = [
-            (r.get("repo", ""), r.get("pr_number")) for r in reviews if r.get("pr_number")
-        ]
+        active_reviews: list[tuple[str, int]] = []
+        for review in reviews:
+            pr_number = review.get("pr_number")
+            if isinstance(pr_number, int):
+                active_reviews.append((str(review.get("repo") or ""), pr_number))
 
         desired_keys: set[str] = set()
         for repo, pr in active_reviews:
@@ -1388,8 +1404,9 @@ class GateTUI(App):
                         # 40+ AttributeError crashes from probing it); the
                         # prior code's intent — find the separator paired
                         # with this pane — survives via index lookup.
+                        container_widget = cast(Widget, container)
                         siblings = list(panes_container.children)
-                        idx = siblings.index(container)
+                        idx = siblings.index(container_widget)
                         # Panes after the first are mounted preceded by a
                         # separator (see add path below). Removing the
                         # ``before`` separator is the canonical path; for
@@ -1397,12 +1414,12 @@ class GateTUI(App):
                         # following separator so we don't leave a stale
                         # leading divider.
                         if idx > 0 and "log-pane-separator" in (siblings[idx - 1].classes or set()):
-                            siblings[idx - 1].remove()
+                            cast(Widget, siblings[idx - 1]).remove()
                         elif idx + 1 < len(siblings) and "log-pane-separator" in (
                             siblings[idx + 1].classes or set()
                         ):
-                            siblings[idx + 1].remove()
-                        container.remove()
+                            cast(Widget, siblings[idx + 1]).remove()
+                        container_widget.remove()
                         del self._log_panes[key]
                     except Exception:
                         logger.exception("Failed to remove log pane %s, rebuilding", key)
@@ -1546,6 +1563,17 @@ class GateTUI(App):
         self._update_recent_and_metrics()
         self._update_system_info()
         self.notify("Refreshed", timeout=1)
+
+    def action_dashboard(self) -> None:
+        """Keep the primary dashboard binding symmetric with History."""
+        self.query_one("#reviews-table", DataTable).focus()
+
+    def action_history(self) -> None:
+        """Open the durable review Flight Recorder."""
+        from gate.flight_recorder import FlightRecorderScreen
+        from gate.review_store import LiveReviewDataSource
+
+        self.push_screen(FlightRecorderScreen(LiveReviewDataSource(self.server)))
 
     def action_cancel_review(self) -> None:
         if not self.server or not self.server.reviews:

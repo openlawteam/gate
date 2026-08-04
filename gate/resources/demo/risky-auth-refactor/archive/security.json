@@ -1,0 +1,12 @@
+{
+  "verdict": "changes_required",
+  "findings": [
+    {
+      "severity": "error",
+      "file": "src/auth/session.py",
+      "line": 104,
+      "message": "The compatibility refresh path does not consult revocation state.",
+      "evidence_level": "code_trace"
+    }
+  ]
+}

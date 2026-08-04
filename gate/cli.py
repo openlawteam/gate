@@ -41,7 +41,13 @@ def parse_args(parser: argparse.ArgumentParser, args: list[str]) -> argparse.Nam
         return parser.parse_args(args)
     except argparse.ArgumentError as e:
         raise ArgumentError(str(e)) from e
-    except SystemExit:
+    except SystemExit as e:
+        # Python 3.11 still exits for some parse failures even when
+        # ``exit_on_error=False``; newer versions raise ArgumentError.
+        # Normalize non-help exits so every supported Python returns the
+        # command's documented error status and message.
+        if e.code not in (None, 0):
+            raise ArgumentError("invalid arguments") from e
         raise
 
 

@@ -1,4 +1,4 @@
-name: Tests
+name: Quality
 
 on:
   push:
@@ -9,31 +9,88 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  macos:
+    name: macOS / Python ${{ matrix.python-version }}
+    runs-on: macos-latest
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install frozen development environment
+        run: uv sync --frozen --all-extras --python "$pythonLocation/bin/python"
       - name: Configure git identity for checkpoint tests
         run: |
           git config --global user.email "ci@gate.local"
           git config --global user.name "Gate CI"
-
+      - name: Format
+        run: uv run --frozen ruff format --check .
       - name: Lint
-        run: ruff check gate/ tests/
+        run: uv run --frozen ruff check .
+      - name: Type check
+        run: uv run --frozen mypy gate
+      - name: Tests and coverage
+        run: uv run --frozen pytest -q
 
-      - name: Run tests
-        run: pytest -q
+  package-smoke:
+    name: macOS wheel and sdist smoke
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - name: Install frozen development environment
+        run: uv sync --frozen --all-extras --python "$pythonLocation/bin/python"
+      - name: Build and validate metadata
+        run: |
+          uv build --no-build-isolation --clear
+          uv run --frozen twine check dist/*
+      - name: Install wheel outside the checkout
+        run: |
+          python -m venv "$RUNNER_TEMP/gate-wheel"
+          "$RUNNER_TEMP/gate-wheel/bin/pip" install dist/*.whl
+      - name: Smoke installed commands and resources
+        run: |
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/gate-wheel/bin/gate" --version
+          "$RUNNER_TEMP/gate-wheel/bin/gate" --help
+          "$RUNNER_TEMP/gate-wheel/bin/gate" demo --headless --json
+          "$RUNNER_TEMP/gate-wheel/bin/python" - <<'PY'
+          from importlib.resources import files
+
+          resources = files("gate") / "resources"
+          required = (
+              resources / "prompts" / "triage.md",
+              resources / "config" / "gate.toml.example",
+              resources / "workflows" / "gate-review.yml",
+              resources / "demo" / "risky-auth-refactor" / "events.jsonl",
+          )
+          assert all(item.is_file() for item in required), required
+          PY
+
+  portable-unit-tests:
+    name: portable unit tests / Ubuntu / Python 3.12
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - name: Install frozen development environment
+        run: uv sync --frozen --all-extras --python "$pythonLocation/bin/python"
+      - name: Configure git identity for checkpoint tests
+        run: |
+          git config --global user.email "ci@gate.local"
+          git config --global user.name "Gate CI"
+      - name: Portable unit tests
+        run: uv run --frozen pytest -q

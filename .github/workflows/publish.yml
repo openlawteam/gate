@@ -1,0 +1,42 @@
+name: Publish gate-review
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type "publish gate-review" to publish the current commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.event.inputs.confirmation == 'publish gate-review'
+    runs-on: macos-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - name: Install frozen release environment
+        run: uv sync --frozen --all-extras --python "$pythonLocation/bin/python"
+      - name: Build distributions
+        run: uv build --no-build-isolation --clear
+      - name: Validate metadata
+        run: uv run --frozen twine check dist/*
+      - name: Install and smoke wheel
+        run: |
+          python -m venv "$RUNNER_TEMP/gate-release"
+          "$RUNNER_TEMP/gate-release/bin/pip" install dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/gate-release/bin/gate" --version
+          "$RUNNER_TEMP/gate-release/bin/gate" demo --headless --json
+      - name: Publish with PyPI trusted publishing
+        uses: pypa/gh-action-pypi-publish@release/v1

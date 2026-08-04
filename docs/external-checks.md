@@ -12,8 +12,9 @@ PR B.2 introduced this module. It is off by default — a repo with no
 
 ## The fast path
 
-Add the following to your repo section in `~/.config/gate/gate.toml`
-(see [`config/gate.toml`](../config/gate.toml) for the full schema):
+Add the following to your repo section in the path reported by `gate doctor`
+(see the packaged [`gate.toml.example`](../gate/resources/config/gate.toml.example)
+for the full schema):
 
 ```toml
 [[repos]]

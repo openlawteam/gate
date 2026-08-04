@@ -2,18 +2,26 @@
 
 ## Overview
 
-Gate is an autonomous AI-powered PR review system that runs on a trusted self-hosted machine, reviewing PRs on your GitHub repository. This document describes the security boundaries, accepted risks, and potential future hardening.
+Gate is a local AI pull-request review control plane that runs on a trusted macOS host. This document describes its v0.1 security boundary, accepted risks, and future hardening.
+
+## v0.1 Trusted-Source Rule
+
+Gate fetches pull-request metadata through GitHub's API before creating a workspace or invoking any repository or model process. A review is executable only when the head repository exactly equals both the API-reported base repository and the configured repository. Cross-repository pull requests are recorded as `untrusted`, receive an `action_required` commit status, and stop before worktree, tmux, Claude, Codex, build, or script execution. There is no fork bypass in v0.1.
+
+The packaged GitHub workflow repeats the same equality guard. This defense in depth does not replace the orchestrator-side check.
+
+Infrastructure errors, circuit-breaker activation, and orphan cleanup complete neutrally or as errors and never approve. `gate-skip` and `gate-emergency-bypass` are deliberate trusted-operator overrides.
 
 ## Trust Boundaries
 
 ### Trusted Components
 - **The host machine** — physically secured, single-user, operator-controlled
-- **Gate source code** — maintained in a private repo, changes go through review
+- **Gate source code** — installed from a reviewed distribution or checkout
 - **Configuration files** — `gate.toml`, `fix-blocklist.txt`, prompt templates
 - **Secrets** — `GATE_PAT`, `CLAUDE_CODE_OAUTH_TOKEN` stored in environment/Keychain; Codex tokens stored in `~/.codex/auth.json`
 
 ### Semi-Trusted
-- **PR content** — authored by known team members on a private repo, but could contain adversarial patterns (prompt injection via code comments, PR body, file names)
+- **Same-repository PR content** — still untrusted as data and may contain adversarial prompt injection
 - **AI model outputs** — Claude and Codex produce review verdicts and code changes that are validated but not formally verified
 
 ### Untrusted
@@ -29,7 +37,7 @@ Used in `fixer.py` when Claude runs the fix-senior stage. This flag allows Claud
 
 **Mitigations:**
 - **Ephemeral worktrees** — each fix session runs in a disposable `git worktree` under `/tmp/gate-worktrees/`, removed after completion
-- **Blocklist** — `config/fix-blocklist.txt` prevents modifications to schema files, lockfiles, env files, CI config, and Cursor rules
+- **Blocklist** — the packaged `gate/resources/config/fix-blocklist.txt` prevents modifications to schema files, lockfiles, env files, CI config, and review rules
 - **Build verification** — `build_verify()` runs configured typecheck/lint/test commands before and after fixes; regressions are rejected
 - **Re-review** — a separate Claude session (`fix-rereview`) evaluates the diff independently
 - **Env allowlist** — `build_claude_env()` in `config.py` passes only explicitly listed environment variables to Claude, not the full parent environment
@@ -77,12 +85,8 @@ If stronger isolation were needed, fix sessions could be wrapped in a container 
 - Use `pf` packet filter rules to restrict network access during fix sessions
 - **Trade-offs:** macOS sandbox profiles are deprecated and poorly documented; `pf` rules are fragile across OS updates
 
-### Option C: nsjail (Linux) or Firecracker
-- Not directly applicable on macOS; would require a Linux VM layer
-- **Trade-offs:** Significant complexity; defeats the purpose of a lightweight local service
-
 ### Recommendation
-For a private repo with a small trusted team, the current mitigations (ephemeral worktrees, blocklist, build verification, re-review) provide adequate protection. Sandboxing should be revisited if Gate is deployed against public or untrusted repositories.
+Use Gate only on repositories whose contributors and branch-write permissions you trust. Public-fork execution remains unsupported until Gate has a real sandbox.
 
 ## Unix Socket Security
 

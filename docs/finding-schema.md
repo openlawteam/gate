@@ -91,15 +91,15 @@ Each review stage is responsible for producing findings matching this
 shape. The full payload is documented in each stage's prompt, but the
 required-field contract is the same across all of them:
 
-- [`prompts/architecture.md`](../prompts/architecture.md) — emits
+- [`architecture.md`](../gate/resources/prompts/architecture.md) — emits
   `severity` / `file` / `message` / `line` / `rule_source` /
   `suggestion` / `category` / `introduced_by_pr` / `evidence_level`.
-- [`prompts/logic.md`](../prompts/logic.md) — same core fields plus
+- [`logic.md`](../gate/resources/prompts/logic.md) — same core fields plus
   logic-specific evidence metadata.
-- [`prompts/security.md`](../prompts/security.md) — same plus optional
+- [`security.md`](../gate/resources/prompts/security.md) — same plus optional
   `exploit_scenario` (enforced by `enforce_exploit_scenario` in
   `extract.py`).
-- [`prompts/verdict.md`](../prompts/verdict.md) — aggregates findings
+- [`verdict.md`](../gate/resources/prompts/verdict.md) — aggregates findings
   from the prior three stages and stamps `source_stage`.
 
 ## Inspecting findings

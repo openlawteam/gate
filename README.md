@@ -1,360 +1,180 @@
-# Gate — Autonomous PR Review System
+# Gate
 
-Gate is a Python/tmux AI-powered code review system that autonomously reviews every PR on your repository. It runs on a self-hosted machine as a persistent server, orchestrating Claude and Codex agents to perform multi-stage code reviews and auto-fixes.
+Gate is a macOS-first review control plane and flight recorder for evidence-backed AI pull-request reviews. It coordinates focused review stages, preserves what each stage observed, and makes the complete decision trail explorable in a terminal UI.
 
-## Architecture
+Gate starts in **review-only mode**. Editing a branch requires an explicit per-repository opt-in, and pull requests from forks are refused before Gate creates a worktree or starts a model.
 
-```
-GitHub PR push
-  └─▶ GHA thin trigger (gate-review.yml)
-       └─▶ gate review --pr N --repo ... --head-sha ...
-            └─▶ ReviewQueue (concurrent, up to 3 PRs)
-                 └─▶ ReviewOrchestrator per PR
-                      ├─▶ GitHub commit status created ("gate-review")
-                      ├─▶ Gate 1–5 (labels, circuit breaker, fix-rerun, quota, cycles)
-                      ├─▶ Stage 1: Triage (structured, Sonnet)
-                      ├─▶ Stage 2: Build verification
-                      ├─▶ Stage 2.5: Postconditions (structured, Sonnet, high/critical risk only)
-                      ├─▶ Stage 3: Architecture review (agent, tmux)
-                      ├─▶ Stage 4: Security review (agent, tmux)
-                      ├─▶ Stage 5: Logic review (agent, tmux)
-                      ├─▶ Stage 6: Verdict (structured, Sonnet)
-                      ├─▶ Post review (GitHub review)
-                      └─▶ Fix pipeline (if blocked — Claude senior + Codex junior)
-```
+![Gate deterministic Flight Recorder replay](docs/assets/gate-demo.gif)
 
-Agent stages run interactively in tmux windows via `gate process`. Structured stages run inline via `subprocess.run`. All communication between the server, orchestrator, and runners uses Unix socket IPC (JSONL protocol).
-
-## Requirements
-
-| Requirement | Details |
-|-------------|---------|
-| Python | 3.11+ |
-| OS | macOS or Linux |
-| tmux | 3.3+ |
-| GitHub CLI | `gh` authenticated |
-| Claude CLI | `claude` authenticated |
-| Codex CLI | `codex` (optional, for fix pipeline) |
-
-## Quick Start
+## Install and try the demo
 
 ```bash
-# 1. Clone and install
-git clone <gate-repo-url>
-cd gate
-pip install -e ".[dev]"
+uv tool install gate-review
+gate --version
+gate demo
+```
 
-# 2. Run interactive setup
+Before the first public release, build and install the local artifact instead: `make package && uv tool install dist/gate_review-0.1.0-py3-none-any.whl`.
+
+The bundled `risky-auth-refactor` scenario is synthetic, deterministic, and requires no credentials. It replays a risky authentication change through review, an explicitly opted-in simulated fix, a clean re-review, and a contradictory external check that blocks the final result for human attention.
+
+```bash
+gate demo --scenario risky-auth-refactor --speed 2
+gate demo --headless --json
+```
+
+Expected machine-readable result:
+
+```json
+{"network_calls": 0, "outcome": "blocked", "scenario": "risky-auth-refactor", "valid": true}
+```
+
+Demo mode ignores real Gate configuration. It creates no sockets, state, worktrees, tmux sessions, subprocesses, or network clients.
+
+## How a review works
+
+```text
+trusted same-repository PR
+  -> triage and build evidence
+  -> postconditions, architecture, security, and logic review
+  -> evidence-backed verdict
+  -> immutable review archive
+  -> optional bounded fix (only when auto_fix = true)
+  -> post-fix build and re-review
+  -> external-check contradiction audit
+```
+
+Structured stages run through Claude by default. Agent review stages run in tmux. The optional fix pipeline uses Claude as the senior coordinator and Codex as the bounded editor. Typed runner protocols keep orchestration testable without exposing provider selection as a v0.1 configuration surface.
+
+## Flight Recorder TUI
+
+`gate up` opens the primary live TUI. `gate demo` opens the same recorder against bundled replay data.
+
+- Dashboard: active and queued reviews, stage progress, elapsed time, review/fix mode, live logs, and compact health metrics.
+- History: durable review archives ordered newest-first, including pre-fix/post-fix lineage and audit flags.
+- Evidence: findings, severity, source location, evidence level, stage output, build/test results, fix summaries, and contradiction data.
+- Responsive layouts: three panes at 140+ columns, two columns at 100–139, and one pane below 100.
+
+Core keys:
+
+| Key | Action |
+|---|---|
+| `d` / `h` | Dashboard / history |
+| `Enter` / `Esc` | Open selected review / return |
+| `r` | Refresh |
+| `c` | Cancel selected active review |
+| `o` | Open selected PR |
+| `?` | Help |
+| `q` | Quit |
+
+Replay also supports `Space` to pause, arrow keys to seek, `+`/`-` to change speed, `Home` to reset, and `End` to finish immediately.
+
+Historical archives are immutable. `gate cleanup` removes inactive PR state older than 30 days; `gate prune --reviews older-than=30d` performs explicit archive-only pruning.
+
+## Trusted-source security boundary
+
+Gate v0.1 executes only when the pull request head repository exactly matches the configured base repository. The check happens through GitHub's pull-request API before workspace creation, tmux, model execution, build commands, or repository scripts.
+
+Forked pull requests receive an `action_required` status and an `untrusted` archive outcome. There is no v0.1 bypass. The packaged GitHub workflow applies the same repository equality guard.
+
+Unexpected internal errors, circuit-breaker activation, quota failures, timeouts, and orphan cleanup never synthesize approval. `gate-skip` and `gate-emergency-bypass` remain explicit trusted-operator overrides and are intentionally visible in history.
+
+See [Security](docs/security.md) and [SECURITY.md](SECURITY.md) before attaching Gate to a repository.
+
+## Real review setup
+
+Real Gate reviews are local-control, not offline: they contact GitHub and invoke the configured Claude and Codex CLIs.
+
+Requirements:
+
+- macOS and Python 3.11–3.14
+- `tmux` 3.3+
+- authenticated GitHub CLI (`gh`)
+- authenticated Claude CLI (`claude`)
+- Codex CLI (`codex`) only when auto-fix is enabled
+
+Apple Silicon on macOS 26.5 is owner-verified. Other macOS versions and Intel Macs are currently unverified. Linux runtime operation is not supported in v0.1; the Ubuntu CI job is portable unit-test signal only.
+
+```bash
 gate init
-
-# 3. Start Gate (inside tmux)
+gate doctor
 tmux new 'gate up'
 ```
 
-To add additional repositories to an existing setup:
+`gate init` writes the canonical configuration to `platformdirs.user_config_dir("gate")/gate.toml`—normally `~/Library/Application Support/gate/gate.toml` on macOS—and copies the packaged workflow into the selected repository. Set `GATE_CONFIG_PATH` for an explicit alternative.
 
-```bash
-gate add-repo
-```
+If the canonical file is absent and a legacy checkout-local `config/gate.toml` exists, Gate atomically copies it, reports the migration once, leaves the legacy file untouched, and uses the canonical path afterward. Mutable state and logs remain under `platformdirs.user_data_dir("gate")`.
 
-## CLI Commands
-
-| Command | Description |
-|---------|-------------|
-| `gate init` | Interactive first-time setup |
-| `gate add-repo` | Add a repository to an existing config |
-| `gate up` | Start server and TUI dashboard |
-| `gate up --headless` | Start server without TUI |
-| `gate status` | Print current state (reviews, queue, health) |
-| `gate review --pr N ...` | Enqueue a PR review (called by GHA) |
-| `gate cancel --pr N` | Cancel an in-progress review |
-| `gate health` | Run all health checks |
-| `gate doctor` | Verify all prerequisites |
-| `gate cleanup` | Run log rotation and worktree pruning |
-| `gate digest` | Send daily metrics digest |
-| `gate update` | Pull latest code and reinstall |
-| `gate cleanup-pr --pr N` | Clean up state for a closed PR |
-| `gate process <id> <stage>` | Run a review stage in tmux (internal) |
-| `gate inspect-pr N [--repo ...]` | Pretty-print persisted review state for a PR |
-
-## Development
-
-Gate's test suite needs the dev extras — most importantly
-`pytest-asyncio` for the async TUI tests. Install with:
-
-```bash
-pip install -e '.[dev]'
-```
-
-A bare `pip install -e .` is **not enough**: it installs the runtime
-deps only, and `pytest -q` will fail at collection time via the guard
-in `tests/conftest.py` asking you to re-install with the extra. Use
-the one-line command above and you're good.
-
-Common developer workflows:
-
-```bash
-pytest -q                 # full test suite (~110s on my box)
-ruff check .              # lint
-mypy gate                 # type-check (baseline; see pyproject for overrides)
-gate inspect-pr 123       # inspect persisted findings for a PR
-```
-
-## Supported Languages
-
-Gate supports any project type through built-in profiles and custom build commands:
-
-| Language | Profile | Typecheck | Lint | Tests |
-|----------|---------|-----------|------|-------|
-| TypeScript/JS | `node` | `npx tsc --noEmit` | `npm run lint:check` | `npm run test:run` |
-| Python | `python` | — | `ruff check .` | `python -m pytest` |
-| Go | `go` | `go vet ./...` | `golangci-lint run` | `go test ./...` |
-| Rust | `rust` | `cargo check` | `cargo clippy` | `cargo test` |
-
-`gate init` auto-detects the project type. You can override any command per-repo via `build.*` keys in `gate.toml`.
-
-## Configuration
-
-### `config/gate.toml`
+Minimal configuration:
 
 ```toml
 [[repos]]
-name = "your-org/your-repo"
-clone_path = "~/your-repo"
-project_type = "node"    # auto-detected: node, python, go, rust, none
-worktree_base = "/tmp/gate-worktrees"
-
-# Override default build commands per-repo:
-# build.typecheck_cmd = "npx tsc --noEmit"
-# build.lint_cmd = "npm run lint:check"
-# build.test_cmd = "npm run test:run"
-# build.typecheck_cmds = ["npm run type-check", "npm run api:type-check"]
-# build.lint_cmds = ["npm run lint:check", "npm run api:lint"]
-# build.test_cmds = ["npm run --workspace frontend test:run", "npm run api:test"]
-# build.scoped_lint_cmd = "npm exec eslint --"  # optional app-local scoped lint
-# build.scoped_lint_cwd = "apps/frontend"
-# build.source_root = "apps/frontend and apps/api"  # monorepo source roots, if applicable
-# build.test_dir = "apps/frontend for frontend tests; apps/api for API tests"
-
-# Use singular *_cmd keys for one command, or plural *_cmds arrays
-# when a monorepo needs several runtimes checked in sequence.
-
-# Per-repo limit overrides:
-# limits.max_fix_attempts_total = 0
-# timeouts.agent_stage_s = 600
-
-[models]
-triage = "sonnet"
-postconditions = "opus"
-architecture = "opus"
-security = "opus"
-logic = "opus"
-verdict = "opus"
-fix_senior = "opus"
-fix_rereview = "opus"
-
-[timeouts]
-agent_stage_s = 900
-structured_stage_s = 120
-hard_timeout_s = 1200
-
-[limits]
-max_diff_bytes = 500000
-max_pr_body_bytes = 50000
-max_review_cycles = 5
+name = "owner/repository"
+clone_path = "~/work/repository"
+default_branch = "main"
+project_type = "python"
+auto_fix = false
 ```
 
-### Environment Variables
+## Review-only and auto-fix
 
-| Variable | Purpose |
-|----------|---------|
-| `GATE_PAT` | GitHub Personal Access Token (push, checks, reviews) |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Claude CLI authentication |
-| Codex auth | `codex login` (ChatGPT account) or `OPENAI_API_KEY` env var |
-| `GATE_NTFY_TOPIC` | ntfy.sh topic for push notifications |
-| `GATE_DISCORD_WEBHOOK` | Discord webhook URL (optional) |
+`auto_fix = false` is the default and recommended starting point. Gate posts review evidence but does not edit or push the PR branch.
 
-## Directory Layout
+To opt a trusted repository into the existing bounded fix pipeline:
 
-```
-gate/
-├── gate/                      # Python package
-│   ├── __init__.py
-│   ├── cli.py                 # CLI entry point
-│   ├── server.py              # Unix socket JSONL server
-│   ├── client.py              # Server client + GateConnection
-│   ├── orchestrator.py        # Review pipeline state machine
-│   ├── queue.py               # Concurrent review queue (ThreadPoolExecutor)
-│   ├── runner.py              # ReviewRunner (agent tmux) + StructuredRunner (inline)
-│   ├── claude.py              # tmux window spawner
-│   ├── tmux.py                # tmux low-level operations
-│   ├── fixer.py               # Fix pipeline (Claude senior + Codex junior)
-│   ├── github.py              # GitHub API (checks, reviews, comments, labels)
-│   ├── prompt.py              # Prompt loading and variable substitution
-│   ├── schemas.py             # StageResult, FixResult, fallback builders
-│   ├── config.py              # TOML config loader
-│   ├── state.py               # Per-PR state persistence
-│   ├── notify.py              # ntfy + Discord notifications
-│   ├── health.py              # Infrastructure health monitoring
-│   ├── cleanup.py             # Log rotation, worktree pruning, digest
-│   ├── logger.py              # reviews.jsonl, live logs
-│   ├── builder.py             # Build verification (per-project: typecheck, lint, tests)
-│   ├── profiles.py            # Project type profiles (node, python, go, rust)
-│   ├── quota.py               # Anthropic API quota checking
-│   ├── workspace.py           # Git worktree management
-│   ├── tui.py                 # Textual TUI dashboard
-│   └── code.py                # gate-code Codex wrapper
-├── config/
-│   ├── gate.toml              # Main configuration
-│   ├── cursor-rules.md        # Coding standards for review (customize for your project)
-│   ├── fix-blocklist.txt      # Files excluded from auto-fix
-│   └── com.gate.server.plist.example  # LaunchAgent config template
-├── prompts/                   # 18 prompt templates (.md)
-├── workflows/
-│   └── gate-review.yml        # Thin GHA trigger workflow
-├── docs/
-│   ├── health-and-recovery.md
-│   ├── metrics.md
-│   ├── notifications.md
-│   └── remote-access.md
-├── tests/                     # pytest test suite
-├── pyproject.toml
-├── Makefile
-└── README.md
+```toml
+[[repos]]
+name = "owner/repository"
+auto_fix = true
 ```
 
-Runtime data lives in the OS-native data directory (via `platformdirs`),
-not in the repo tree:
+Only then are fix mode, iteration limits, blocklists, checkpoints, validation, and `fix_on_approve_with_notes` consulted. Add `gate-no-fix` to a PR to disable fixing for that run even when the repository opted in.
 
-```
-~/Library/Application Support/gate/       # macOS
-~/.local/share/gate/                      # Linux
-├── server.sock                           # Unix socket (IPC)
-├── npm-cache/                            # npm cache for dependency installs
-├── logs/
-│   ├── reviews.jsonl                     # Structured review log (append-only)
-│   ├── activity.log                      # Server activity log
-│   ├── .health-alert-state               # Per-check alert cooldown state
-│   └── live/                             # Per-PR live logs
-└── state/
-    ├── quota-cache.json                  # Anthropic quota cache
-    └── {repo-slug}/prN/                  # Per-PR state
-        ├── verdict.json
-        ├── triage.json
-        ├── architecture.json
-        ├── security.json
-        ├── logic.json
-        ├── build.json
-        ├── last_sha.txt
-        ├── review_count.txt
-        └── fix_attempts.txt
-```
+## Commands
 
-## TUI Dashboard
+| Command | Purpose |
+|---|---|
+| `gate demo` | Replay the zero-credential signature scenario |
+| `gate init` / `gate add-repo` | Generate configuration and install the packaged workflow |
+| `gate up` / `gate up --headless` | Start the server with the TUI or headless integration mode |
+| `gate status` / `gate cancel` | Inspect or cancel live work |
+| `gate inspect-pr N --history` | Inspect durable review archives |
+| `gate audit contradictions` | Inspect post-hoc external-check contradictions |
+| `gate health` / `gate doctor` | Check runtime health and prerequisites |
+| `gate cleanup` / `gate prune` | Apply documented retention and worktree cleanup |
+| `gate update` | Print non-mutating `uv tool` and `pipx` upgrade guidance |
 
-The TUI runs inside tmux via `gate up`. Tokyo Night color scheme.
+The local Unix-socket protocol remains the internal control surface. The authenticated SSE adapter is an advanced headless integration API; Gate does not ship a web Flight Deck or browser dashboard.
 
-| Key | Action |
-|-----|--------|
-| `q` | Quit |
-| `r` | Refresh all panels |
-| `c` | Cancel selected review |
-| `d` | Show tmux pane capture for selected review |
-| `l` | Toggle log tail panel |
+## Advanced Labs
 
-**Panels:** Active reviews (with status icons), queue, recent reviews (last 8), health checks, live log tail, 24h metrics bar.
+Spec-test promotion and formal verification are experimental. `persist_spec_tests` remains false by default. Formal verification runs only when a verifier command is explicitly configured. Neither is part of normal setup, and both should be enabled first on low-risk repositories.
 
-## GitHub Labels
+## Architecture and protocol
 
-| Label | Effect |
-|-------|--------|
-| `gate-skip` | Skip review, auto-approve |
-| `gate-emergency-bypass` | Emergency bypass, auto-approve |
-| `gate-rerun` | Re-trigger a review (label is removed automatically after the review starts) |
-| `gate-no-fix` | Block the auto-fix pipeline for this PR — Gate still reviews but will not attempt any commits |
+- [Protocol v1 and SSE integration API](docs/protocol.md)
+- [Finding schema](docs/finding-schema.md)
+- [External checks and contradiction audit](docs/external-checks.md)
+- [Health and recovery](docs/health-and-recovery.md)
+- [Metrics and retention](docs/metrics.md)
+- [Notifications](docs/notifications.md)
+- [Remote terminal operation](docs/remote-access.md)
 
-Per-repo fix-pipeline knobs live in `gate.toml` (see
-`config/gate.toml.example`):
+Protocol v1 remains additive and backward compatible. Completed events may include `outcome = reviewed | skipped | cancelled | error | untrusted`; consumers can ignore it and continue using legacy `decision` values.
 
-- `fix_on_approve_with_notes` — run the polish loop on
-  `approve_with_notes` verdicts. Default `true`.
-- `graceful_noop_on_approve_with_notes` — when the fix pipeline
-  produces no diff, report success (no red check) instead of failure.
-  Default `true`.
-- `fix_polish_loop_enabled` — master switch for the hopper-style
-  per-finding polish loop. Set to `false` to fall back to the
-  monolithic `fix-senior` call. Default `true`.
-- `polish_loop_total_budget_s` / `polish_per_finding_timeout_seconds`
-  — wall-clock caps for the polish loop.
-
-## Operations
-
-### Cron Jobs
-
-```
-*/5 * * * *  gate health        → health monitoring + alerts
-0 9 * * *    gate digest        → daily metrics summary
-0 3 * * *    gate cleanup       → log rotation + worktree pruning
-```
-
-Ad-hoc:
-
-- `gate prune` — worktree-only pruning (safe to run any time; does not
-  touch logs or review state).
-- `gate prune --aggressive` — also removes worktrees that have no
-  active review marker regardless of age.
-
-### LaunchAgent (optional)
-
-By default Gate runs interactively inside tmux (`tmux new 'gate up'`,
-or `tmux new -d -s gate 'gate up'` for a detached session). If you want
-the server to auto-start on login and survive reboots, install it as a
-LaunchAgent instead:
+## Development
 
 ```bash
-# Install (auto-start on login)
-cp config/com.gate.server.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.gate.server.plist
-
-# Control
-launchctl unload ~/Library/LaunchAgents/com.gate.server.plist        # stop
-launchctl kickstart -k "gui/$(id -u)/com.gate.server"                # restart
-launchctl list | grep gate                                           # check
+git clone https://github.com/openlawteam/gate.git
+cd gate
+uv sync --frozen --all-extras
+uv run --frozen ruff format --check .
+uv run --frozen ruff check .
+uv run --frozen mypy gate
+uv run --frozen pytest -q
+make package
 ```
 
-If you're running directly in tmux instead, restart by sending `q` to
-the TUI (or `tmux send-keys -t gate q`) and re-running
-`tmux new -d -s gate 'gate up'`. Either path works; pick whichever
-matches how you launched Gate originally.
+The test floor is 70% coverage. macOS CI covers Python 3.11–3.14, plus package installation and demo smoke checks. See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/releasing.md](docs/releasing.md).
 
-### Remote Access
-
-```bash
-# SSH + tmux
-ssh your-gate-host
-tmux attach -t gate
-
-# Status check (no tmux needed)
-ssh your-gate-host gate status
-```
-
-## Troubleshooting
-
-| Problem | Fix |
-|---------|-----|
-| Server not running | `tmux new 'gate up'` |
-| Runner offline | `cd <runner-dir> && ./svc.sh start` |
-| Claude auth expired | `claude auth login --method browser` |
-| Circuit breaker tripped | Last 3 reviews were errors. Fix root cause; next success resets. |
-| Check stuck in_progress | `gate health` auto-cleans orphaned checks (fail-open) |
-| No notifications | Check `echo $GATE_NTFY_TOPIC` |
-| Disk filling up | `gate cleanup` |
-| Machine sleeping | `sudo pmset -a disablesleep 1` |
-| Prerequisites broken | `gate doctor` to diagnose |
-
-## Documentation
-
-- [health-and-recovery.md](docs/health-and-recovery.md) — Health checks, failure scenarios, recovery
-- [metrics.md](docs/metrics.md) — Review metrics, log schema, TUI metrics
-- [notifications.md](docs/notifications.md) — ntfy + Discord setup
-- [remote-access.md](docs/remote-access.md) — SSH, tmux, status commands
+Gate is licensed under the [MIT License](LICENSE).

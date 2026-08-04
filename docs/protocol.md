@@ -9,8 +9,7 @@ surfaces. There are two surfaces:
    network-reachable.
 2. **`/v1/events`** — HTTP Server-Sent Events stream exposed by
    `gate up --serve-events ADDR`. Re-broadcasts the AF_UNIX events to
-   external clients (e.g. the team dashboard) over HTTP, with bearer
-   token auth.
+   advanced headless integrations over HTTP, with bearer token auth.
 
 Schema versioning, the broadcast envelope, and every event/request type
 are documented below.
@@ -215,14 +214,19 @@ removed from the server's `reviews` list immediately after emission.
     "repo": "myorg/myrepo",
     "status": "completed",
     "decision": "approve",
+    "outcome": "reviewed",
     "updated_at": 1735927510221
   }
 }
 ```
 
-Payload field: `review`. The `status` is `completed` for a normal
-verdict and `stuck` if the reaper fired (review hadn't updated for
-> 1 hour).
+Payload field: `review`. The optional additive `outcome` is one of
+`reviewed`, `skipped`, `cancelled`, `error`, or `untrusted`. Existing
+consumers may ignore it. During protocol v1, the legacy `decision`
+values `error`, `skip`, and `cancelled` remain available; the TUI uses
+`outcome` when present and falls back to those decision values. The
+`status` is `completed` for a normal terminal record and `stuck` if
+the reaper fired (review had not updated for more than one hour).
 
 ### `review_cancelled`
 

@@ -13,9 +13,10 @@ A short description of what went wrong.
 ## Environment
 
 - Gate version / commit: <!-- `gate --version` or `git rev-parse --short HEAD` -->
-- Operating system: <!-- macOS 14.x, Ubuntu 22.04, etc. -->
+- macOS version: <!-- e.g. macOS 26.5 -->
+- Mac architecture: <!-- Apple Silicon or Intel -->
 - Python version: <!-- `python --version` -->
-- How Gate is running: <!-- `gate up` TUI, `gate up --headless`, or launched via LaunchAgent / systemd -->
+- How Gate is running: <!-- `gate demo`, `gate up` TUI, `gate up --headless`, or LaunchAgent -->
 
 ## Steps to Reproduce
 
@@ -37,8 +38,7 @@ What Gate actually did. Include full error messages.
 <summary>activity.log (last ~50 lines)</summary>
 
 ```
-# Paste from `~/Library/Application Support/gate/logs/activity.log` on macOS
-# or `~/.local/share/gate/logs/activity.log` on Linux.
+# Paste from `~/Library/Application Support/gate/logs/activity.log`.
 ```
 
 </details>

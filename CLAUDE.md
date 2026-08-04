@@ -10,8 +10,8 @@ Gate reviews GitHub PRs with a staged AI pipeline (triage -> build -> architectu
 
 - **Review**: one end-to-end pass over a PR head SHA, producing a structured `verdict.json`.
 - **Stage**: one step in the pipeline (triage, build, architecture, security, logic, verdict). Structured stages run inline; agent stages run in tmux windows.
-- **Gate**: a pre-stage check that can short-circuit to approve (labels, circuit breaker, fix-rerun, quota, cycle limit). The five gates live at the top of `orchestrator.run()`.
-- **Fix pipeline**: when the verdict is `request_changes`, Gate can spawn a second pass where Claude (senior) directs Codex (junior) through prep -> design -> implement -> audit -> commit.
+- **Gate**: a pre-stage check that can refuse, skip, or defer work (trust, labels, circuit breaker, quota, and cycle limit). Only explicit trusted-operator skip/bypass labels synthesize an approval.
+- **Fix pipeline**: when a repository explicitly sets `auto_fix = true`, an eligible verdict can spawn a second pass where Claude (senior) directs Codex (junior) through prep -> design -> implement -> audit -> commit.
 
 ## Architecture
 
@@ -40,9 +40,9 @@ GitHub PR
 
 Gate splits paths into three roles:
 
-- **`gate_dir()`** (`GATE_DIR`): the package install root. Ships with `prompts/`, `workflows/`, and default `config/` assets. Read-only at runtime.
+- **`gate_dir()`** (`GATE_DIR`): the packaged resource root. Ships with `prompts/`, `workflows/`, `demo/`, templates, and default `config/` assets. Read-only at runtime.
 - **`data_dir()`** (`GATE_DATA_DIR`, via `platformdirs.user_data_dir("gate")`): all mutable runtime state. On macOS this is `~/Library/Application Support/gate`. Contains `state/`, `logs/`, `server.sock`, `npm-cache/`.
-- **`config_dir`** for user config: currently `gate_dir() / "config" / "gate.toml"` (set up by `gate init`). Kept under the install tree so the user's edited TOML travels with the checkout.
+- **`config_file()`**: the canonical user configuration at `platformdirs.user_config_dir("gate") / "gate.toml"`, overridable with `GATE_CONFIG_PATH`. It never writes into the installed package.
 
 Both `GATE_DIR` and `GATE_DATA_DIR` are mutable module globals that tests monkeypatch through `tests/conftest.py`'s autouse `isolate_paths` fixture. Because of this, every helper that needs a runtime path (`state_dir()`, `logs_dir()`, `socket_path()`, `reviews_jsonl()`, `live_dir()`, `quota_cache_path()`, `prompts_dir()`) is a **function**, never a module-level constant. Adding a new path? Add a function, not `FOO = data_dir() / "foo"`.
 
@@ -53,7 +53,7 @@ All full-file writes go through `gate.io.atomic_write` / `atomic_write_bytes` (`
 Contributors need to know these before touching the hot paths:
 
 - **Server reviews list vs filesystem state.** `GateServer.reviews` is in-memory; `state/{slug}/prN/` is on disk. They can diverge if a review crashes mid-flight. `cleanup_orphans()` (run on startup) reconciles them via `active_review.json` markers and PID liveness checks. Never assume one mirrors the other.
-- **Fail-open is intentional.** Any exception in `orchestrator.run()` approves the PR with an error message rather than blocking it. This is documented in `docs/security.md`. If you add a new failure path, make sure the `except Exception` at the end of `run()` still catches it.
+- **Review execution fails closed.** Stage failures, unexpected exceptions, quota pauses, and circuit-breaker activation complete with an error outcome and never post an approval. Keep direct tests around every new failure path.
 - **Per-PR counter atomicity is queue-enforced.** `record_fix_attempt` does read-increment-write without file locks. Safe because `ReviewQueue` serialises work for a given `(repo, pr_number)` key. If you ever parallelise per-PR, put the locking back.
 - **Check run lifecycle is the safety net.** Revision 4 creates the check run **before** the first gate so that any crash leaves a "gate review failed" check that `cleanup_orphans()` can complete. Never move the `create_check_run` call later in the pipeline.
 - **tmux stuck detection is threaded.** The `ReviewRunner` monitor thread can kill a stage pane while the main thread is still reading its output. If you add new pane bookkeeping, guard it with `_panes_lock`.
@@ -80,21 +80,21 @@ Why resume-phase Codex is especially hidden: `_resume_fix_session` calls `claude
 ## Commands
 
 ```bash
-make install    # pip install -e ".[dev]"
-make test       # pytest (~1.5 min for ~600 tests)
-make ci         # ruff format + ruff check + pytest
-make lint       # ruff check
-make format     # ruff format
-pytest tests/test_orchestrator.py::TestCancel::test_cancel_sets_event_and_kills_panes
+make install    # uv sync --frozen --all-extras
+make test       # coverage-enforced full pytest suite
+make ci         # Ruff format/lint + full mypy + tests
+make lint       # frozen Ruff lint
+make format     # frozen Ruff format check
+uv run --frozen pytest -o addopts='' tests/test_orchestrator.py::TestCancel
 ```
 
 ## Development Principles
 
 - **Atomic writes for full rewrites.** Use `gate.io.atomic_write` rather than `Path.write_text` when the consumer should never see a partial file. JSONL appends are fine to stay append-mode.
 - **Env allowlist for subprocesses.** `build_claude_env()` in `config.py` is the single source of truth for what environment Claude subprocesses see. Add new env keys there, don't inherit `os.environ` ad hoc.
-- **Fail-open, alert loud.** Approvals on errors are OK; silent failures are not. Log to `activity.log` and emit a notification via `notify.review_failed` on any fail-open path.
+- **Fail closed, alert loudly.** Infrastructure errors must not post a PR review or approval. Persist an error archive, log to `activity.log`, and emit `notify.review_failed`.
 - **Test everything, mock everything.** The autouse `isolate_paths` fixture guarantees no test ever writes to real `~/Library/Application Support/gate` or the repo's `logs/`. If a test needs real paths, use the `real_gate_dir` fixture and scope the work carefully.
-- **Prompt injection guards.** Every review prompt starts with an "Important: Untrusted Content" block. When adding a new review stage, copy the block verbatim from `prompts/triage.md`.
+- **Prompt injection guards.** Every review prompt starts with an "Important: Untrusted Content" block. When adding a new review stage, copy the block verbatim from `gate/resources/prompts/triage.md`.
 
 ## File Layout
 
@@ -111,6 +111,8 @@ pytest tests/test_orchestrator.py::TestCancel::test_cancel_sets_event_and_kills_
 | `prompt.py` | Template loading, variable substitution |
 | `schemas.py` | Structured stage result types |
 | `state.py` | Per-PR state persistence + fix counters |
+| `review_store.py` | Typed live/archive/replay data sources |
+| `flight_recorder.py` | Historical evidence and deterministic replay TUI |
 | `logger.py` | `reviews.jsonl`, live logs, sidecar metadata |
 | `cleanup.py` | Log rotation, worktree pruning, orphan cleanup |
 | `health.py` | 13-check health system + alert cooldowns |

@@ -9,7 +9,7 @@ ssh your-gate-host
 tmux attach -t gate
 ```
 
-The TUI dashboard shows active reviews, queue, health, recent reviews, and log tail.
+The TUI shows active reviews, queue, stage progress, durable history, evidence, health, and logs.
 
 ### tmux Keybindings
 
@@ -18,8 +18,11 @@ The TUI dashboard shows active reviews, queue, health, recent reviews, and log t
 | `q` | Quit TUI (stops server) |
 | `r` | Refresh all panels |
 | `c` | Cancel selected review |
-| `d` | Show pane capture for selected review |
+| `d` / `h` | Dashboard / history |
+| `Enter` / `Esc` | Open review detail / return |
 | `l` | Toggle log tail panel |
+| `o` | Open the selected PR |
+| `?` | Help |
 | `Ctrl-b d` | Detach from tmux (leave running) |
 
 ## Quick Status (No tmux)
@@ -96,8 +99,8 @@ gate health
 gate doctor
 
 # Check server logs
-tail -f <gate-dir>/logs/activity.log
+tail -f "$HOME/Library/Application Support/gate/logs/activity.log"
 
 # Check specific PR
-cat <gate-dir>/logs/live/pr42.log
+find "$HOME/Library/Application Support/gate/logs/live" -name 'pr42.log' -print
 ```

@@ -2,7 +2,7 @@
 
 ## Review Log (`reviews.jsonl`)
 
-Every completed review appends a JSON line to `<gate-dir>/logs/reviews.jsonl`:
+Every completed review appends a JSON line to `~/Library/Application Support/gate/logs/reviews.jsonl`:
 
 ```json
 {
@@ -52,7 +52,7 @@ The TUI "Recent Reviews" panel shows the last 8 completed reviews with:
 Sent every morning at 9 AM via `gate digest` (cron):
 
 ```
-*/0 9 * * * gate digest
+0 9 * * * gate digest
 ```
 
 Sends a summary to ntfy + Discord with:
@@ -63,7 +63,7 @@ Sends a summary to ntfy + Discord with:
 
 ## Live Logs
 
-Per-PR live logs at `<gate-dir>/logs/live/prN.log` track real-time progress:
+Per-PR live logs at `~/Library/Application Support/gate/logs/live/<repo-slug>/prN.log` track real-time progress:
 
 ```
 [2024-04-13 10:30:00] [orchestrator] Review started sha=abc12345
@@ -78,7 +78,7 @@ The TUI log tail panel auto-follows the most recent active PR's log.
 
 ## Activity Log
 
-Server activity log at `<gate-dir>/logs/activity.log`. Captures all server events, client connections, and review lifecycle messages. Used by the TUI log tail as a fallback when no PR is active.
+The server activity log is `~/Library/Application Support/gate/logs/activity.log`. It captures server events, client connections, and review lifecycle messages, and supplies the TUI fallback log when no PR is active.
 
 ## Log Rotation
 

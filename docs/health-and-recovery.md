@@ -14,9 +14,9 @@ Gate runs 13 health checks every 5 minutes via `gate health` (cron). Issues trig
 | `tmux_session` | Checks `gate` tmux session exists | Manual: `tmux new 'gate up'` |
 | `gate_server` | Pings server via Unix socket | Manual: restart `gate up` |
 | `stuck_reviews` | Finds reviews exceeding `hard_timeout_s` | Logs warning |
-| `orphaned_checks` | Finds GitHub checks stuck `in_progress` with no process | Auto-completes check + auto-approves PR (fail-open) |
+| `orphaned_checks` | Finds GitHub checks stuck `in_progress` with no process | Completes the status as cancelled/failure and records cancellation; never approves |
 | `orphaned_windows` | Finds tmux windows with no active review | Auto-kills windows |
-| `circuit_breaker` | Checks if last 3 reviews were errors | Alerts; system auto-approves PRs until a success resets |
+| `circuit_breaker` | Checks if last 3 reviews were errors | Alerts and completes new attempts as errors; never approves |
 | `quota` | Checks Anthropic quota cache freshness | Alerts if stale (>30min) |
 | `quota_auth` | Verifies the Claude OAuth token still authenticates (Group 4A) | Alerts once/24h via `quota_auth_drift`; refresh token with `claude auth login` |
 | `recent_errors` | Counts errors in last 5 reviews | Alerts if >= 3 |
@@ -28,28 +28,28 @@ Gate runs 13 health checks every 5 minutes via `gate health` (cron). Issues trig
 gate health
 
 # Via cron (every 5 min)
-*/5 * * * * /path/to/gate health >> <gate-dir>/logs/health.log 2>&1
+*/5 * * * * /path/to/gate health >> "$HOME/Library/Application Support/gate/logs/health.log" 2>&1
 ```
 
 ## Orphaned Commit Status Recovery
 
 When the Python process crashes after creating a GitHub commit status but before completing it, the status blocks the PR forever. The orphaned status cleanup handles this:
 
-1. Scans `<gate-dir>/state/prN/active_review.json` files
+1. Scans the repository/PR folders under `~/Library/Application Support/gate/state/`
 2. For each: checks if the PID is still alive and the review is >60s old
-3. If PID is dead: completes the commit status as "cancelled", approves the PR (fail-open), sends alert
+3. If PID is dead: completes the commit status as cancelled/failure and sends an alert; no review is synthesized
 4. If PID is alive but exceeds `hard_timeout_s`: logs a warning
 
 ## Circuit Breaker
 
 Triggers when the last 3 consecutive reviews result in errors. When tripped:
-- All new PRs are auto-approved with a "circuit breaker" comment
+- New review attempts finish with an error outcome and a circuit-breaker explanation
 - ntfy alert sent at high priority
 - Resets automatically when the next review succeeds
 
 ## Alert Dedup
 
-Alert state persisted in `<gate-dir>/logs/.health-alert-state`. Each check type has a 1-hour cooldown — the same alert won't fire more than once per hour.
+Alert state is persisted in `~/Library/Application Support/gate/logs/.health-alert-state`. Each check type has a 1-hour cooldown — the same alert won't fire more than once per hour.
 
 ## Common Failure Scenarios
 
@@ -60,7 +60,7 @@ Alert state persisted in `<gate-dir>/logs/.health-alert-state`. Each check type 
 | GitHub API rate limit | Checks fail to create/complete | Wait for rate limit reset; quota check will defer reviews |
 | Disk full | Build failures, worktree creation fails | `gate cleanup` or `gate prune` (worktrees only) |
 | Network outage | GitHub API unreachable | Reviews queued; auto-retry on reconnection |
-| Claude OAuth drift | Reviews run but quota check silently fail-opens (`quota_auth` health check tripped) | `claude auth login` — alert latches for 24h then clears on next successful probe |
+| Claude OAuth drift | Quota monitoring uses its cached/monitoring fallback and raises `quota_auth` | `claude auth login` — alert latches for 24h then clears on the next successful probe |
 | Superseded review crashed mid-stage | `FileNotFoundError` on stage JSON write in logs | Benign — Group 2A suppresses the crash and Group 2B ensures the worktree is torn down once, not twice |
 | Stale worktree after crash | Disk fills up in `/tmp/gate-worktrees/` | `gate prune` (24h default) or `gate prune --aggressive` |
 

@@ -6,7 +6,8 @@ For deeper technical context and AI-coding-agent-specific guidance, see [CLAUDE.
 
 ## Prerequisites
 
-- Python 3.11 or 3.12 (CI runs both)
+- macOS with Python 3.11, 3.12, 3.13, or 3.14
+- [`uv`](https://docs.astral.sh/uv/) for the frozen development environment
 - [`tmux`](https://github.com/tmux/tmux) -- required for agent stage execution
 - [`gh`](https://cli.github.com/) -- GitHub CLI, used for every API call
 - [`claude`](https://claude.com/product/claude-code) -- Claude Code CLI, authenticated (OAuth or `CLAUDE_CODE_OAUTH_TOKEN`)
@@ -17,11 +18,11 @@ For deeper technical context and AI-coding-agent-specific guidance, see [CLAUDE.
 ```bash
 git clone https://github.com/openlawteam/gate.git
 cd gate
-pip install -e ".[dev]"
-make ci         # format + lint + test
+uv sync --frozen --all-extras
+make ci         # format + lint + full mypy + coverage-enforced tests
 ```
 
-`make install` runs `pip install -e ".[dev]"`. `make ci` chains `format + lint + test`; run it before every push.
+`make install` syncs the checked-in lockfile. `make ci` chains format checking, lint, full mypy, and the coverage-enforced test suite; run it before every push.
 
 ## Architecture in One Minute
 
@@ -39,8 +40,9 @@ See [CLAUDE.md](CLAUDE.md) for data flow, path conventions, shared-state hazards
 
 Gate splits paths into two roles (all exposed as **functions**, never constants, so tests can monkeypatch them):
 
-- `gate.config.gate_dir()` -- package install root (read-only at runtime: `prompts/`, `config/`, `workflows/`)
-- `gate.config.data_dir()` -- OS-native runtime root via `platformdirs` (state, logs, socket, caches)
+- `gate.config.gate_dir()` -- read-only packaged resources (`prompts/`, `config/`, `workflows/`, and `demo/`)
+- `gate.config.config_file()` -- canonical user config, with `GATE_CONFIG_PATH` override
+- `gate.config.data_dir()` -- mutable runtime state via `platformdirs` (state, logs, socket, caches)
 
 When adding a new runtime path, add a helper function in `gate/config.py` (or a module that already exposes one), not a module-level `FOO = data_dir() / "foo"`. Module-level evaluation freezes the path at import time and breaks test isolation.
 
@@ -48,23 +50,23 @@ When adding a new runtime path, add a helper function in `gate/config.py` (or a 
 
 ```bash
 make test                                            # full suite, ~2 min
-pytest tests/test_queue.py -q                        # one file
-pytest tests/test_orchestrator.py::TestCancel -v     # one class
+uv run --frozen pytest -o addopts='' tests/test_queue.py -q
+uv run --frozen pytest -o addopts='' tests/test_orchestrator.py::TestCancel -v
 ```
 
-The autouse `isolate_paths` fixture in [`tests/conftest.py`](tests/conftest.py) redirects both `GATE_DIR` and `GATE_DATA_DIR` to a per-test temp directory. Every test gets a clean fake filesystem -- no test ever writes to the real `~/Library/Application Support/gate` (macOS) or `~/.local/share/gate` (Linux). The complementary `clean_gate_env` autouse fixture strips `GATE_PAT`, `GATE_NTFY_TOPIC`, and similar env vars so tests default to an unconfigured shell.
+The autouse `isolate_paths` fixture in [`tests/conftest.py`](tests/conftest.py) redirects packaged resources, user configuration, legacy configuration, and runtime data to a per-test directory. Tests never write to the operator's real `~/Library/Application Support/gate`. The complementary environment fixture strips credentials and notification settings.
 
 If a test genuinely needs the real package directory (e.g. to validate a shipped prompt), request the `real_gate_dir` fixture.
 
 ## Adding a New Review Stage
 
-1. Write the prompt template as `prompts/<stage>.md` (include the "Untrusted Content" preamble).
+1. Write the prompt template as `gate/resources/prompts/<stage>.md` (include the "Untrusted Content" preamble).
 2. Register the stage name in `gate/schemas.py`:
    - Add to `ALLOWED_STAGES`.
    - Add to `AGENT_STAGES` or `STRUCTURED_STAGES`.
    - If structured, add a JSON schema entry to `STAGE_SCHEMAS`.
 3. Wire the stage into `ReviewOrchestrator.run()` in `gate/orchestrator.py`.
-4. Add a test in `tests/test_orchestrator.py` that exercises the new stage's happy path and at least one failure path (fail-open is important).
+4. Add a test in `tests/test_orchestrator.py` that exercises the happy path and at least one neutral/error path. Infrastructure failures must never approve.
 
 ## Adding a Language Profile
 
@@ -93,12 +95,12 @@ Use `gate.io.atomic_write` / `atomic_write_bytes` for any full-file rewrite (JSO
 - Run `make ci` locally before pushing.
 - Add tests for new behavior. Every new module must have a corresponding `test_<module>.py`.
 - Keep prompt changes small and focused. Prompts affect model behavior across every review.
-- Preserve the fail-open guarantee in `ReviewOrchestrator.run()`: an unhandled exception must approve the PR with an error message, never block it.
-- Don't update `config/gate.toml`, `config/cursor-rules.md`, or `config/fix-blocklist.txt` in a PR; those are user-local and gitignored. Ship example counterparts (`*.example.*`) instead.
+- Preserve the safety contract in `ReviewOrchestrator.run()`: untrusted forks are refused before execution, and infrastructure errors must never synthesize approval.
+- Keep runtime defaults under `gate/resources/`; never make an installed package write into its own `site-packages` directory.
 
 ## Continuous Integration
 
-[`.github/workflows/test.yml`](.github/workflows/test.yml) runs `ruff check gate/ tests/` and `pytest -q` on Ubuntu with Python 3.11 and 3.12 on every PR. Both Python versions must pass. The `.github/workflows/gate-review.yml` workflow is the self-hosted Gate review trigger and is not part of CI.
+[`.github/workflows/test.yml`](.github/workflows/test.yml) runs formatting, Ruff, full mypy, tests, and coverage on macOS with Python 3.11–3.14. It also installs the wheel outside the checkout and runs the demo smoke test. The Ubuntu 3.12 job is portable unit-test signal only, not a Linux support claim.
 
 ## Reporting Issues
 

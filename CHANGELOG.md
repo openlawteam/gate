@@ -4,6 +4,27 @@ All notable changes to Gate are recorded here. The system follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) conventions
 and [Semantic Versioning](https://semver.org/).
 
+## [0.1.0-rc1] - Unreleased
+
+### Added
+
+- macOS-first Flight Recorder TUI with live and durable review data sources, responsive layouts, pre/post-fix lineage, audit evidence, and deterministic replay controls.
+- Zero-credential `gate demo` and `gate demo --headless --json` using the bundled `risky-auth-refactor` scenario.
+- Installable `gate-review` wheel/sdist with prompts, defaults, workflows, templates, and demo resources included.
+- Canonical platform configuration path, `GATE_CONFIG_PATH`, and atomic one-time migration from legacy checkout-local configuration.
+- Typed stage/fix provider boundaries and additive protocol-v1 `outcome` records.
+
+### Security
+
+- Review-only is now the default; auto-fix requires `auto_fix = true` for the repository and remains overridable by `gate-no-fix`.
+- Cross-repository pull requests are refused before workspace or model execution, with no v0.1 bypass.
+- Unexpected errors, circuit-breaker activation, quota failures, and orphan cleanup no longer synthesize approval.
+
+### Changed
+
+- `gate update` is non-mutating and prints `uv tool`/`pipx` upgrade guidance.
+- Full mypy runs without module-wide ignores; CI enforces Ruff, 70% coverage, macOS Python 3.11–3.14, package smoke tests, and a non-supporting Ubuntu portability job.
+
 ## [Unreleased] — gate-a-plus-polish-b
 
 State-history + external-check integration (second half of the A+

@@ -61,11 +61,11 @@
 - Test classes: `Test<Feature>` (e.g., `TestLoadConfig`, `TestResolveRepoConfig`).
 - Mocking: `unittest.mock.patch` / `patch.object`; `return_value` / `side_effect`.
 - New features must include tests; new modules must have a corresponding `test_<module>.py`.
-- FLAG any test that calls `load_config()` without patching `GATE_DIR`.
+- FLAG any test that calls `load_config()` without isolating `config_file()`.
 
 ## 8. Code Style (Ruff enforced)
 
-- Python 3.12+; type hints on all public function signatures.
+- Python 3.11+; type hints on all public function signatures.
 - No relative imports — use `from gate.module import func` or `from gate import module`.
 - Line length: 100 characters (Ruff config).
 - `logger = logging.getLogger(__name__)` at module top level.
@@ -74,7 +74,7 @@
 
 ## 9. Prompt Templates
 
-- Prompt files live in `prompts/*.md`; loaded by `prompt.load(stage_name)`.
+- Prompt files live in `gate/resources/prompts/*.md`; loaded by `prompt.load(stage_name)`.
 - Template variables use `$snake_case` (substituted by `prompt.render`).
 - Changes to prompts alter model behavior across all reviews — treat as high-risk.
 - FLAG any hardcoded prompt text in Python source that should be in a template file.

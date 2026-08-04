@@ -70,7 +70,7 @@ def safe_substitute(template: str, vars: dict[str, str], caller: str = "") -> st
 def load(name: str) -> str:
     """Load a prompt template by name.
 
-    Looks for prompts/<name>.md in the gate directory.
+    Looks for ``prompts/<name>.md`` in Gate's packaged resources.
 
     Args:
         name: Prompt name (with or without .md extension).

@@ -1,22 +1,27 @@
-"""Configuration for Gate.
+"""Configuration and packaged-resource paths for Gate.
 
-``GATE_DIR`` is the package/install root (prompts, workflows, default config
-snippets). ``GATE_DATA_DIR`` is the OS-native runtime data root (state, logs,
-socket, caches) resolved via ``platformdirs``.
+Runtime resources ship inside :mod:`gate`, user configuration lives in the
+OS-native configuration directory, and mutable state lives in the OS-native
+data directory.  Keeping those three concerns separate is what makes a normal
+wheel installation work without writing into site-packages.
 
-Tests override ``GATE_DIR`` and ``GATE_DATA_DIR`` at runtime through the
-isolation fixture, which is why both are mutable module-level globals and why
-``gate_dir()`` / ``data_dir()`` are functions rather than constants.
+The module-level paths remain mutable so the test suite can isolate every test
+from the operator's real configuration and runtime data.
 """
 
 import os
 import tomllib
 from pathlib import Path
 
-from platformdirs import user_data_dir
+from platformdirs import user_config_dir, user_data_dir
 
-GATE_DIR = Path(__file__).resolve().parent.parent
+from gate.io import atomic_write
+
+GATE_PACKAGE_DIR = Path(__file__).resolve().parent
+GATE_DIR = GATE_PACKAGE_DIR / "resources"
 GATE_DATA_DIR = Path(user_data_dir("gate"))
+GATE_CONFIG_FILE = Path(user_config_dir("gate")) / "gate.toml"
+LEGACY_CONFIG_FILE = GATE_PACKAGE_DIR.parent / "config" / "gate.toml"
 
 MODEL_ALIASES = {
     "sonnet": "sonnet",
@@ -45,13 +50,38 @@ CLAUDE_ENV_KEYS = {
 
 
 def gate_dir() -> Path:
-    """Return the gate install/package root (prompts, workflows, defaults)."""
+    """Return the packaged resource root (prompts, workflows, defaults)."""
     return GATE_DIR
+
+
+def resource_path(*parts: str) -> Path:
+    """Return a path under Gate's installed resource directory."""
+    return gate_dir().joinpath(*parts)
+
+
+def resource_text(*parts: str) -> str:
+    """Read a UTF-8 packaged resource."""
+    return resource_path(*parts).read_text(encoding="utf-8")
+
+
+def copy_resource(parts: tuple[str, ...], destination: Path) -> None:
+    """Atomically copy a UTF-8 packaged resource to ``destination``."""
+    atomic_write(destination, resource_text(*parts))
 
 
 def data_dir() -> Path:
     """Return the OS-native runtime data directory (state, logs, socket)."""
     return GATE_DATA_DIR
+
+
+def config_file() -> Path:
+    """Return the canonical user configuration path.
+
+    ``GATE_CONFIG_PATH`` is intentionally resolved at call time so shells and
+    tests can override it without re-importing this module.
+    """
+    override = os.environ.get("GATE_CONFIG_PATH", "").strip()
+    return Path(override).expanduser() if override else GATE_CONFIG_FILE
 
 
 def state_dir() -> Path:
@@ -70,19 +100,37 @@ def socket_path() -> Path:
 
 
 def load_config() -> dict:
-    """Load configuration from config/gate.toml.
+    """Load the user configuration, migrating a legacy checkout file once.
 
     Returns merged config dict. Falls back to empty dict if file missing.
     """
-    config_file = gate_dir() / "config" / "gate.toml"
-    if not config_file.exists():
+    path = config_file()
+    if not path.exists() and LEGACY_CONFIG_FILE.exists():
+        try:
+            atomic_write(path, LEGACY_CONFIG_FILE.read_text(encoding="utf-8"))
+            import logging
+
+            logging.getLogger(__name__).info(
+                "Migrated legacy Gate config from %s to %s; the legacy file was left intact",
+                LEGACY_CONFIG_FILE,
+                path,
+            )
+        except OSError as e:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "Could not migrate legacy Gate config from %s: %s",
+                LEGACY_CONFIG_FILE,
+                e,
+            )
+    if not path.exists():
         return {}
     try:
-        return tomllib.loads(config_file.read_text())
+        return tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as e:
         import logging
 
-        logging.getLogger(__name__).warning(f"Invalid gate.toml: {e}, using defaults")
+        logging.getLogger(__name__).warning("Invalid %s: %s; using defaults", path, e)
         return {}
 
 

@@ -15,12 +15,15 @@ bot_account = "your-bot-account"
 # escalation_reviewers = "user1,user2"
 default_branch = "main"
 project_type = "node"   # node | python | go | rust | none
+# Gate reviews by default and never edits the PR branch unless this repository
+# explicitly opts in. The `gate-no-fix` label can still disable one fix run.
+auto_fix = false
 
 # Optional: per-repo cursor rules and fix blocklist
 # cursor_rules = "/path/to/config/cursor-rules.md"
 # fix_blocklist = "/path/to/config/fix-blocklist.txt"
 
-# --- Fix pipeline behavior (per-repo) ---
+# --- Fix pipeline behavior (per-repo; consulted only when auto_fix = true) ---
 # Whether to run the fix pipeline for `approve_with_notes` verdicts.
 # Default: true (preserves pre-1.1 behavior).
 # fix_on_approve_with_notes = true

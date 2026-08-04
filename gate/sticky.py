@@ -22,7 +22,7 @@ Identification:
 
 Rendering:
 
-* The default template ships at ``gate/templates/sticky.md.j2`` and is
+* The default template ships at ``gate/resources/templates/sticky.md.j2`` and is
   rendered with Jinja2.
 * Overrides use a search path: ``Path.cwd() / ".gate" / "templates"``
   → ``data_dir() / "templates"`` → the package default. The first hit
@@ -56,7 +56,7 @@ def _template_search_paths() -> list[Path]:
     return [
         Path.cwd() / ".gate" / "templates",
         data_dir() / "templates",
-        gate_dir() / "gate" / "templates",
+        gate_dir() / "templates",
     ]
 
 
@@ -140,26 +140,29 @@ _DECISION_LABELS: dict[str, str] = {
 }
 
 
-def render_sticky(verdict: dict, build: dict | None) -> str:
+def render_sticky(
+    verdict: dict,
+    build: dict | None,
+    *,
+    auto_fix_enabled: bool = False,
+) -> str:
     """Render the sticky comment markdown for a verdict + build pair.
 
     Importable for tests so the rendering logic is exercised without
     touching ``gh``. Includes :data:`STICKY_MARKER` as the first line.
     """
     from jinja2 import (
+        BaseLoader,
         ChoiceLoader,
         Environment,
         FileSystemLoader,
-        PackageLoader,
         select_autoescape,
     )
 
-    loaders = []
+    loaders: list[BaseLoader] = []
     for p in _template_search_paths():
         if p.exists():
             loaders.append(FileSystemLoader(str(p)))
-    loaders.append(PackageLoader("gate", "templates"))
-
     env = Environment(
         loader=ChoiceLoader(loaders),
         autoescape=select_autoescape(disabled_extensions=("md", "j2")),
@@ -188,6 +191,7 @@ def render_sticky(verdict: dict, build: dict | None) -> str:
         "has_non_blocking": bool(non_blocking),
         "build_summary": _summarise_build(build),
         "stats_line": _stats_line(verdict, len(blocking), len(non_blocking)),
+        "auto_fix_enabled": auto_fix_enabled,
         "updated_at": _dt.datetime.now(tz=_dt.UTC).strftime("%Y-%m-%d %H:%M UTC"),
     }
 
@@ -251,6 +255,8 @@ def upsert_sticky_summary(
     pr_number: int,
     verdict: dict,
     build: dict | None,
+    *,
+    auto_fix_enabled: bool = False,
 ) -> None:
     """Render and post (or update) the sticky summary for this PR.
 
@@ -264,7 +270,7 @@ def upsert_sticky_summary(
     """
     from gate.github import _gh
 
-    body = render_sticky(verdict, build)
+    body = render_sticky(verdict, build, auto_fix_enabled=auto_fix_enabled)
     existing_id = _find_sticky_comment(repo, pr_number)
 
     if existing_id is None:

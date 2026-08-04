@@ -3,13 +3,13 @@
 # Enforced in two layers: prompt instruction + post-agent git diff check.
 
 # Prompt templates (changes alter model behavior across all reviews)
-prompts/**
+gate/resources/prompts/**
 
 # Config files and templates (deployment-specific, operator-controlled)
-config/**
+gate/resources/config/**
 
 # GHA workflow templates
-workflows/**
+gate/resources/workflows/**
 
 # Build and project metadata
 pyproject.toml

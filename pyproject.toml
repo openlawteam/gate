@@ -3,12 +3,26 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "gate"
+name = "gate-review"
 version = "0.1.0"
-description = "AI-powered PR review system"
+description = "Local-first PR review control plane and flight recorder"
+readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Tribute Labs", email = "wally@tributelabs.xyz"}]
 requires-python = ">=3.11"
+keywords = ["code-review", "tui", "github", "claude", "codex"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Quality Assurance",
+]
 dependencies = [
     "textual>=1.0.0",
     "platformdirs",
@@ -17,8 +31,22 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio", "ruff", "mypy", "httpx", "fastapi", "uvicorn"]
 web = ["fastapi>=0.110", "uvicorn[standard]>=0.27"]
+
+[dependency-groups]
+dev = [
+    "build",
+    "fastapi",
+    "hatchling",
+    "httpx",
+    "mypy",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "ruff",
+    "twine",
+    "uvicorn",
+]
 
 [project.scripts]
 gate = "gate.cli:main"
@@ -28,6 +56,27 @@ gate-code = "gate.code:main"
 Homepage = "https://github.com/openlawteam/gate"
 Repository = "https://github.com/openlawteam/gate"
 Issues = "https://github.com/openlawteam/gate/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["gate"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/gate",
+    "/tests",
+    "/docs",
+    "/scripts",
+    "/.github",
+    "/README.md",
+    "/CONTRIBUTING.md",
+    "/CHANGELOG.md",
+    "/CODE_OF_CONDUCT.md",
+    "/SECURITY.md",
+    "/LICENSE",
+    "/Makefile",
+    "/pyproject.toml",
+    "/uv.lock",
+]
 
 [tool.ruff]
 line-length = 100
@@ -39,6 +88,7 @@ select = ["E", "F", "I", "W"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "--cov=gate --cov-report=term-missing:skip-covered --cov-fail-under=70"
 
 [tool.mypy]
 python_version = "3.11"
@@ -50,18 +100,3 @@ ignore_missing_imports = true
 # ``json.loads`` and the socket IPC layer both legitimately return ``Any``;
 # surfacing that on every function that wraps them is pure noise.
 disable_error_code = ["no-any-return"]
-
-# Modules with deeper structural type issues are ignored wholesale for now,
-# so the baseline passes and CI (once wired up in a follow-up) can enforce
-# "no regressions" on the remaining modules.
-[[tool.mypy.overrides]]
-module = [
-    "gate.client",
-    "gate.fixer",
-    "gate.orchestrator",
-    "gate.runner",
-    "gate.server",
-    "gate.state",
-    "gate.tui",
-]
-ignore_errors = true

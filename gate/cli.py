@@ -76,7 +76,8 @@ def cmd_init(args: list[str]) -> int:
     import tomllib
 
     from gate import setup
-    from gate.config import data_dir, gate_dir
+    from gate.config import config_file, data_dir
+    from gate.io import atomic_write
 
     parser = make_parser("init", "Set up Gate for a repository.")
     parser.add_argument("--force", action="store_true", help="Overwrite existing config")
@@ -137,6 +138,7 @@ def cmd_init(args: list[str]) -> int:
             "clone_path": parsed.clone_path,
             "default_branch": parsed.branch,
             "bot_account": bot,
+            "auto_fix": False,
             "worktree_base": parsed.worktree_base,
             "escalation_reviewers": "",
             "project_type": project_type,
@@ -146,7 +148,7 @@ def cmd_init(args: list[str]) -> int:
         repo_config = setup.prompt_repo_config()
         print()
 
-    config_path = gate_dir() / "config" / "gate.toml"
+    config_path = config_file()
     if config_path.exists() and not setup.is_placeholder_config(config_path) and not parsed.force:
         print(f"Config already exists at {config_path}")
         print("Use --force to overwrite, or use 'gate add-repo' to add another repository.")
@@ -159,8 +161,7 @@ def cmd_init(args: list[str]) -> int:
         print(f"error: generated config is invalid TOML: {e}")
         return 1
 
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(content)
+    atomic_write(config_path, content)
     print(f"Configuration written to {config_path}")
 
     print("\nEnvironment variables:\n")
@@ -172,13 +173,9 @@ def cmd_init(args: list[str]) -> int:
         (data_root / d).mkdir(parents=True, exist_ok=True)
     print(f"\nCreated runtime directories under {data_root}")
 
-    if parsed.non_interactive:
-        print("\nTo copy the workflow, run 'gate init' interactively")
-        print("or copy workflows/gate-review.yml manually.")
-    else:
-        print()
-        clone = Path(repo_config["clone_path"]).expanduser()
-        setup.copy_workflow(clone)
+    print()
+    clone = Path(repo_config["clone_path"]).expanduser()
+    setup.copy_workflow(clone, interactive=not parsed.non_interactive)
 
     print(f"""
 --- Setup complete ---
@@ -195,6 +192,17 @@ Next steps:
     return 0
 
 
+@command("demo", "Replay the zero-credential Flight Recorder demo")
+def cmd_demo(args: list[str]) -> int:
+    """Run Gate's bundled deterministic review scenario."""
+    from gate.demo import run
+
+    try:
+        return run(args)
+    except SystemExit as e:
+        return int(e.code or 0)
+
+
 @command("add-repo", "Add a repository to Gate", group="setup")
 def cmd_add_repo(args: list[str]) -> int:
     """Add another repository to an existing Gate configuration."""
@@ -202,7 +210,8 @@ def cmd_add_repo(args: list[str]) -> int:
     import tomllib
 
     from gate import setup
-    from gate.config import gate_dir, get_all_repos, load_config
+    from gate.config import config_file, get_all_repos, load_config
+    from gate.io import atomic_write
 
     parser = make_parser("add-repo", "Add a repository to Gate.")
     parser.add_argument(
@@ -231,7 +240,7 @@ def cmd_add_repo(args: list[str]) -> int:
         parser.print_usage()
         return 1
 
-    config_path = gate_dir() / "config" / "gate.toml"
+    config_path = config_file()
     if not config_path.exists():
         print("No config found. Run 'gate init' first.")
         return 1
@@ -267,6 +276,7 @@ def cmd_add_repo(args: list[str]) -> int:
             "clone_path": parsed.clone_path,
             "default_branch": parsed.branch,
             "bot_account": bot,
+            "auto_fix": False,
             "worktree_base": parsed.worktree_base,
             "escalation_reviewers": "",
             "project_type": project_type,
@@ -294,7 +304,7 @@ def cmd_add_repo(args: list[str]) -> int:
     _shutil.copy2(config_path, backup_path)
     print(f"Backed up config to {backup_path}")
 
-    config_path.write_text(content)
+    atomic_write(config_path, content)
     print(f"Added {new_repo['name']} to {config_path}")
     print(f"Config now has {len(all_repos)} repositories.")
 
@@ -431,7 +441,7 @@ def cmd_process(args: list[str]) -> int:
 
 @command("up", "Start server and TUI")
 def cmd_up(args: list[str]) -> int:
-    """Start the Gate server and TUI dashboard.
+    """Start the Gate server and primary TUI.
 
     With ``--serve-events ADDR`` (e.g. ``:7080`` or ``127.0.0.1:7080``)
     Gate also exposes its broadcast stream as Server-Sent Events on
@@ -462,7 +472,7 @@ def cmd_up(args: list[str]) -> int:
         metavar="ORIGIN",
         help=(
             "Allow CORS for ORIGIN on the SSE endpoint "
-            "(dev only; production serves dashboard same-origin)."
+            "for an explicitly configured headless integration client."
         ),
     )
     parser.add_argument(
@@ -714,7 +724,7 @@ def _inspect_pr_history(pr: int, repo: str, raw: bool) -> int:
         from rich.console import Console
         from rich.table import Table
     except ImportError:
-        print("rich not installed — install with: pip install -e '.[dev]'")
+        print("rich not installed — reinstall gate-review or run 'uv sync --frozen'")
         return 1
 
     console = Console()
@@ -816,7 +826,7 @@ def cmd_inspect_pr(args: list[str]) -> int:
         from rich.console import Console
         from rich.table import Table
     except ImportError:
-        print("rich not installed — install with: pip install -e '.[dev]'")
+        print("rich not installed — reinstall gate-review or run 'uv sync --frozen'")
         return 1
 
     from gate.schemas import Finding
@@ -1305,7 +1315,7 @@ def cmd_doctor(args: list[str]) -> int:
     import shutil
 
     from gate.client import ping
-    from gate.config import gate_dir, load_config
+    from gate.config import load_config
 
     checks: list[tuple[str, bool, str]] = []
 
@@ -1352,8 +1362,9 @@ def cmd_doctor(args: list[str]) -> int:
 
     checks.append(check_codex_auth())
 
-    gate_root = gate_dir()
-    config_path = gate_root / "config" / "gate.toml"
+    from gate.config import config_file, resource_path
+
+    config_path = config_file()
     if config_path.exists():
         try:
             load_config()
@@ -1363,7 +1374,7 @@ def cmd_doctor(args: list[str]) -> int:
     else:
         checks.append(("gate.toml", False, f"not found at {config_path}"))
 
-    prompts_dir = gate_root / "prompts"
+    prompts_dir = resource_path("prompts")
     if prompts_dir.exists():
         prompt_count = len(list(prompts_dir.glob("*.md")))
         checks.append(("prompts/", True, f"{prompt_count} files"))
@@ -1436,28 +1447,25 @@ def cmd_doctor(args: list[str]) -> int:
         return 0
 
 
-@command("update", "Pull latest code and reinstall")
+@command("update", "Show safe package update instructions")
 def cmd_update(args: list[str]) -> int:
-    """Pull latest gate code and reinstall the package."""
-    from gate.config import gate_dir
-
-    gate_root = gate_dir()
+    """Report the installed version and non-mutating upgrade commands."""
+    parser = make_parser("update", "Show safe package update instructions.")
     try:
-        subprocess.run(["git", "-C", str(gate_root), "pull"], check=True, timeout=120)
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-e", "."],
-            cwd=str(gate_root),
-            check=True,
-            timeout=120,
-        )
-        print("Gate updated successfully.")
+        parse_args(parser, args)
+    except SystemExit:
         return 0
-    except subprocess.TimeoutExpired:
-        print("Update timed out.")
+    except ArgumentError as e:
+        print(f"error: {e}")
+        parser.print_usage()
         return 1
-    except subprocess.CalledProcessError as e:
-        print(f"Update failed: {e}")
-        return 1
+
+    print(f"Gate {__version__} is installed.")
+    print("Gate does not modify its checkout or environment automatically.")
+    print("Upgrade with the tool you used to install it:")
+    print("  uv tool upgrade gate-review")
+    print("  pipx upgrade gate-review")
+    return 0
 
 
 @command(
@@ -1500,3 +1508,7 @@ def main() -> int:
 
     handler, *_ = COMMANDS[cmd]
     return handler(cmd_args)
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised by package smoke tests
+    raise SystemExit(main())

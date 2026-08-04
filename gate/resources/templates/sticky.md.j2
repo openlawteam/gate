@@ -13,6 +13,8 @@
 {{ summary }}
 {%- endif %}
 
+**Mode:** {% if auto_fix_enabled %}:wrench: Auto-fix opted in{% else %}:mag: Review only{% endif %}
+
 {%- if blocking_findings %}
 
 ### Blocking findings ({{ blocking_findings | length }})

@@ -1,9 +1,8 @@
 """HTTP/SSE adapter for the Gate event protocol.
 
-Re-broadcasts the AF_UNIX broadcast stream as Server-Sent Events over
-HTTP, so external clients (the team dashboard, custom tooling) can
-subscribe without speaking the AF_UNIX framing or running on the same
-machine.
+Re-broadcasts the AF_UNIX broadcast stream as an authenticated advanced
+headless integration API. External tooling can subscribe without speaking
+the AF_UNIX framing or running on the same machine.
 
 Design notes:
 
@@ -18,15 +17,13 @@ Design notes:
 * Auth is bearer-token-only and rejects ``token=`` querystrings
   explicitly so misconfigured clients fail loud rather than silently
   leaking the token into proxy access logs.
-* CORS is off by default (production deployment serves the dashboard
-  static bundle from the same FastAPI app — same-origin). The optional
-  ``cors_origin`` argument enables CORS for a single origin during
-  development.
+* CORS is off by default. The optional ``cors_origin`` argument enables
+  CORS for one explicitly configured integration origin.
 
 This module imports ``fastapi`` lazily inside :func:`create_app` so
 ``import gate.web_events`` does not pull in FastAPI for users who never
 run ``gate up --serve-events``. The ``web`` extra
-(``pip install gate[web]``) provides ``fastapi`` and ``uvicorn``.
+(``pip install gate-review[web]``) provides ``fastapi`` and ``uvicorn``.
 """
 
 from __future__ import annotations
@@ -466,7 +463,8 @@ def run_sse_server(
         import uvicorn
     except ImportError as e:
         raise ImportError(
-            "gate up --serve-events requires the 'web' extra. Install with: pip install 'gate[web]'"
+            "gate up --serve-events requires the 'web' extra. "
+            "Install with: pip install 'gate-review[web]'"
         ) from e
 
     host, port = _split_addr(addr)

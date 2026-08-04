@@ -2,7 +2,8 @@
 
 import sys
 import tomllib
-from unittest.mock import MagicMock, patch
+from pathlib import Path
+from unittest.mock import patch
 
 from gate.cli import (
     cmd_add_repo,
@@ -17,9 +18,9 @@ from gate.cli import (
 
 class TestCmdReview:
     @patch("gate.client.send_message")
-    @patch("gate.config.gate_dir")
+    @patch("gate.config.config_file")
     def test_sends_review_request(self, mock_gate_dir, mock_send, tmp_path):
-        mock_gate_dir.return_value = tmp_path
+        mock_gate_dir.return_value = tmp_path / "config" / "gate.toml"
         mock_send.return_value = {"type": "review_accepted", "pr_number": 42}
 
         result = cmd_review(
@@ -44,9 +45,9 @@ class TestCmdReview:
         assert msg["branch"] == "feature"
 
     @patch("gate.client.send_message")
-    @patch("gate.config.gate_dir")
+    @patch("gate.config.config_file")
     def test_server_unreachable(self, mock_gate_dir, mock_send, tmp_path):
-        mock_gate_dir.return_value = tmp_path
+        mock_gate_dir.return_value = tmp_path / "config" / "gate.toml"
         mock_send.return_value = None
 
         result = cmd_review(
@@ -64,10 +65,10 @@ class TestCmdReview:
         assert result == 1
 
     @patch("gate.client.send_message")
-    @patch("gate.config.gate_dir")
+    @patch("gate.config.config_file")
     def test_passes_expected_types_filter(self, mock_gate_dir, mock_send, tmp_path):
         """Regression: PR #216 — CLI must filter noise broadcasts (see client.send_message)."""
-        mock_gate_dir.return_value = tmp_path
+        mock_gate_dir.return_value = tmp_path / "config" / "gate.toml"
         mock_send.return_value = {"type": "review_accepted", "pr_number": 42}
 
         result = cmd_review(
@@ -90,9 +91,9 @@ class TestCmdReview:
 
 class TestCmdCancel:
     @patch("gate.client.send_message")
-    @patch("gate.config.gate_dir")
+    @patch("gate.config.config_file")
     def test_routes_through_socket(self, mock_gate_dir, mock_send, tmp_path):
-        mock_gate_dir.return_value = tmp_path
+        mock_gate_dir.return_value = tmp_path / "config" / "gate.toml"
         mock_send.return_value = {"type": "cancel_accepted", "cancelled": True, "pr_number": 42}
 
         result = cmd_cancel(["--pr", "42"])
@@ -103,9 +104,9 @@ class TestCmdCancel:
         assert msg["pr_number"] == 42
 
     @patch("gate.client.send_message")
-    @patch("gate.config.gate_dir")
+    @patch("gate.config.config_file")
     def test_cancel_with_repo(self, mock_gate_dir, mock_send, tmp_path):
-        mock_gate_dir.return_value = tmp_path
+        mock_gate_dir.return_value = tmp_path / "config" / "gate.toml"
         mock_send.return_value = {"type": "cancel_accepted", "cancelled": True, "pr_number": 42}
 
         result = cmd_cancel(["--pr", "42", "--repo", "org/repo"])
@@ -114,18 +115,18 @@ class TestCmdCancel:
         assert msg["repo"] == "org/repo"
 
     @patch("gate.client.send_message")
-    @patch("gate.config.gate_dir")
+    @patch("gate.config.config_file")
     def test_cancel_no_active_review(self, mock_gate_dir, mock_send, tmp_path):
-        mock_gate_dir.return_value = tmp_path
+        mock_gate_dir.return_value = tmp_path / "config" / "gate.toml"
         mock_send.return_value = {"type": "cancel_accepted", "cancelled": False, "pr_number": 99}
 
         result = cmd_cancel(["--pr", "99"])
         assert result == 0
 
     @patch("gate.client.send_message")
-    @patch("gate.config.gate_dir")
+    @patch("gate.config.config_file")
     def test_cancel_server_unreachable(self, mock_gate_dir, mock_send, tmp_path):
-        mock_gate_dir.return_value = tmp_path
+        mock_gate_dir.return_value = tmp_path / "config" / "gate.toml"
         mock_send.return_value = None
 
         result = cmd_cancel(["--pr", "42"])
@@ -151,9 +152,9 @@ class TestCmdInit:
     @patch("gate.setup.validate_env_vars", return_value=[("GATE_PAT", True, "set")])
     @patch("gate.setup.check_prerequisites", return_value=([], True))
     @patch("gate.setup.validate_clone_path", return_value=(True, "/tmp/repo"))
-    @patch("gate.config.gate_dir")
+    @patch("gate.config.config_file")
     def test_non_interactive(self, mock_dir, mock_val, mock_prereq, mock_env, mock_wf, tmp_path):
-        mock_dir.return_value = tmp_path
+        mock_dir.return_value = tmp_path / "config" / "gate.toml"
         (tmp_path / "config").mkdir(exist_ok=True)
 
         from gate.config import data_dir
@@ -176,18 +177,19 @@ class TestCmdInit:
         assert (runtime / "state").exists()
         assert (runtime / "logs").exists()
         assert (runtime / "logs" / "live").exists()
+        mock_wf.assert_called_once_with(Path("/tmp/repo"), interactive=False)
 
     @patch("gate.setup.check_prerequisites", return_value=([], True))
-    @patch("gate.config.gate_dir")
+    @patch("gate.config.config_file")
     def test_non_interactive_missing_repo(self, mock_dir, mock_prereq, tmp_path):
-        mock_dir.return_value = tmp_path
+        mock_dir.return_value = tmp_path / "config" / "gate.toml"
         result = cmd_init(["--non-interactive", "--clone-path", "/tmp/repo"])
         assert result == 1
 
     @patch("gate.setup.check_prerequisites", return_value=([], True))
-    @patch("gate.config.gate_dir")
+    @patch("gate.config.config_file")
     def test_non_interactive_missing_clone_path(self, mock_dir, mock_prereq, tmp_path):
-        mock_dir.return_value = tmp_path
+        mock_dir.return_value = tmp_path / "config" / "gate.toml"
         result = cmd_init(["--non-interactive", "--repo", "org/repo"])
         assert result == 1
 
@@ -195,11 +197,11 @@ class TestCmdInit:
     @patch("gate.setup.validate_env_vars", return_value=[])
     @patch("gate.setup.check_prerequisites", return_value=([], True))
     @patch("gate.setup.validate_clone_path", return_value=(True, "/tmp/repo"))
-    @patch("gate.config.gate_dir")
+    @patch("gate.config.config_file")
     def test_existing_config_without_force(
         self, mock_dir, mock_val, mock_prereq, mock_env, mock_wf, tmp_path
     ):
-        mock_dir.return_value = tmp_path
+        mock_dir.return_value = tmp_path / "config" / "gate.toml"
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         (config_dir / "gate.toml").write_text('[repo]\nname = "real/repo"\n')
@@ -220,11 +222,11 @@ class TestCmdInit:
     @patch("gate.setup.validate_env_vars", return_value=[])
     @patch("gate.setup.check_prerequisites", return_value=([], True))
     @patch("gate.setup.validate_clone_path", return_value=(True, "/tmp/repo"))
-    @patch("gate.config.gate_dir")
+    @patch("gate.config.config_file")
     def test_placeholder_config_overwritten(
         self, mock_dir, mock_val, mock_prereq, mock_env, mock_wf, tmp_path
     ):
-        mock_dir.return_value = tmp_path
+        mock_dir.return_value = tmp_path / "config" / "gate.toml"
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         (config_dir / "gate.toml").write_text('[repo]\nname = "your-org/your-repo"\n')
@@ -245,9 +247,9 @@ class TestCmdInit:
     @patch("gate.setup.validate_env_vars", return_value=[])
     @patch("gate.setup.check_prerequisites", return_value=([], True))
     @patch("gate.setup.validate_clone_path", return_value=(True, "/tmp/repo"))
-    @patch("gate.config.gate_dir")
+    @patch("gate.config.config_file")
     def test_force_overwrites(self, mock_dir, mock_val, mock_prereq, mock_env, mock_wf, tmp_path):
-        mock_dir.return_value = tmp_path
+        mock_dir.return_value = tmp_path / "config" / "gate.toml"
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         (config_dir / "gate.toml").write_text('[repo]\nname = "real/repo"\n')
@@ -265,9 +267,9 @@ class TestCmdInit:
         assert result == 0
         assert "org/repo" in (config_dir / "gate.toml").read_text()
 
-    @patch("gate.config.gate_dir")
+    @patch("gate.config.config_file")
     def test_prereq_failure(self, mock_dir, tmp_path):
-        mock_dir.return_value = tmp_path
+        mock_dir.return_value = tmp_path / "config" / "gate.toml"
         with patch(
             "gate.setup.check_prerequisites", return_value=([("git", False, "not found")], False)
         ):
@@ -299,9 +301,9 @@ class TestCmdAddRepo:
 
     @patch("gate.setup.copy_workflow", return_value=False)
     @patch("gate.setup.validate_clone_path", return_value=(True, "/tmp/newrepo"))
-    @patch("gate.config.gate_dir")
+    @patch("gate.config.config_file")
     def test_add_repo_creates_multi_repo(self, mock_dir, mock_val, mock_wf, tmp_path):
-        mock_dir.return_value = tmp_path
+        mock_dir.return_value = tmp_path / "config" / "gate.toml"
         self._write_single_repo_config(tmp_path / "config")
 
         result = cmd_add_repo(
@@ -324,9 +326,9 @@ class TestCmdAddRepo:
 
     @patch("gate.setup.copy_workflow", return_value=False)
     @patch("gate.setup.validate_clone_path", return_value=(True, "/tmp/newrepo"))
-    @patch("gate.config.gate_dir")
+    @patch("gate.config.config_file")
     def test_creates_backup(self, mock_dir, mock_val, mock_wf, tmp_path):
-        mock_dir.return_value = tmp_path
+        mock_dir.return_value = tmp_path / "config" / "gate.toml"
         self._write_single_repo_config(tmp_path / "config")
         original = (tmp_path / "config" / "gate.toml").read_text()
 
@@ -344,9 +346,9 @@ class TestCmdAddRepo:
         assert backup.read_text() == original
 
     @patch("gate.setup.validate_clone_path", return_value=(True, "/tmp/existing"))
-    @patch("gate.config.gate_dir")
+    @patch("gate.config.config_file")
     def test_duplicate_rejected(self, mock_dir, mock_val, tmp_path):
-        mock_dir.return_value = tmp_path
+        mock_dir.return_value = tmp_path / "config" / "gate.toml"
         self._write_single_repo_config(tmp_path / "config")
 
         result = cmd_add_repo(
@@ -360,9 +362,9 @@ class TestCmdAddRepo:
         )
         assert result == 1
 
-    @patch("gate.config.gate_dir")
+    @patch("gate.config.config_file")
     def test_no_config_file(self, mock_dir, tmp_path):
-        mock_dir.return_value = tmp_path
+        mock_dir.return_value = tmp_path / "config" / "gate.toml"
         (tmp_path / "config").mkdir()
         result = cmd_add_repo(
             [
@@ -375,9 +377,9 @@ class TestCmdAddRepo:
         )
         assert result == 1
 
-    @patch("gate.config.gate_dir")
+    @patch("gate.config.config_file")
     def test_placeholder_config_rejected(self, mock_dir, tmp_path):
-        mock_dir.return_value = tmp_path
+        mock_dir.return_value = tmp_path / "config" / "gate.toml"
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         (config_dir / "gate.toml").write_text('[repo]\nname = "your-org/your-repo"\n')
@@ -395,9 +397,9 @@ class TestCmdAddRepo:
 
     @patch("gate.setup.copy_workflow", return_value=False)
     @patch("gate.setup.validate_clone_path", return_value=(True, "/tmp/newrepo"))
-    @patch("gate.config.gate_dir")
+    @patch("gate.config.config_file")
     def test_global_sections_preserved(self, mock_dir, mock_val, mock_wf, tmp_path):
-        mock_dir.return_value = tmp_path
+        mock_dir.return_value = tmp_path / "config" / "gate.toml"
         self._write_single_repo_config(tmp_path / "config")
 
         cmd_add_repo(
@@ -418,9 +420,9 @@ class TestCmdAddRepo:
 
 class TestCmdDoctor:
     @patch("gate.config.load_config")
-    @patch("gate.config.gate_dir")
+    @patch("gate.config.config_file")
     def test_doctor_returns_structured(self, mock_gate_dir, mock_config, tmp_path):
-        mock_gate_dir.return_value = tmp_path
+        mock_gate_dir.return_value = tmp_path / "config" / "gate.toml"
         mock_config.return_value = {
             "repo": {"name": "test/repo", "clone_path": str(tmp_path)},
         }
@@ -762,34 +764,21 @@ class TestDoctorCommand:
 
 class TestUpdateCommand:
     @patch("gate.cli.subprocess.run")
-    def test_update_runs_git_pull_and_pip(self, mock_run, capsys):
+    def test_update_is_non_mutating(self, mock_run, capsys):
         from gate.cli import cmd_update
 
-        mock_run.return_value = MagicMock(returncode=0)
-        cmd_update([])
-        # Two subprocess.run calls: git pull, pip install -e
-        assert mock_run.call_count == 2
+        assert cmd_update([]) == 0
+        mock_run.assert_not_called()
+        output = capsys.readouterr().out
+        assert "uv tool upgrade gate-review" in output
+        assert "pipx upgrade gate-review" in output
 
-    @patch("gate.cli.subprocess.run")
-    def test_update_handles_timeout(self, mock_run, capsys):
-        import subprocess as _sub
-
+    def test_update_rejects_arguments(self, capsys):
         from gate.cli import cmd_update
 
-        mock_run.side_effect = _sub.TimeoutExpired("git", 120)
-        result = cmd_update([])
+        result = cmd_update(["--unknown"])
         assert result == 1
-        assert "timed out" in capsys.readouterr().out.lower()
-
-    @patch("gate.cli.subprocess.run")
-    def test_update_handles_error(self, mock_run, capsys):
-        import subprocess as _sub
-
-        from gate.cli import cmd_update
-
-        mock_run.side_effect = _sub.CalledProcessError(1, "git")
-        result = cmd_update([])
-        assert result == 1
+        assert "error" in capsys.readouterr().out.lower()
 
 
 class TestAddRepoValidation:

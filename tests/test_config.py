@@ -8,12 +8,15 @@ import pytest
 
 from gate.config import (
     build_claude_env,
+    config_file,
+    copy_resource,
     gate_dir,
     get_all_repos,
     get_repo_config,
     load_config,
     repo_slug,
     resolve_repo_config,
+    resource_text,
 )
 
 
@@ -23,45 +26,68 @@ class TestGateDir:
         assert isinstance(result, Path)
 
     def test_is_parent_of_gate_package(self, real_gate_dir):
-        assert (real_gate_dir / "gate" / "__init__.py").exists()
+        assert (real_gate_dir / "prompts" / "triage.md").exists()
 
 
-_has_config = bool(load_config())
-
-
-@pytest.mark.skipif(not _has_config, reason="gate.toml not found")
 class TestLoadConfig:
-    def test_loads_toml(self):
+    def test_loads_toml(self, tmp_path, monkeypatch):
+        path = tmp_path / "gate.toml"
+        path.write_text(
+            '[repo]\nname = "org/repo"\n'
+            '[models]\ntriage = "sonnet"\nsecurity = "opus"\n'
+            "[timeouts]\nagent_stage_s = 2400\nstructured_stage_s = 600\n"
+            "[retry]\nmax_retries = 4\nbase_delay_s = 60\n"
+            "[limits]\nmax_review_cycles = 5\nmax_diff_bytes = 512000\n"
+        )
+        monkeypatch.setattr("gate.config.GATE_CONFIG_FILE", path)
         config = load_config()
         assert isinstance(config, dict)
-        assert "repos" in config
-        assert len(config["repos"]) > 0
-        assert config["repos"][0]["name"]
-
-    def test_models_section(self):
-        config = load_config()
+        assert config["repo"]["name"] == "org/repo"
         assert config["models"]["triage"] == "sonnet"
         assert config["models"]["security"] == "opus"
-
-    def test_timeouts_section(self):
-        config = load_config()
         assert config["timeouts"]["agent_stage_s"] == 2400
         assert config["timeouts"]["structured_stage_s"] == 600
-
-    def test_retry_section(self):
-        config = load_config()
         assert config["retry"]["max_retries"] == 4
         assert config["retry"]["base_delay_s"] == 60
-
-    def test_limits_section(self):
-        config = load_config()
         assert config["limits"]["max_review_cycles"] == 5
         assert config["limits"]["max_diff_bytes"] == 512000
 
     def test_missing_config_returns_empty(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("gate.config.GATE_DIR", tmp_path)
+        monkeypatch.setattr("gate.config.GATE_CONFIG_FILE", tmp_path / "missing.toml")
         config = load_config()
         assert config == {}
+
+    def test_config_path_environment_override(self, tmp_path, monkeypatch):
+        override = tmp_path / "custom.toml"
+        monkeypatch.setenv("GATE_CONFIG_PATH", str(override))
+        assert config_file() == override
+
+    def test_migrates_legacy_config_without_removing_it(self, tmp_path, monkeypatch):
+        legacy = tmp_path / "legacy" / "config" / "gate.toml"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text('[repo]\nname = "org/repo"\n')
+        destination = tmp_path / "user" / "gate.toml"
+        monkeypatch.setattr("gate.config.LEGACY_CONFIG_FILE", legacy)
+        monkeypatch.setattr("gate.config.GATE_CONFIG_FILE", destination)
+
+        assert load_config()["repo"]["name"] == "org/repo"
+        assert destination.exists()
+        assert legacy.exists()
+
+
+class TestPackagedResources:
+    def test_reads_prompt(self, real_gate_dir):
+        assert "triage" in resource_text("prompts", "triage.md").lower()
+
+    def test_atomically_copies_workflow(self, tmp_path, real_gate_dir):
+        destination = tmp_path / "gate-review.yml"
+        copy_resource(("workflows", "gate-review.yml"), destination)
+        workflow = destination.read_text()
+        assert "gate review" in workflow
+        assert "github.event.pull_request.head.repo.full_name == github.repository" in workflow
+        assert "GATE_BRANCH: ${{ github.event.pull_request.head.ref }}" in workflow
+        assert '--branch "$GATE_BRANCH"' in workflow
+        assert '--labels "$GATE_LABELS"' in workflow
 
 
 class TestRepoSlug:
@@ -105,8 +131,6 @@ class TestGetRepoConfig:
         assert cfg["clone_path"] == "~/test-repo"
 
     def test_not_found(self, sample_config):
-        import pytest
-
         with pytest.raises(ValueError, match="No config found"):
             get_repo_config("nonexistent/repo", sample_config)
 
@@ -127,8 +151,6 @@ class TestResolveRepoConfig:
         assert resolved["repo"]["bot_account"] == "bot-a"
 
     def test_not_found_raises(self, sample_config):
-        import pytest
-
         with pytest.raises(ValueError):
             resolve_repo_config("nonexistent/repo", sample_config)
 

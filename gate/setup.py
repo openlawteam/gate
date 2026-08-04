@@ -9,7 +9,7 @@ import tomllib
 from pathlib import Path
 
 from gate import profiles
-from gate.config import gate_dir
+from gate.config import copy_resource, gate_dir
 
 _REQUIRED_TOOLS = [
     ("git", ["git", "--version"]),
@@ -68,6 +68,7 @@ _MULTI_REPO_DOCS = """\
 # clone_path = "~/repo-a"
 # default_branch = "main"
 # bot_account = "gate-bot"
+# auto_fix = false          # review-only by default; opt in per repository
 # escalation_reviewers = ""
 # project_type = "node"    # auto-detected: node, python, go, rust, none
 # cursor_rules = ""        # optional, defaults to config/cursor-rules.md
@@ -289,6 +290,7 @@ def prompt_repo_config(defaults: dict | None = None) -> dict:
         "clone_path": clone,
         "default_branch": branch,
         "bot_account": bot,
+        "auto_fix": False,
         "worktree_base": wt_base,
         "escalation_reviewers": defaults.get("escalation_reviewers", ""),
         "project_type": project_type,
@@ -300,6 +302,7 @@ _REPO_KEY_ORDER = [
     "clone_path",
     "worktree_base",
     "bot_account",
+    "auto_fix",
     "escalation_reviewers",
     "default_branch",
     "project_type",
@@ -478,8 +481,7 @@ def copy_workflow(clone_path: Path, interactive: bool = True) -> bool:
         if answer not in ("y", "yes"):
             return False
 
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(source.read_text())
+    copy_resource(("workflows", "gate-review.yml"), target)
     print(f"  Workflow copied to {target}")
     print("  Remember to commit and push this file in your repository.")
     return True

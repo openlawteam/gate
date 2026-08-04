@@ -2,19 +2,18 @@
 
 Isolation model (adopted from Hopper's conftest):
 
-The autouse ``isolate_paths`` fixture redirects BOTH the install/package
-directory (``GATE_DIR``) and the runtime data directory (``GATE_DATA_DIR``)
-to per-test temp dirs. Every test gets its own fake filesystem, so:
+The autouse ``isolate_paths`` fixture redirects packaged resources, user
+configuration, the legacy migration source, and runtime data to per-test temp
+directories. Every test gets its own fake filesystem, so:
 
 - No test ever writes to the real ``~/Library/Application Support/gate``
   (macOS) or ``~/.local/share/gate`` (Linux) runtime directory.
-- No test ever writes to the real repo's ``config/`` or ``logs/`` tree.
+- No test ever writes to the operator's real config or logs tree.
 - Tests are function-scoped: each test gets a fresh temp dir with no
   cross-contamination.
 
-The fixture copies the real ``config/gate.toml`` into the fake install dir
-(if present) so tests that load config still see reasonable defaults. A
-minimal ``prompts/`` is also mirrored so prompt-loading tests keep working.
+A minimal ``prompts/`` resource tree is mirrored so prompt-loading tests keep
+working.
 
 If a test needs the *real* package directory (e.g. to validate that a
 shipped prompt parses), request the ``real_gate_dir`` fixture.
@@ -43,6 +42,8 @@ import gate.config
 
 REAL_GATE_DIR = gate.config.GATE_DIR
 REAL_DATA_DIR = gate.config.GATE_DATA_DIR
+REAL_CONFIG_FILE = gate.config.GATE_CONFIG_FILE
+REAL_LEGACY_CONFIG_FILE = gate.config.LEGACY_CONFIG_FILE
 
 
 @pytest.fixture(autouse=True)
@@ -54,23 +55,16 @@ def isolate_paths(tmp_path, monkeypatch):
     """
     fake_install = tmp_path / "install"
     fake_data = tmp_path / "data"
-    (fake_install / "config").mkdir(parents=True)
-    (fake_install / "prompts").mkdir(parents=True)
+    fake_config = fake_install / "config" / "gate.toml"
+    fake_legacy_config = tmp_path / "legacy" / "config" / "gate.toml"
+    shutil.copytree(REAL_GATE_DIR, fake_install, dirs_exist_ok=True)
     (fake_data / "state").mkdir(parents=True)
     (fake_data / "logs").mkdir(parents=True)
 
-    toml_src = REAL_GATE_DIR / "config" / "gate.toml"
-    if toml_src.exists():
-        (fake_install / "config" / "gate.toml").write_text(toml_src.read_text())
-
-    real_prompts = REAL_GATE_DIR / "prompts"
-    if real_prompts.exists():
-        for entry in real_prompts.iterdir():
-            if entry.is_file() and entry.suffix == ".md":
-                shutil.copy2(entry, fake_install / "prompts" / entry.name)
-
     monkeypatch.setattr(gate.config, "GATE_DIR", fake_install)
     monkeypatch.setattr(gate.config, "GATE_DATA_DIR", fake_data)
+    monkeypatch.setattr(gate.config, "GATE_CONFIG_FILE", fake_config)
+    monkeypatch.setattr(gate.config, "LEGACY_CONFIG_FILE", fake_legacy_config)
     yield tmp_path
 
 
@@ -90,6 +84,7 @@ def clean_gate_env(monkeypatch):
         "GATE_DISCORD_WEBHOOK",
         "GATE_CODEX_THREAD_ID",
         "GATE_FIX_WORKSPACE",
+        "GATE_CONFIG_PATH",
         "CLAUDE_CODE_OAUTH_TOKEN",
     ):
         monkeypatch.delenv(var, raising=False)

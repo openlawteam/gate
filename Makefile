@@ -1,19 +1,26 @@
-.PHONY: install test lint format typecheck ci start restart doctor
+.PHONY: install test lint format typecheck package ci start restart doctor
 
 install:
-	pip install -e ".[dev]"
+	uv sync --frozen --all-extras
 
 test:
-	pytest
+	uv run --frozen pytest
 
 lint:
-	ruff check gate/ tests/
+	uv run --frozen ruff check .
 
 format:
-	ruff format gate/ tests/
+	uv run --frozen ruff format --check .
+
+format-fix:
+	uv run --frozen ruff format .
 
 typecheck:
-	mypy gate/
+	uv run --frozen mypy gate
+
+package:
+	uv build --no-build-isolation --clear
+	uv run --frozen twine check dist/*
 
 ci: format lint typecheck test
 

@@ -21,7 +21,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from gate.github import PullRequestTrust
 from gate.orchestrator import ReviewOrchestrator
+from gate.schemas import StageResult
 
 
 def _mocks():
@@ -78,6 +80,14 @@ def mocks():
     github._wait_for_connectivity.return_value = True
     github.create_check_run.return_value = 1
     github.get_pr_info.return_value = {"title": "test", "body": "body", "user": {"login": "author"}}
+    github.get_pr_trust.return_value = PullRequestTrust(
+        base_repository="test-org/test-repo",
+        head_repository="test-org/test-repo",
+        head_sha="",
+        author_login="author",
+        author_association="MEMBER",
+        is_cross_repository=False,
+    )
     state.load_prior_review.return_value = {
         "has_prior": False,
         "review_count": 0,
@@ -503,6 +513,9 @@ class TestLabelGates:
         orch.run()
         mocks["workspace_mod"].create_worktree.assert_not_called()
         mocks["builder"].run_build.assert_not_called()
+        terminal = mocks["state"].persist_terminal_review.call_args.kwargs
+        assert terminal["outcome"] == "skipped"
+        assert terminal["decision"] == "skip"
 
     def test_emergency_bypass_label(self, sample_config, mocks):
         orch = ReviewOrchestrator(
@@ -558,10 +571,58 @@ class TestCircuitBreakerGate:
             config=sample_config,
         )
         orch.run()
-        mocks["github"].approve_pr.assert_called_once()
-        msg = mocks["github"].approve_pr.call_args[0][2]
-        assert "circuit breaker" in msg.lower()
+        mocks["github"].approve_pr.assert_not_called()
+        completed = mocks["github"].complete_check_run.call_args
+        assert completed.kwargs["conclusion"] == "error"
+        assert "No review decision" in completed.kwargs["output_summary"]
         mocks["notify"].circuit_breaker.assert_called_once()
+        mocks["state"].persist_terminal_review.assert_called_once()
+
+
+class TestTrustedSourceGate:
+    def test_fork_refused_before_workspace_or_models(self, sample_config, mocks):
+        mocks["github"].get_pr_trust.return_value = PullRequestTrust(
+            base_repository="test-org/test-repo",
+            head_repository="external/test-repo",
+            head_sha="abc123",
+            author_login="external",
+            author_association="NONE",
+            is_cross_repository=True,
+        )
+        orch = ReviewOrchestrator(
+            pr_number=22,
+            repo="test-org/test-repo",
+            head_sha="abc123",
+            event="synchronize",
+            branch="fork-branch",
+            labels=["gate-skip"],
+            config=sample_config,
+        )
+
+        orch.run()
+
+        mocks["workspace_mod"].create_worktree.assert_not_called()
+        mocks["spawn_review_stage"].assert_not_called()
+        mocks["github"].approve_pr.assert_not_called()
+        completed = mocks["github"].complete_check_run.call_args
+        assert completed.kwargs["conclusion"] == "action_required"
+        mocks["state"].persist_terminal_review.assert_called_once()
+
+
+class TestAutoFixPolicy:
+    def test_review_only_is_default(self, sample_config):
+        orch = ReviewOrchestrator(1, "o/r", "sha", "sync", "branch", [], sample_config)
+        assert orch._should_fix({"decision": "request_changes"}) is False
+
+    def test_explicit_opt_in_enables_fix(self, sample_config):
+        config = {**sample_config, "repo": {**sample_config["repo"], "auto_fix": True}}
+        orch = ReviewOrchestrator(1, "o/r", "sha", "sync", "branch", [], config)
+        assert orch._should_fix({"decision": "request_changes"}) is True
+
+    def test_gate_no_fix_overrides_opt_in(self, sample_config):
+        config = {**sample_config, "repo": {**sample_config["repo"], "auto_fix": True}}
+        orch = ReviewOrchestrator(1, "o/r", "sha", "sync", "branch", ["gate-no-fix"], config)
+        assert orch._should_fix({"decision": "request_changes"}) is False
 
     def test_mixed_decisions_does_not_trip(self, sample_config, mocks):
         mocks["read_recent_decisions"].return_value = ["approve", "error", "error"]
@@ -588,7 +649,7 @@ class TestCircuitBreakerGate:
 
 
 class TestQuotaGate:
-    def test_quota_not_ok_approves_and_defers(self, sample_config, mocks):
+    def test_quota_not_ok_defers_without_approval(self, sample_config, mocks):
         mocks["quota_mod"].check_quota.return_value = {
             "quota_ok": False,
             "five_hour_pct": 95,
@@ -605,19 +666,18 @@ class TestQuotaGate:
             config=sample_config,
         )
         orch.run()
-        # Should approve and comment, no stages run
         mocks["github"].comment_pr.assert_called()
-        mocks["github"].approve_pr.assert_called_once()
-        msg = mocks["github"].approve_pr.call_args[0][2]
-        assert "quota" in msg.lower()
+        mocks["github"].approve_pr.assert_not_called()
         mocks["builder"].run_build.assert_not_called()
+        assert mocks["github"].complete_check_run.call_args.kwargs["conclusion"] == "error"
+        mocks["state"].persist_terminal_review.assert_called_once()
 
 
 # ── Gate 5: Cycle limit ──────────────────────────────────────
 
 
 class TestCycleLimitGate:
-    def test_cycle_limit_reached_approves(self, sample_config, mocks):
+    def test_cycle_limit_reached_skips_without_approval(self, sample_config, mocks):
         mocks["state"].load_prior_review.return_value = {
             "has_prior": True,
             "prior_decision": "approve",
@@ -634,10 +694,10 @@ class TestCycleLimitGate:
             config=sample_config,
         )
         orch.run()
-        mocks["github"].approve_pr.assert_called_once()
-        msg = mocks["github"].approve_pr.call_args[0][2]
-        assert "cycle limit" in msg.lower()
+        mocks["github"].approve_pr.assert_not_called()
+        assert "cycle limit" in mocks["github"].comment_pr.call_args.args[2].lower()
         mocks["builder"].run_build.assert_not_called()
+        assert mocks["state"].persist_terminal_review.call_args.kwargs["outcome"] == "skipped"
 
     def test_under_limit_proceeds(self, sample_config, mocks):
         """Under the cycle limit, the cycle gate does NOT short-circuit.
@@ -674,8 +734,71 @@ class TestCycleLimitGate:
 # ── Fail-open ────────────────────────────────────────────────
 
 
-class TestFailOpen:
-    def test_exception_approves_fail_open(self, sample_config, mocks):
+class TestFailNeutral:
+    def test_archive_failure_blocks_github_verdict(self, sample_config, mocks, tmp_path):
+        mocks["workspace_mod"].create_worktree.return_value = tmp_path
+        mocks["builder"].run_build.return_value = {"overall_pass": True}
+        mocks["state"].persist_review_state.return_value = None
+        stage_runner = MagicMock()
+        stage_runner.run.side_effect = [
+            StageResult(
+                stage="triage",
+                success=True,
+                data={"fast_track_eligible": True, "risk_level": "low"},
+            ),
+            StageResult(
+                stage="verdict",
+                success=True,
+                data={
+                    "decision": "approve",
+                    "summary": "clean",
+                    "findings": [],
+                    "stats": {"total_findings": 0},
+                },
+            ),
+        ]
+        orch = ReviewOrchestrator(
+            pr_number=97,
+            repo="test-org/test-repo",
+            head_sha="fff997",
+            event="synchronize",
+            branch="archive-failure",
+            labels=[],
+            config=sample_config,
+            stage_runner=stage_runner,
+        )
+
+        orch.run()
+
+        mocks["github"].post_review.assert_not_called()
+        mocks["github"].approve_pr.assert_not_called()
+        assert mocks["github"].complete_check_run.call_args.kwargs["conclusion"] == "error"
+        mocks["state"].persist_terminal_review.assert_called_once()
+
+    def test_stage_failure_never_posts_review_or_approval(self, sample_config, mocks, tmp_path):
+        mocks["workspace_mod"].create_worktree.return_value = tmp_path
+        stage_runner = MagicMock()
+        stage_runner.run.return_value = StageResult.fallback("triage")
+        orch = ReviewOrchestrator(
+            pr_number=98,
+            repo="test-org/test-repo",
+            head_sha="fff998",
+            event="synchronize",
+            branch="boom",
+            labels=[],
+            config=sample_config,
+            stage_runner=stage_runner,
+        )
+
+        orch.run()
+
+        mocks["builder"].run_build.assert_not_called()
+        mocks["github"].post_review.assert_not_called()
+        mocks["github"].approve_pr.assert_not_called()
+        mocks["state"].persist_terminal_review.assert_called_once()
+        assert mocks["github"].complete_check_run.call_args.kwargs["conclusion"] == "error"
+
+    def test_exception_never_approves(self, sample_config, mocks):
         mocks["github"].get_pr_info.side_effect = RuntimeError("API exploded")
         orch = ReviewOrchestrator(
             pr_number=99,
@@ -687,13 +810,12 @@ class TestFailOpen:
             config=sample_config,
         )
         orch.run()
-        mocks["github"].approve_pr.assert_called_once()
-        msg = mocks["github"].approve_pr.call_args[0][2]
-        assert "error" in msg.lower() or "fail" in msg.lower()
+        mocks["github"].approve_pr.assert_not_called()
         mocks["notify"].review_failed.assert_called_once()
+        mocks["state"].persist_terminal_review.assert_called_once()
 
-    def test_exception_completes_check_run_cancelled(self, sample_config, mocks):
-        mocks["github"].get_pr_info.side_effect = RuntimeError("boom")
+    def test_exception_completes_existing_check_run_as_error(self, sample_config, mocks):
+        mocks["workspace_mod"].create_worktree.side_effect = RuntimeError("boom")
         orch = ReviewOrchestrator(
             pr_number=99,
             repo="test-org/test-repo",
@@ -704,9 +826,9 @@ class TestFailOpen:
             config=sample_config,
         )
         orch.run()
-        # check run should be completed with cancelled
         calls = mocks["github"].complete_check_run.call_args_list
-        assert any(call.kwargs.get("conclusion") == "cancelled" for call in calls)
+        assert any(call.kwargs.get("conclusion") == "error" for call in calls)
+        mocks["github"].approve_pr.assert_not_called()
 
     def test_exception_removes_workspace(self, sample_config, mocks):
         mocks["github"].get_pr_info.side_effect = RuntimeError("boom")
@@ -1001,7 +1123,7 @@ class TestExternalChecksHook:
         assert mutated is False
         assert verdict["decision"] == "approve"
 
-    def test_fetch_exception_fails_open(self, orchestrator, sample_config):
+    def test_fetch_exception_fails_closed(self, orchestrator, sample_config):
         orchestrator.config = self._cfg_with_required(sample_config, ["Vercel"])
         verdict = {"decision": "approve", "findings": []}
         with patch(
@@ -1009,8 +1131,9 @@ class TestExternalChecksHook:
             side_effect=RuntimeError("boom"),
         ):
             mutated = orchestrator._consult_external_checks(verdict)
-        assert mutated is False
-        assert verdict["decision"] == "approve"
+        assert mutated is True
+        assert verdict["decision"] == "request_changes"
+        assert verdict["findings"][0]["rule_source"] == "external:fetch_error"
 
     def test_record_contradiction_writes_file(
         self,

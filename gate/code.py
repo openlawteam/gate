@@ -234,7 +234,7 @@ def main() -> int:
             signal.signal(_sig, _handle_signal)
         except (ValueError, OSError):
             # ValueError: handler installation from a non-main thread.
-            # OSError: platform doesn't support the signal (not macOS/Linux).
+            # OSError: this platform does not support the signal.
             # Either way, the runner's pkill sweep (Fix 2d) is the backstop.
             pass
 

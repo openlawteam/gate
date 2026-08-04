@@ -1195,7 +1195,7 @@ class FixPipeline:
         verdict: dict,
         build: dict,
         config: dict,
-        check_run_id: int | None = None,
+        check_run_id: str | int | None = None,
         cancelled: threading.Event | None = None,
         socket_path: Path | None = None,
         review_id: str = "",
@@ -1226,6 +1226,7 @@ class FixPipeline:
         # are chosen so polish_legacy callers serialise nothing new.
         self._fix_start_monotonic: float = 0.0
         self._runaway_guard_hit: bool = False
+        self._polish_context: list[dict] = []
 
     def _emit_fix_stage(self, stage: str) -> None:
         """Emit a fix stage update to the server (no-op if no connection)."""
@@ -1986,8 +1987,8 @@ class FixPipeline:
         try:
             template = prompt.load("fix-rereview")
         except FileNotFoundError:
-            logger.warning("fix-rereview prompt not found, auto-passing")
-            return True
+            logger.error("fix-rereview prompt not found; refusing to commit")
+            return False
 
         vars_dict = prompt.build_vars(self.workspace, "fix-rereview", {}, self.config)
         assembled = prompt.safe_substitute(template, vars_dict, "fixer-rereview")
@@ -2008,7 +2009,7 @@ class FixPipeline:
         # Write result
         (self.workspace / "fix-rereview.json").write_text(json.dumps(result.data, indent=2))
 
-        passed = result.data.get("pass") is not False
+        passed = result.success and result.data.get("pass") is True
         logger.info(f"Re-review: {'pass' if passed else 'fail'}")
         return passed
 
@@ -2460,6 +2461,7 @@ class FixPipeline:
         return FixResult(
             success=True,
             pushed=True,
+            pushed_sha=new_sha,
             summary=summary,
             fixed_count=fixed_count,
             not_fixed_count=not_fixed_count,

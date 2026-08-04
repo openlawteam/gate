@@ -21,13 +21,16 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from gate import prompt
 from gate.config import build_claude_env
 from gate.extract import extract_stage_output, validate_introduced_by_pr
 from gate.schemas import STAGE_EFFORT, STAGE_SCHEMAS, StageResult, build_fallback
 from gate.tmux import capture_pane, get_current_pane_id, rename_window, send_keys
+
+if TYPE_CHECKING:
+    from gate.client import GateConnection
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +92,7 @@ class ReviewRunner:
         self.workspace = workspace
         self.config = config
         self.socket_path = socket_path
-        self.connection = None  # GateConnection, Phase 4
+        self.connection: GateConnection | None = None
 
         self._prompt_text: str = ""
         self._session_id: str = ""

@@ -292,7 +292,7 @@ class TestRunWithRetry:
 
         with patch("gate.runner.time.sleep"):
             result = run_with_retry(lambda: fail, "triage", sample_config)
-        assert result.success is True  # fallback is fail-open
+        assert result.success is False
         assert result.data["flags"] == ["triage_fallback"]
 
     def test_stops_on_non_retryable_error(self, sample_config):
@@ -304,7 +304,7 @@ class TestRunWithRetry:
 
         result = run_with_retry(run_fn, "triage", sample_config)
         assert call_count[0] == 1  # no retries
-        assert result.success is True  # fallback
+        assert result.success is False
 
     def test_cancelled_result_not_retried(self, sample_config):
         cancelled = StageResult(stage="triage", success=False, cancelled=True)

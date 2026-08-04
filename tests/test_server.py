@@ -222,6 +222,64 @@ class TestReviewLifecycle:
         time.sleep(0.15)
         assert len(server.reviews) == 0
 
+    def test_review_completed_adds_outcome_without_breaking_legacy_decision(self, running_server):
+        server, _ = running_server
+        subscriber = server.subscribe()
+        server.enqueue(
+            {
+                "type": "review_started",
+                "review": {"id": "legacy", "pr_number": 2, "status": "running"},
+            }
+        )
+        time.sleep(0.1)
+        server.enqueue(
+            {
+                "type": "review_completed",
+                "review_id": "legacy",
+                "decision": "request_changes",
+            }
+        )
+        deadline = time.time() + 2
+        completed = None
+        while time.time() < deadline:
+            event = subscriber.get(timeout=1)
+            if event.get("type") == "review_completed":
+                completed = event
+                break
+        assert completed is not None
+        assert completed["v"] == 1
+        assert completed["review"]["decision"] == "request_changes"
+        assert completed["review"]["outcome"] == "reviewed"
+
+    def test_review_completed_preserves_explicit_untrusted_outcome(self, running_server):
+        server, _ = running_server
+        subscriber = server.subscribe()
+        server.enqueue(
+            {
+                "type": "review_started",
+                "review": {"id": "fork", "pr_number": 9, "status": "running"},
+            }
+        )
+        time.sleep(0.1)
+        server.enqueue(
+            {
+                "type": "review_completed",
+                "review_id": "fork",
+                "decision": "error",
+                "outcome": "untrusted",
+            }
+        )
+        deadline = time.time() + 2
+        completed = None
+        while time.time() < deadline:
+            event = subscriber.get(timeout=1)
+            if event.get("type") == "review_completed":
+                completed = event
+                break
+        assert completed is not None
+        assert completed["review"]["decision"] == "error"
+        assert completed["review"]["outcome"] == "untrusted"
+
     def test_review_cancelled_removes_from_list(self, running_server):
         server, _ = running_server
         server.enqueue(

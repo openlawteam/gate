@@ -119,9 +119,9 @@ class TestBuildFallback:
         assert fb["fast_track_eligible"] is False
         assert "triage_fallback" in fb["flags"]
 
-    def test_verdict_fallback_approves(self):
+    def test_verdict_fallback_fails_closed(self):
         fb = build_fallback("verdict")
-        assert fb["decision"] == "approve"
+        assert fb["decision"] == "error"
         assert fb["confidence"] == "low"
         assert fb["findings"] == []
         assert fb["error"] == "stage_failed"
@@ -130,7 +130,7 @@ class TestBuildFallback:
         fb = build_fallback("fix")
         assert fb["fixed"] == []
         assert fb["not_fixed"] == []
-        assert fb["pass"] is True
+        assert fb["pass"] is False
 
     def test_fix_plan_fallback(self):
         fb = build_fallback("fix-plan")
@@ -138,7 +138,7 @@ class TestBuildFallback:
 
     def test_fix_polish_fallback(self):
         fb = build_fallback("fix-polish")
-        assert fb["clean"] is True
+        assert fb["clean"] is False
 
     def test_postconditions_fallback_is_empty(self):
         fb = build_fallback("postconditions")
@@ -149,7 +149,7 @@ class TestBuildFallback:
         for stage in ["architecture", "security", "logic"]:
             fb = build_fallback(stage)
             assert fb["findings"] == []
-            assert fb["pass"] is True
+            assert fb["pass"] is False
             assert fb["error"] == "stage_failed"
 
     def test_all_fallbacks_are_json_serializable(self):
@@ -168,7 +168,7 @@ class TestStageResult:
 
     def test_fallback(self):
         r = StageResult.fallback("triage")
-        assert r.success is True
+        assert r.success is False
         assert r.data["change_type"] == "mixed"
 
     def test_quota_exhausted(self):

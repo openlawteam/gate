@@ -14,8 +14,36 @@ from gate.github import (
     comment_pr,
     complete_check_run,
     create_check_run,
+    get_pr_trust,
     post_review,
 )
+
+
+class TestPullRequestTrust:
+    @patch("gate.github._gh")
+    def test_same_repository_branch_is_trusted(self, mock_gh):
+        mock_gh.return_value = """{
+          "base": {"repo": {"full_name": "openlawteam/gate"}},
+          "head": {"repo": {"full_name": "openlawteam/gate"}, "sha": "abc123"},
+          "user": {"login": "maintainer"},
+          "author_association": "MEMBER"
+        }"""
+        trust = get_pr_trust("openlawteam/gate", 42)
+        assert trust.is_trusted_for("openlawteam/gate") is True
+        assert trust.is_cross_repository is False
+        assert trust.head_sha == "abc123"
+
+    @patch("gate.github._gh")
+    def test_fork_is_untrusted(self, mock_gh):
+        mock_gh.return_value = """{
+          "base": {"repo": {"full_name": "openlawteam/gate"}},
+          "head": {"repo": {"full_name": "attacker/gate"}, "sha": "bad123"},
+          "user": {"login": "external"},
+          "author_association": "NONE"
+        }"""
+        trust = get_pr_trust("openlawteam/gate", 9)
+        assert trust.is_trusted_for("openlawteam/gate") is False
+        assert trust.is_cross_repository is True
 
 
 class TestWaitForConnectivity:
@@ -353,6 +381,19 @@ class TestCompleteCheckRun:
         assert "state=failure" in args
 
     @patch("gate.github._gh")
+    def test_maps_infrastructure_error_to_error_state(self, mock_gh):
+        mock_gh.return_value = ""
+        complete_check_run(
+            "owner/repo",
+            "gate-review",
+            conclusion="error",
+            output_title="Gate Review: error",
+            sha="abc1234",
+        )
+        args = mock_gh.call_args.args[0]
+        assert "state=error" in args
+
+    @patch("gate.github._gh")
     def test_truncates_long_title_in_description(self, mock_gh):
         mock_gh.return_value = ""
         long_title = "x" * 200
@@ -481,7 +522,7 @@ class TestPostReview:
         args = mock_comment.call_args.args
         assert args[:2] == ("owner/repo", 42)
         assert "Changes requested" in args[2]
-        mock_sticky.assert_called_once_with("owner/repo", 42, verdict, None)
+        mock_sticky.assert_called_once_with("owner/repo", 42, verdict, None, auto_fix_enabled=False)
 
     # ── Bot-authored PR routing (audit P2.3) ─────────────────
 

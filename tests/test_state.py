@@ -8,9 +8,12 @@ from gate.state import (
     cleanup_pr_state,
     get_fix_attempts,
     get_pr_state_dir,
+    load_fix_lineage,
     load_prior_review,
     persist_review_state,
+    persist_terminal_review,
     record_fix_attempt,
+    record_fix_lineage,
 )
 
 
@@ -33,6 +36,74 @@ class TestGetPrStateDir:
             d1 = get_pr_state_dir(42, repo="org/repo-a")
             d2 = get_pr_state_dir(42, repo="org/repo-b")
             assert d1 != d2
+
+
+class TestFlightRecorderState:
+    def test_terminal_outcome_has_v1_metadata(self, tmp_path):
+        with patch("gate.state.state_dir", lambda: tmp_path):
+            ref = persist_terminal_review(
+                42,
+                "abc12345",
+                repo="org/repo",
+                outcome="untrusted",
+                decision="error",
+                summary="fork refused",
+                duration_s=0.25,
+            )
+            assert ref is not None
+            log = json.loads((ref.path / "stage_log.json").read_text())
+            assert log["schema_version"] == 1
+            assert log["outcome"] == "untrusted"
+            assert log["repo"] == "org/repo"
+            assert log["pr_number"] == 42
+            assert log["started_at"]
+
+    def test_terminal_archives_never_rewrite_same_second(self, tmp_path):
+        with (
+            patch("gate.state.state_dir", lambda: tmp_path),
+            patch("gate.state._archive_dir_name", return_value="same-sha-pre-fix"),
+        ):
+            first = persist_terminal_review(
+                42,
+                "sha",
+                repo="org/repo",
+                outcome="error",
+                decision="error",
+                summary="first",
+            )
+            second = persist_terminal_review(
+                42,
+                "sha",
+                repo="org/repo",
+                outcome="error",
+                decision="error",
+                summary="second",
+            )
+        assert first is not None and second is not None
+        assert first.path != second.path
+        assert json.loads((first.path / "verdict.json").read_text())["summary"] == "first"
+        assert json.loads((second.path / "verdict.json").read_text())["summary"] == "second"
+        assert (
+            json.loads((first.path / "stage_log.json").read_text())["review_id"] == first.review_id
+        )
+        assert (
+            json.loads((second.path / "stage_log.json").read_text())["review_id"]
+            == second.review_id
+        )
+
+    def test_fix_lineage_round_trip(self, tmp_path):
+        with patch("gate.state.state_dir", lambda: tmp_path):
+            record_fix_lineage(
+                42,
+                "fixed-sha",
+                "source-review",
+                repo="org/repo",
+                checkpoint_summary="bounded auth fix",
+            )
+            lineage = load_fix_lineage(42, "fixed-sha", "org/repo")
+            assert lineage is not None
+            assert lineage["source_review_id"] == "source-review"
+            assert lineage["checkpoint_summary"] == "bounded auth fix"
 
 
 class TestLoadPriorReview:

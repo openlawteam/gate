@@ -5,7 +5,7 @@
     ``fix-senior.md`` + ``gate checkpoint`` (see Part 3 of the gate
     hardening plan). Kept for rollback + bake-in only — slated for
     deletion ~2 weeks after hopper mode stabilises in production. The
-    retirement checklist (``fixer_polish.py``, ``prompts/fix-polish.md``,
+    retirement checklist (``fixer_polish.py``, ``gate/resources/prompts/fix-polish.md``,
     ``fixer._run_polish_path``, ``_reprompt_trivial_skips``, the
     ``fix_polish_loop_enabled`` / ``polish_per_finding_timeout_seconds``
     / ``polish_loop_total_budget_s`` config keys, and related tests)

@@ -30,18 +30,26 @@ jobs:
     if: >-
       github.event.pull_request.draft == false &&
       github.event.action != 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
       (github.event.action != 'labeled' ||
        github.event.label.name == 'gate-rerun')
     steps:
       - name: Dispatch to Gate
+        env:
+          GATE_PR_NUMBER: ${{ github.event.pull_request.number }}
+          GATE_REPOSITORY: ${{ github.repository }}
+          GATE_EVENT: ${{ github.event.action }}
+          GATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GATE_BRANCH: ${{ github.event.pull_request.head.ref }}
+          GATE_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         run: |
           gate review \
-            --pr "${{ github.event.pull_request.number }}" \
-            --repo "${{ github.repository }}" \
-            --event "${{ github.event.action }}" \
-            --head-sha "${{ github.event.pull_request.head.sha }}" \
-            --branch "${{ github.event.pull_request.head.ref }}" \
-            --labels "${{ join(github.event.pull_request.labels.*.name, ',') }}"
+            --pr "$GATE_PR_NUMBER" \
+            --repo "$GATE_REPOSITORY" \
+            --event "$GATE_EVENT" \
+            --head-sha "$GATE_HEAD_SHA" \
+            --branch "$GATE_BRANCH" \
+            --labels "$GATE_LABELS"
 
   cleanup:
     runs-on: [self-hosted, macos, gate-reviewer]

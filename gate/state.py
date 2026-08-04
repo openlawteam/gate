@@ -26,6 +26,7 @@ import logging
 import shutil
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,14 @@ _ARCHIVED_STAGE_FILES: tuple[str, ...] = (
     "security.json",
     "logic.json",
 )
+
+
+@dataclass(frozen=True)
+class ReviewArchiveRef:
+    """Stable reference to one immutable review archive."""
+
+    review_id: str
+    path: Path
 
 
 def get_pr_state_dir(pr_number: int, repo: str = "", create: bool = True) -> Path:
@@ -100,6 +109,7 @@ def load_prior_review(pr_number: int, workspace: Path, repo: str = "") -> dict:
     except (OSError, ValueError):
         pass
 
+    result: dict[str, Any]
     if not verdict:
         result = {"has_prior": False, "review_count": review_count, "fix_attempts": fix_attempts}
         atomic_write(output_path, json.dumps(result, indent=2))
@@ -151,6 +161,21 @@ def _archive_dir_name(sha: str, is_post_fix_rereview: bool) -> str:
     return f"{ts}-{short_sha}-{suffix}"
 
 
+def _reserve_archive_dir(reviews_root: Path, archive_name: str) -> Path:
+    """Create a new archive directory without ever reopening history."""
+    candidate = archive_name
+    timestamp, remainder = archive_name.split("-", 1)
+    counter = 1
+    while True:
+        path = reviews_root / candidate
+        try:
+            path.mkdir(parents=True, exist_ok=False)
+            return path
+        except FileExistsError:
+            counter += 1
+            candidate = f"{timestamp}_{counter:02d}-{remainder}"
+
+
 def _write_stage_log(
     archive_path: Path,
     workspace: Path,
@@ -158,6 +183,11 @@ def _write_stage_log(
     sha: str,
     decision: str | None,
     is_post_fix_rereview: bool,
+    *,
+    repo: str,
+    pr_number: int,
+    outcome: str,
+    parent_review_id: str | None,
 ) -> None:
     """Write a stage_log.json summary for the archived review.
 
@@ -189,8 +219,27 @@ def _write_stage_log(
             "pass": stage_doc.get("pass"),
             "exit_code": stage_doc.get("exit_code"),
         }
+    completed_at = _dt.datetime.now(tz=_dt.UTC)
+    duration_s = verdict.get("review_time_seconds")
+    try:
+        duration = float(duration_s) if duration_s is not None else None
+    except (TypeError, ValueError):
+        duration = None
+    started_at = completed_at - _dt.timedelta(seconds=duration) if duration is not None else None
     summary = {
-        "written_at": _dt.datetime.now(tz=_dt.UTC).isoformat(),
+        "schema_version": 1,
+        "review_id": archive_path.name,
+        "repo": repo,
+        "pr_number": pr_number,
+        "head_sha": sha,
+        "started_at": started_at.isoformat() if started_at else None,
+        "completed_at": completed_at.isoformat(),
+        "duration_s": duration,
+        "outcome": outcome,
+        "phase": "post-fix" if is_post_fix_rereview else "pre-fix",
+        "parent_review_id": parent_review_id,
+        "audit_flags": list(verdict.get("audit_flags") or []),
+        "written_at": completed_at.isoformat(),
         "sha": sha,
         "decision": decision or verdict.get("decision"),
         "is_post_fix_rereview": is_post_fix_rereview,
@@ -208,7 +257,9 @@ def persist_review_state(
     clone_path: str | Path | None = None,
     repo: str = "",
     is_post_fix_rereview: bool = False,
-) -> None:
+    outcome: str = "reviewed",
+    parent_review_id: str | None = None,
+) -> ReviewArchiveRef | None:
     """Save review state after completion.
 
     Ported from persist-review-state.js. Writes current-state pointers
@@ -223,7 +274,7 @@ def persist_review_state(
 
     if not verdict_path.exists():
         logger.warning(f"No verdict.json in workspace for PR #{pr_number}")
-        return
+        return None
 
     verdict = json.loads(verdict_path.read_text())
 
@@ -240,12 +291,12 @@ def persist_review_state(
     # Per-review archive (PR B.1). Best-effort — a failure here must
     # never block the current-state pointer writes above, because those
     # pointers are what live consumers (fixer, github renderer) read.
+    archive_ref: ReviewArchiveRef | None = None
     try:
         reviews_root = pr_state_dir / "reviews"
         reviews_root.mkdir(parents=True, exist_ok=True)
         archive_name = _archive_dir_name(sha, is_post_fix_rereview)
-        archive_path = reviews_root / archive_name
-        archive_path.mkdir(parents=True, exist_ok=True)
+        archive_path = _reserve_archive_dir(reviews_root, archive_name)
         atomic_write(archive_path / "verdict.json", json.dumps(verdict, indent=2))
         for filename in _ARCHIVED_STAGE_FILES:
             src = workspace / filename
@@ -261,7 +312,12 @@ def persist_review_state(
             sha,
             decision,
             is_post_fix_rereview,
+            repo=repo,
+            pr_number=pr_number,
+            outcome=outcome,
+            parent_review_id=parent_review_id,
         )
+        archive_ref = ReviewArchiveRef(archive_path.name, archive_path)
     except OSError as e:
         logger.warning(
             f"PR #{pr_number}: per-review archive failed ({e}); "
@@ -304,7 +360,7 @@ def persist_review_state(
             atomic_write(count_path, "1")
             atomic_write(fix_count_path, "0")
             logger.info(f"PR #{pr_number}: force push detected, counters reset")
-            return
+            return archive_ref
 
     count = 0
     try:
@@ -317,6 +373,92 @@ def persist_review_state(
         f"PR #{pr_number}: state persisted, review #{count + 1}, "
         f"decision={verdict.get('decision', '?')}"
     )
+    return archive_ref
+
+
+def persist_terminal_review(
+    pr_number: int,
+    sha: str,
+    *,
+    repo: str,
+    outcome: str,
+    decision: str,
+    summary: str,
+    duration_s: float | None = None,
+) -> ReviewArchiveRef | None:
+    """Persist a terminal pre-workspace outcome such as an untrusted fork."""
+    pr_state_dir = get_pr_state_dir(pr_number, repo)
+    try:
+        archive_name = _archive_dir_name(sha, False)
+        archive_path = _reserve_archive_dir(pr_state_dir / "reviews", archive_name)
+        verdict: dict[str, Any] = {
+            "decision": decision,
+            "confidence": "unknown",
+            "summary": summary,
+            "findings": [],
+            "stats": {"total_findings": 0, "stages_run": 0},
+            "review_time_seconds": duration_s,
+        }
+        atomic_write(archive_path / "verdict.json", json.dumps(verdict, indent=2))
+        completed_at = _dt.datetime.now(tz=_dt.UTC)
+        started_at = (
+            completed_at - _dt.timedelta(seconds=duration_s) if duration_s is not None else None
+        )
+        stage_log = {
+            "schema_version": 1,
+            "review_id": archive_path.name,
+            "repo": repo,
+            "pr_number": pr_number,
+            "head_sha": sha,
+            "started_at": started_at.isoformat() if started_at else None,
+            "completed_at": completed_at.isoformat(),
+            "duration_s": duration_s,
+            "outcome": outcome,
+            "decision": decision,
+            "phase": "pre-fix",
+            "parent_review_id": None,
+            "findings_count": 0,
+            "audit_flags": [],
+            "stages": {},
+        }
+        atomic_write(archive_path / "stage_log.json", json.dumps(stage_log, indent=2))
+        return ReviewArchiveRef(archive_path.name, archive_path)
+    except OSError as e:
+        logger.warning("PR #%s: terminal archive failed: %s", pr_number, e)
+        return None
+
+
+def record_fix_lineage(
+    pr_number: int,
+    fixed_sha: str,
+    source_review_id: str,
+    *,
+    repo: str,
+    checkpoint_summary: str = "",
+) -> None:
+    """Map a pushed fix SHA to the immutable review that produced it."""
+    path = get_pr_state_dir(pr_number, repo) / "fix_lineage.json"
+    try:
+        data = json.loads(path.read_text()) if path.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    data[fixed_sha] = {
+        "source_review_id": source_review_id,
+        "checkpoint_summary": checkpoint_summary,
+        "recorded_at": _dt.datetime.now(tz=_dt.UTC).isoformat(),
+    }
+    atomic_write(path, json.dumps(data, indent=2, sort_keys=True))
+
+
+def load_fix_lineage(pr_number: int, fixed_sha: str, repo: str = "") -> dict[str, Any] | None:
+    """Return lineage metadata for a post-fix SHA, if Gate recorded it."""
+    path = get_pr_state_dir(pr_number, repo, create=False) / "fix_lineage.json"
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    entry = data.get(fixed_sha)
+    return entry if isinstance(entry, dict) else None
 
 
 def cleanup_pr_state(pr_number: int, repo: str = "") -> None:

@@ -10,6 +10,7 @@ import os
 import random
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -212,6 +213,48 @@ def _gh(
 
 
 # ── PR Info ──────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class PullRequestTrust:
+    """Security-relevant pull-request identity returned by GitHub."""
+
+    base_repository: str
+    head_repository: str
+    head_sha: str
+    author_login: str
+    author_association: str
+    is_cross_repository: bool
+
+    def is_trusted_for(self, configured_repo: str) -> bool:
+        """Return whether v0.1 may execute this PR on the local host."""
+        expected = configured_repo.casefold()
+        return (
+            bool(self.base_repository)
+            and self.base_repository.casefold() == expected
+            and self.head_repository.casefold() == expected
+            and not self.is_cross_repository
+        )
+
+
+def get_pr_trust(repo: str, pr_number: int) -> PullRequestTrust:
+    """Fetch and normalize the PR fields that define Gate's trust boundary."""
+    out = _gh(["api", f"repos/{repo}/pulls/{pr_number}"])
+    data = json.loads(out)
+    base_repo = ((data.get("base") or {}).get("repo") or {}).get("full_name") or ""
+    head = data.get("head") or {}
+    head_repo = (head.get("repo") or {}).get("full_name") or ""
+    head_sha = str(head.get("sha") or "")
+    author_login = str((data.get("user") or {}).get("login") or "unknown")
+    association = str(data.get("author_association") or "UNKNOWN")
+    return PullRequestTrust(
+        base_repository=str(base_repo),
+        head_repository=str(head_repo),
+        head_sha=head_sha,
+        author_login=author_login,
+        author_association=association,
+        is_cross_repository=not head_repo or head_repo.casefold() != str(base_repo).casefold(),
+    )
 
 
 def get_pr_info(repo: str, pr_number: int) -> dict:
@@ -586,7 +629,15 @@ def post_review(
     # Sticky summary is best-effort: never let a comment hiccup block
     # the verdict path that the review object already recorded.
     try:
-        upsert_sticky_summary(repo, pr_number, verdict, build)
+        from gate.config import get_repo_bool
+
+        upsert_sticky_summary(
+            repo,
+            pr_number,
+            verdict,
+            build,
+            auto_fix_enabled=get_repo_bool(config or {}, "auto_fix", False),
+        )
     except Exception:
         logger.exception(f"PR #{pr_number}: sticky summary upsert failed (non-fatal)")
 
@@ -603,6 +654,7 @@ _CONCLUSION_TO_STATE = {
     "cancelled": "failure",
     "action_required": "failure",
     "failure": "failure",
+    "error": "error",
 }
 
 

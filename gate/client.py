@@ -115,13 +115,14 @@ class GateConnection:
                     continue
                 except Exception:
                     try:
-                        sock.close()
+                        if sock is not None:
+                            sock.close()
                     except Exception:
                         pass
                     sock = None
                     buffer = ""
 
-        if sock:
+        if sock is not None:
             try:
                 sock.close()
             except Exception:

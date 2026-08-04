@@ -114,7 +114,7 @@ class GateServer:
 
         self.server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.server_socket.bind(str(self.socket_path))
-        # Backlog of 64 so a burst of dashboard reconnects (e.g. after
+        # Backlog of 64 so a burst of authenticated integration reconnects (e.g. after
         # a Cloudflare-Tunnel hiccup that drops every active SSE client
         # at once) doesn't overflow the kernel accept queue.
         self.server_socket.listen(64)
@@ -231,11 +231,15 @@ class GateServer:
 
         elif msg_type == "review_request":
             pr_number = message.get("pr_number")
-            repo = message.get("repo", "")
-            head_sha = message.get("head_sha", "")
-            event = message.get("event", "synchronize")
-            branch = message.get("branch", "")
-            labels = message.get("labels", [])
+            if not isinstance(pr_number, int):
+                self._send_response(conn, {"type": "error", "message": "pr_number must be int"})
+                return
+            repo = str(message.get("repo") or "")
+            head_sha = str(message.get("head_sha") or "")
+            event = str(message.get("event") or "synchronize")
+            branch = str(message.get("branch") or "")
+            raw_labels = message.get("labels", [])
+            labels = [str(label) for label in raw_labels] if isinstance(raw_labels, list) else []
             self._review_queue.enqueue(
                 pr_number=pr_number,
                 repo=repo,
@@ -249,7 +253,10 @@ class GateServer:
 
         elif msg_type == "cancel_review":
             pr_number = message.get("pr_number")
-            repo = message.get("repo", "")
+            if not isinstance(pr_number, int):
+                self._send_response(conn, {"type": "error", "message": "pr_number must be int"})
+                return
+            repo = str(message.get("repo") or "")
             cancelled = self._review_queue.cancel_pr(pr_number, repo)
             if cancelled:
                 logger.info(f"Review cancelled via socket: PR #{pr_number}")
@@ -280,7 +287,7 @@ class GateServer:
             logger.info(f"Review started: {review.get('id')}")
 
         elif msg_type == "review_stage_update":
-            review_id = message.get("review_id")
+            review_id = str(message.get("review_id") or "")
             review = self._find_review(review_id)
             if review:
                 if not self._head_sha_matches(review, message):
@@ -300,7 +307,7 @@ class GateServer:
                 self.broadcast({"type": "review_updated", "review": review})
 
         elif msg_type == "review_completed":
-            review_id = message.get("review_id")
+            review_id = str(message.get("review_id") or "")
             review = self._find_review(review_id)
             if review:
                 if not self._head_sha_matches(review, message):
@@ -311,13 +318,19 @@ class GateServer:
                     )
                     return
                 review["status"] = "completed"
-                review["decision"] = message.get("decision", "")
+                decision = message.get("decision", "")
+                review["decision"] = decision
+                review["outcome"] = message.get("outcome") or {
+                    "skip": "skipped",
+                    "cancelled": "cancelled",
+                    "error": "error",
+                }.get(decision, "reviewed")
                 review["updated_at"] = _current_ms()
                 self.broadcast({"type": "review_completed", "review": review})
                 self.reviews = [r for r in self.reviews if r.get("id") != review_id]
 
         elif msg_type == "review_cancelled":
-            review_id = message.get("review_id")
+            review_id = str(message.get("review_id") or "")
             review = self._find_review(review_id)
             if review:
                 if not self._head_sha_matches(review, message):
@@ -337,7 +350,7 @@ class GateServer:
                 self.reviews = [r for r in self.reviews if r.get("id") != review_id]
 
         elif msg_type == "stage_register":
-            review_id = message.get("review_id")
+            review_id = str(message.get("review_id") or "")
             review = self._find_review(review_id)
             if review:
                 if not self._head_sha_matches(review, message):

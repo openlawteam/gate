@@ -68,11 +68,9 @@ def run_health_check() -> dict:
 def check_sleep_disabled() -> dict:
     """Verify sleep is disabled on the machine (macOS only).
 
-    The underlying ``pmset`` command and the ``sudo pmset -a disablesleep 1``
-    remediation are macOS-specific. On other platforms we treat sleep
-    management as the operator's responsibility (systemd's ``systemd-inhibit``
-    is the rough Linux equivalent) and report ``ok`` so the CI runner on
-    Ubuntu and any Linux deployment don't surface a spurious alert.
+    The underlying ``pmset`` command and remediation are macOS-specific.
+    Other platforms report the check as skipped so portable unit tests can
+    run without implying runtime support.
     """
     if sys.platform != "darwin":
         return {"ok": True, "detail": "skipped (not macOS)"}
@@ -148,9 +146,6 @@ def check_tailscale() -> dict:
     """Check Tailscale connectivity for remote access.
 
     Matches against the macOS process name ``Tailscale`` (the menu bar app).
-    On Linux the daemon is ``tailscaled``; the ``pgrep`` call will simply
-    return non-zero and we report "not running", which is the intended
-    behavior for hosts that don't participate in the tailnet.
     """
     try:
         result = subprocess.run(
@@ -377,29 +372,9 @@ def check_orphaned_check_runs() -> dict:
                     check_run_id,
                     conclusion="cancelled",
                     output_title="Gate Review: orphaned",
-                    output_summary="Review process died. PR auto-approved (fail-open).",
+                    output_summary="Review process died. No review decision was posted.",
                     sha=head_sha,
                 )
-            try:
-                pr_number = int(pr_num)
-                # ``pr_author`` is intentionally omitted here: the
-                # active_review.json marker does not persist it (the
-                # orchestrator writes the marker before fetching PR
-                # info), and this orphan-cleanup path is a fail-open
-                # recovery that runs at most a few times per day. The
-                # stderr-fallback in ``approve_pr`` still handles bot
-                # PRs correctly — it just costs one extra GraphQL
-                # round-trip and a WARNING log line per orphaned bot
-                # PR, which is acceptable for a recovery path.
-                github.approve_pr(
-                    repo,
-                    pr_number,
-                    "**Gate (error)** — review process died. Auto-approving.",
-                    config=config,
-                )
-            except ValueError:
-                pass
-
             marker.unlink(missing_ok=True)
             cleaned.append(label)
             pr = int(pr_num) if pr_num.isdigit() else 0

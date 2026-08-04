@@ -11,7 +11,7 @@ import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from gate import builder, github, notify, prompt, state
 from gate import quota as quota_mod
@@ -20,6 +20,7 @@ from gate.claude import spawn_review_stage
 from gate.config import repo_slug
 from gate.io import atomic_write
 from gate.logger import log_review, read_recent_decisions, write_live_log
+from gate.providers import FixRunnerProtocol, StageRunnerProtocol
 from gate.runner import StructuredRunner, run_with_retry
 from gate.schemas import StageResult, WorkspaceVanishedError
 from gate.tmux import kill_window
@@ -69,7 +70,7 @@ class ReviewOrchestrator:
     - Cancel path cleans up check run
     - Agent stages via spawn_review_stage() (tmux)
     - Structured stages run inline (no tmux)
-    - Exception handler approves PR fail-open
+    - Infrastructure failures are recorded without synthesizing a review
     """
 
     def __init__(
@@ -82,6 +83,8 @@ class ReviewOrchestrator:
         labels: list[str],
         config: dict,
         socket_path: Path | None = None,
+        stage_runner: StageRunnerProtocol | None = None,
+        fix_runner_factory: Callable[..., FixRunnerProtocol] | None = None,
     ):
         self.pr_number = pr_number
         self.repo = repo
@@ -91,8 +94,10 @@ class ReviewOrchestrator:
         self.labels = labels
         self.config = config
         self.socket_path = socket_path
+        self._stage_runner = stage_runner or StructuredRunner()
+        self._fix_runner_factory = fix_runner_factory
         self.workspace: Path | None = None
-        self.check_run_id: int | None = None
+        self.check_run_id: str | int | None = None
         self.check_name: str = "gate-review"
         self.is_post_fix_rereview: bool = False
         self.start_time: float | None = None
@@ -127,6 +132,12 @@ class ReviewOrchestrator:
         if not clone:
             raise RuntimeError(f"repo.clone_path not configured for {self.repo}")
         return Path(clone).expanduser()
+
+    def _require_workspace(self) -> Path:
+        """Return the prepared workspace or fail before running a stage."""
+        if self.workspace is None:
+            raise RuntimeError("review workspace has not been prepared")
+        return self.workspace
 
     def _emit(self, msg_type: str, **fields) -> None:
         """Emit a lifecycle event to the server (no-op if no connection).
@@ -218,6 +229,9 @@ class ReviewOrchestrator:
                 "repo": self.repo,
                 "head_sha": self.head_sha,
                 "status": "running",
+                "auto_fix_enabled": bool(
+                    (self.config.get("repo", {}) or {}).get("auto_fix", False)
+                ),
             },
         )
 
@@ -226,8 +240,84 @@ class ReviewOrchestrator:
             if not github._wait_for_connectivity(max_wait=60.0):
                 logger.warning(
                     f"PR #{self.pr_number}: GitHub unreachable"
-                    " at start, proceeding anyway (fail-open)"
+                    " at start; continuing to the bounded API calls, which fail neutrally on error"
                 )
+
+            # === PRE-FLIGHT: Resolve and enforce the v0.1 trust boundary ===
+            # This happens before workspace creation, repository commands, tmux,
+            # or model execution. Public forks remain unsupported until Gate has
+            # a real execution sandbox.
+            pr_info = github.get_pr_info(self.repo, self.pr_number)
+            trust = github.get_pr_trust(self.repo, self.pr_number)
+            self.pr_title = pr_info.get("title", "")
+            self.pr_body = pr_info.get("body") or ""
+            self.pr_author = pr_info.get("user", {}).get("login", "unknown")
+
+            # Create the status before returning from any pre-flight gate so the
+            # PR receives a durable explanation of what Gate decided to do.
+            self.check_run_id = github.create_check_run(
+                self.repo, self.head_sha, name=self.check_name, status="queued"
+            )
+            self._write_active_marker()
+
+            if not trust.is_trusted_for(self.repo):
+                reason = (
+                    "Gate v0.1 only executes pull requests whose head branch "
+                    "belongs to the configured base repository. Public forks "
+                    "are refused until sandboxed execution is available."
+                )
+                logger.warning(
+                    "PR #%s refused: untrusted head repository %r (base %r)",
+                    self.pr_number,
+                    trust.head_repository,
+                    trust.base_repository,
+                )
+                github.complete_check_run(
+                    self.repo,
+                    self.check_run_id,
+                    conclusion="action_required",
+                    output_title="Gate Review: untrusted source refused",
+                    output_summary=reason,
+                    sha=self.head_sha,
+                )
+                state.persist_terminal_review(
+                    self.pr_number,
+                    self.head_sha,
+                    repo=self.repo,
+                    outcome="untrusted",
+                    decision="error",
+                    summary=reason,
+                    duration_s=time.monotonic() - self.start_time,
+                )
+                notify.review_failed(self.pr_number, reason, repo=self.repo)
+                self._emit(
+                    "review_completed",
+                    review_id=review_id,
+                    decision="error",
+                    outcome="untrusted",
+                )
+                return
+
+            if (
+                isinstance(trust.head_sha, str)
+                and trust.head_sha
+                and trust.head_sha != self.head_sha
+            ):
+                github.complete_check_run(
+                    self.repo,
+                    self.check_run_id,
+                    conclusion="neutral",
+                    output_title="Gate Review: stale dispatch",
+                    output_summary="The pull request head changed before Gate started.",
+                    sha=self.head_sha,
+                )
+                self._emit(
+                    "review_completed",
+                    review_id=review_id,
+                    decision="skip",
+                    outcome="skipped",
+                )
+                return
 
             # === DETECT POST-FIX RE-REVIEW ===
             # If the head commit was authored by the bot, this is Gate
@@ -244,15 +334,10 @@ class ReviewOrchestrator:
                     f"authored by bot ({bot_email}) — tagging as post-fix re-review"
                 )
 
-            # === CREATE CHECK RUN FIRST ===
-            self.check_run_id = github.create_check_run(
-                self.repo, self.head_sha, name=self.check_name, status="queued"
-            )
-            self._write_active_marker()
-
             # === GATE 1: Label checks ===
             if "gate-skip" in self.labels or "gate-emergency-bypass" in self.labels:
                 action = "skip" if "gate-skip" in self.labels else "bypass"
+                override_summary = f"Review skipped by trusted-operator {action} label."
                 github.approve_pr(
                     self.repo,
                     self.pr_number,
@@ -265,8 +350,17 @@ class ReviewOrchestrator:
                     self.check_run_id,
                     conclusion="neutral",
                     output_title=f"Gate: {action}",
-                    output_summary="Review skipped by label.",
+                    output_summary=override_summary,
                     sha=self.head_sha,
+                )
+                state.persist_terminal_review(
+                    self.pr_number,
+                    self.head_sha,
+                    repo=self.repo,
+                    outcome="skipped",
+                    decision="skip",
+                    summary=override_summary,
+                    duration_s=time.monotonic() - self.start_time,
                 )
                 write_live_log(self.pr_number, f"Skipped ({action})", "gate", repo=self.repo)
                 self._emit("review_completed", review_id=review_id, decision="skip")
@@ -277,35 +371,41 @@ class ReviewOrchestrator:
 
             # === GATE 2: Circuit breaker ===
             if self._circuit_breaker_tripped():
-                github.approve_pr(
-                    self.repo,
-                    self.pr_number,
-                    "**Gate (circuit breaker)** — last 3 reviews were errors. "
-                    "Auto-approving. Investigate the gate machine.",
-                    pr_author=self.pr_author,
-                    config=self.config,
+                circuit_summary = (
+                    "Last 3 reviews were errors. No review decision was posted; "
+                    "investigate the Gate host."
                 )
                 github.complete_check_run(
                     self.repo,
                     self.check_run_id,
-                    conclusion="neutral",
+                    conclusion="error",
                     output_title="Gate: circuit breaker",
-                    output_summary="Last 3 reviews were errors. Auto-approved.",
+                    output_summary=circuit_summary,
                     sha=self.head_sha,
+                )
+                state.persist_terminal_review(
+                    self.pr_number,
+                    self.head_sha,
+                    repo=self.repo,
+                    outcome="error",
+                    decision="error",
+                    summary=circuit_summary,
+                    duration_s=time.monotonic() - self.start_time,
                 )
                 notify.circuit_breaker(
                     self.pr_number, repo=self.repo, author=self.pr_author or None
                 )
                 write_live_log(self.pr_number, "Circuit breaker tripped", "gate", repo=self.repo)
-                self._emit("review_completed", review_id=review_id, decision="skip")
+                self._emit(
+                    "review_completed",
+                    review_id=review_id,
+                    decision="error",
+                    outcome="error",
+                )
                 return
 
-            # === SETUP: Fetch PR metadata ===
+            # === SETUP ===
             self._update_check("Setting up workspace...")
-            pr_info = github.get_pr_info(self.repo, self.pr_number)
-            self.pr_title = pr_info.get("title", "")
-            self.pr_body = pr_info.get("body") or ""
-            self.pr_author = pr_info.get("user", {}).get("login", "unknown")
 
             # A cancel that arrives while we are still in pre-workspace
             # setup (fetch PR metadata, etc.) would otherwise race a
@@ -377,54 +477,74 @@ class ReviewOrchestrator:
             # === GATE 4: Quota check ===
             quota = quota_mod.check_quota()
             if not quota["quota_ok"]:
+                quota_summary = (
+                    f"Quota at {quota.get('five_hour_pct', '?')}%. "
+                    "Review deferred; no review decision was posted."
+                )
                 github.comment_pr(
                     self.repo,
                     self.pr_number,
                     f"**Gate: Quota low** — {quota.get('reason', '')}. "
-                    "Review deferred. PR is not blocked.",
-                )
-                github.approve_pr(
-                    self.repo,
-                    self.pr_number,
-                    "**Gate (quota pause)** — auto-approved, quota low.",
-                    pr_author=self.pr_author,
-                    config=self.config,
+                    "Review deferred; no review decision was posted.",
                 )
                 github.complete_check_run(
                     self.repo,
                     self.check_run_id,
-                    conclusion="neutral",
+                    conclusion="error",
                     output_title="Gate: quota pause",
-                    output_summary=f"Quota at {quota.get('five_hour_pct', '?')}%. Deferred.",
+                    output_summary=quota_summary,
                     sha=self.head_sha,
                 )
-                self._emit("review_completed", review_id=review_id, decision="skip")
+                state.persist_terminal_review(
+                    self.pr_number,
+                    self.head_sha,
+                    repo=self.repo,
+                    outcome="error",
+                    decision="error",
+                    summary=quota_summary,
+                    duration_s=time.monotonic() - self.start_time,
+                )
+                self._emit(
+                    "review_completed",
+                    review_id=review_id,
+                    decision="error",
+                    outcome="error",
+                )
                 return
 
             # === GATE 5: Review cycle limit ===
             max_cycles = self.config.get("limits", {}).get("max_review_cycles", 5)
             if prior.get("review_count", 0) >= max_cycles:
+                cycle_summary = f"Reached {max_cycles} review cycles; no decision was posted."
                 github.comment_pr(
                     self.repo,
                     self.pr_number,
-                    f"**Gate: Review cycle limit reached** — {max_cycles} reviews on this PR.",
-                )
-                github.approve_pr(
-                    self.repo,
-                    self.pr_number,
-                    "**Gate (cycle limit)** — auto-approved after max review cycles.",
-                    pr_author=self.pr_author,
-                    config=self.config,
+                    f"**Gate: Review cycle limit reached** — {max_cycles} reviews on this PR. "
+                    "No review decision was posted.",
                 )
                 github.complete_check_run(
                     self.repo,
                     self.check_run_id,
                     conclusion="neutral",
                     output_title="Gate: cycle limit",
-                    output_summary=f"Reached {max_cycles} review cycles.",
+                    output_summary=cycle_summary,
                     sha=self.head_sha,
                 )
-                self._emit("review_completed", review_id=review_id, decision="skip")
+                state.persist_terminal_review(
+                    self.pr_number,
+                    self.head_sha,
+                    repo=self.repo,
+                    outcome="skipped",
+                    decision="skip",
+                    summary=cycle_summary,
+                    duration_s=time.monotonic() - self.start_time,
+                )
+                self._emit(
+                    "review_completed",
+                    review_id=review_id,
+                    decision="skip",
+                    outcome="skipped",
+                )
                 return
 
             if self._cancelled.is_set():
@@ -445,6 +565,7 @@ class ReviewOrchestrator:
                 write_live_log(self.pr_number, "Triage starting", "stage", repo=self.repo)
                 triage = self._run_structured_stage("triage")
                 self._save_stage_result("triage", triage)
+            self._require_stage_success(triage)
 
             # === STAGE 2: BUILD (direct execution) ===
             self._update_check("Stage 2: Build verification...")
@@ -483,7 +604,7 @@ class ReviewOrchestrator:
                 # the cached postconditions so Logic sees the same
                 # contract on every iteration. The risk-level guard
                 # below (``risk in ("high", "critical")``) is the
-                # source of truth — keep ``prompts/postconditions.md``
+                # source of truth — keep ``gate/resources/prompts/postconditions.md``
                 # and this comment in sync if you change it.
                 if is_fix_rerun:
                     cached_pc = self._load_cached_postconditions()
@@ -513,6 +634,7 @@ class ReviewOrchestrator:
                         )
                         pc_result = self._run_structured_stage("postconditions")
                         self._save_stage_result("postconditions", pc_result)
+                        self._require_stage_success(pc_result)
 
                 # === STAGE 3: ARCHITECTURE (agent — tmux) ===
                 if not is_fix_rerun:
@@ -529,6 +651,7 @@ class ReviewOrchestrator:
                     write_live_log(self.pr_number, "Architecture starting", "stage", repo=self.repo)
                     arch_result = self._run_agent_stage("architecture")
                     self._save_stage_result("architecture", arch_result)
+                    self._require_stage_success(arch_result)
 
                 # === STAGE 4: SECURITY (agent — tmux) ===
                 if not is_fix_rerun:
@@ -545,6 +668,7 @@ class ReviewOrchestrator:
                     write_live_log(self.pr_number, "Security starting", "stage", repo=self.repo)
                     sec_result = self._run_agent_stage("security")
                     self._save_stage_result("security", sec_result)
+                    self._require_stage_success(sec_result)
 
                 # === STAGE 5: LOGIC (agent — tmux) ===
                 if self._cancelled.is_set():
@@ -560,6 +684,7 @@ class ReviewOrchestrator:
                 write_live_log(self.pr_number, "Logic starting", "stage", repo=self.repo)
                 logic_result = self._run_agent_stage("logic")
                 self._save_stage_result("logic", logic_result)
+                self._require_stage_success(logic_result)
 
             # === Cleanup gate test files ===
             self._cleanup_gate_tests()
@@ -599,6 +724,7 @@ class ReviewOrchestrator:
                     _f["finding_id"] = _cfi(_f)
 
             self._save_stage_result("verdict", verdict)
+            self._require_stage_success(verdict)
 
             # === EXTERNAL CHECKS (PR B.2) ===
             # Consult external CI / deploy-preview check-runs (Vercel,
@@ -622,6 +748,30 @@ class ReviewOrchestrator:
                 self._emit("review_completed", review_id=review_id, decision="cancelled")
                 return
 
+            # === PERSIST IMMUTABLE EVIDENCE ===
+            # The archive is the Flight Recorder's source of truth. Prove it
+            # exists before posting a GitHub verdict so Gate can never leave an
+            # approval without the evidence that produced it.
+            decision = verdict.data.get("decision", "error")
+            clone_path = self._clone_path()
+            lineage = (
+                state.load_fix_lineage(self.pr_number, self.head_sha, self.repo)
+                if self.is_post_fix_rereview
+                else None
+            )
+            review_archive = state.persist_review_state(
+                self.pr_number,
+                self.head_sha,
+                self.workspace,
+                decision,
+                clone_path=clone_path,
+                repo=self.repo,
+                is_post_fix_rereview=self.is_post_fix_rereview,
+                parent_review_id=(lineage or {}).get("source_review_id"),
+            )
+            if review_archive is None:
+                raise RuntimeError("review archive could not be persisted")
+
             # === POST REVIEW ===
             github.post_review(
                 self.repo,
@@ -634,7 +784,6 @@ class ReviewOrchestrator:
             )
 
             # Complete check run
-            decision = verdict.data.get("decision", "approve")
             if decision in ("approve", "approve_with_notes"):
                 conclusion = "success"
             else:
@@ -689,18 +838,6 @@ class ReviewOrchestrator:
                 author=self.pr_author or None,
             )
 
-            # === PERSIST STATE ===
-            clone_path = self._clone_path()
-            state.persist_review_state(
-                self.pr_number,
-                self.head_sha,
-                self.workspace,
-                decision,
-                clone_path=clone_path,
-                repo=self.repo,
-                is_post_fix_rereview=self.is_post_fix_rereview,
-            )
-
             write_live_log(
                 self.pr_number,
                 f"Review complete: {decision} ({findings_count} findings, {elapsed}s)",
@@ -749,10 +886,15 @@ class ReviewOrchestrator:
                     status="in_progress",
                 )
                 try:
-                    from gate.fixer import FixPipeline
                     from gate.logger import log_fix_result
 
-                    fixer = FixPipeline(
+                    if self._fix_runner_factory is None:
+                        from gate.fixer import FixPipeline
+
+                        factory: Callable[..., FixRunnerProtocol] = FixPipeline
+                    else:
+                        factory = self._fix_runner_factory
+                    fixer = factory(
                         self.pr_number,
                         self.repo,
                         self.workspace,
@@ -835,6 +977,14 @@ class ReviewOrchestrator:
                         output_summary=fix_result.summary,
                         sha=self.head_sha,
                     )
+                    if fix_result.pushed and fix_result.pushed_sha and review_archive is not None:
+                        state.record_fix_lineage(
+                            self.pr_number,
+                            fix_result.pushed_sha,
+                            review_archive.review_id,
+                            repo=self.repo,
+                            checkpoint_summary=fix_result.summary,
+                        )
                     self._emit(
                         "review_completed",
                         review_id=review_id,
@@ -922,23 +1072,31 @@ class ReviewOrchestrator:
                 logger.info(f"Review cancelled mid-stage for PR #{self.pr_number}: {e}")
                 self._emit("review_completed", review_id=review_id, decision="cancelled")
             else:
-                # Fail-open
-                self._emit("review_completed", review_id=review_id, decision="error")
+                self._emit(
+                    "review_completed",
+                    review_id=review_id,
+                    decision="error",
+                    outcome="error",
+                )
                 logger.exception(f"Review failed for PR #{self.pr_number}")
-                github.approve_pr(
-                    self.repo,
+                state.persist_terminal_review(
                     self.pr_number,
-                    f"**Gate (error)** — review failed: {e}. Auto-approving.",
-                    pr_author=self.pr_author,
-                    config=self.config,
+                    self.head_sha,
+                    repo=self.repo,
+                    outcome="error",
+                    decision="error",
+                    summary=f"Review crashed: {e}. No review decision was posted.",
+                    duration_s=(
+                        time.monotonic() - self.start_time if self.start_time is not None else None
+                    ),
                 )
                 if self.check_run_id:
                     github.complete_check_run(
                         self.repo,
                         self.check_run_id,
-                        conclusion="cancelled",
+                        conclusion="error",
                         output_title="Gate Review: error",
-                        output_summary=f"Review crashed: {e}. PR auto-approved (fail-open).",
+                        output_summary=f"Review crashed: {e}. No review decision was posted.",
                         sha=self.head_sha,
                     )
                 notify.review_failed(
@@ -972,13 +1130,14 @@ class ReviewOrchestrator:
 
     def _spawn_and_wait_agent(self, stage_name: str) -> StageResult:
         """Spawn a single agent attempt and poll for its result file."""
-        result_file = self.workspace / f"{stage_name}-result.json"
+        workspace = self._require_workspace()
+        result_file = workspace / f"{stage_name}-result.json"
         result_file.unlink(missing_ok=True)
 
         pane_id = spawn_review_stage(
             review_id=self._review_id(),
             stage=stage_name,
-            workspace=str(self.workspace),
+            workspace=str(workspace),
             socket_path=str(self.socket_path) if self.socket_path else None,
             repo=self.repo,
         )
@@ -1024,14 +1183,15 @@ class ReviewOrchestrator:
 
     def _run_structured_stage(self, stage_name: str) -> StageResult:
         """Run a structured stage inline (no tmux)."""
+        workspace = self._require_workspace()
         template = prompt.load(stage_name)
-        vars_dict = prompt.build_vars(self.workspace, stage_name, self._env_vars(), self.config)
+        vars_dict = prompt.build_vars(workspace, stage_name, self._env_vars(), self.config)
         assembled = prompt.safe_substitute(template, vars_dict, f"orchestrator-{stage_name}")
         return run_with_retry(
-            lambda: StructuredRunner().run(
+            lambda: self._stage_runner.run(
                 stage_name,
                 assembled,
-                self.workspace,
+                workspace,
                 self.config,
                 cancelled=self._cancelled,
             ),
@@ -1058,7 +1218,8 @@ class ReviewOrchestrator:
 
         Rules (in order):
         - ``gate-no-fix`` label always short-circuits to False.
-        - ``request_changes`` always runs the fix pipeline.
+        - The repository must explicitly set ``auto_fix = true``.
+        - ``request_changes`` then runs the fix pipeline.
         - ``approve_with_notes`` runs the fix pipeline only when the
           per-repo ``fix_on_approve_with_notes`` flag is true
           (default true for back-compat). Repos that prefer to treat
@@ -1069,12 +1230,22 @@ class ReviewOrchestrator:
 
         if "gate-no-fix" in self.labels:
             return False
+        if not get_repo_bool(self.config, "auto_fix", False):
+            return False
         decision = verdict.get("decision")
         if decision == "request_changes":
             return True
         if decision == "approve_with_notes":
             return get_repo_bool(self.config, "fix_on_approve_with_notes", True)
         return False
+
+    @staticmethod
+    def _require_stage_success(result: StageResult) -> None:
+        """Stop the pipeline before it can turn an internal error into approval."""
+        if result.success and not result.data.get("error"):
+            return
+        detail = result.error or str(result.data.get("error") or "unknown error")
+        raise RuntimeError(f"{result.stage} stage failed: {detail}")
 
     def _update_check(self, title: str) -> None:
         """Update check run with stage progress."""
@@ -1220,8 +1391,8 @@ class ReviewOrchestrator:
         """Merge external CI signal into the verdict (PR B.2).
 
         Returns True if verdict_data was mutated (caller re-persists).
-        Fail-open on any unexpected error — the existing review is
-        already trustworthy; we only add signal, we don't degrade.
+        Required-check infrastructure fails closed: an unavailable signal
+        cannot turn an otherwise uncertain review into an approval.
         """
         from gate import external_checks
         from gate.finding_id import compute_finding_id
@@ -1240,12 +1411,34 @@ class ReviewOrchestrator:
                 external_checks.fetch_check_state(self.head_sha, self.repo),
                 required,
             )
-        except Exception as e:  # noqa: BLE001 — fail-open
+        except Exception as e:  # noqa: BLE001
             logger.warning(
                 f"PR #{self.pr_number}: external-check fetch failed "
-                f"({e}); skipping external-check gate."
+                f"({e}); blocking approval for human attention."
             )
-            return False
+            failure_finding = {
+                "severity": "error",
+                "file": "<external>",
+                "message": "Required external checks could not be fetched.",
+                "category": "external_check",
+                "rule_source": "external:fetch_error",
+                "suggestion": "Restore GitHub check visibility and rerun Gate.",
+                "source_stage": "external_checks",
+                "evidence": str(e),
+            }
+            failure_finding["finding_id"] = compute_finding_id(failure_finding)
+            findings = verdict_data.get("findings")
+            if not isinstance(findings, list):
+                findings = []
+            findings.append(failure_finding)
+            verdict_data["findings"] = findings
+            verdict_data["decision"] = "request_changes"
+            prior_summary = str(verdict_data.get("summary") or "").strip()
+            failure_summary = "Required external-check infrastructure failed; approval withheld."
+            verdict_data["summary"] = (
+                f"{prior_summary}\n\n{failure_summary}" if prior_summary else failure_summary
+            )
+            return True
 
         # Wait on blocking pending/unknown before concluding.
         if classification.has_blocking_pending or classification.unknown:
@@ -1663,7 +1856,7 @@ class ReviewOrchestrator:
                     pr_number=self.pr_number,
                     spec_files=captured,
                     base_sha=base_sha,
-                    clone_path=self._clone_path(),
+                    clone_path=str(self._clone_path()),
                     config=self.config,
                 )
                 if pr_num:

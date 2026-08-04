@@ -177,11 +177,7 @@ STRUCTURED_STAGES = {
 
 
 def build_fallback(stage: str) -> dict:
-    """Return a safe fallback response when a stage fails.
-
-    Each stage has a specific fallback that fails-open so the review can continue.
-    Ported from buildFallback() in run-stage.js.
-    """
+    """Return a schema-compatible, fail-closed response for a failed stage."""
     if stage == "triage":
         return {
             "change_type": "mixed",
@@ -201,9 +197,9 @@ def build_fallback(stage: str) -> dict:
 
     if stage == "verdict":
         return {
-            "decision": "approve",
+            "decision": "error",
             "confidence": "low",
-            "summary": "Verdict stage failed — auto-approving to avoid blocking.",
+            "summary": "Verdict stage failed — no review decision was posted.",
             "findings": [],
             "resolved_findings": [],
             "stats": {"stages_run": 0, "total_findings": 0},
@@ -216,7 +212,7 @@ def build_fallback(stage: str) -> dict:
             "fixed": [],
             "not_fixed": [],
             "stats": {"total_findings": 0, "fixed": 0, "not_fixed": 0, "files_modified": 0},
-            "pass": True,
+            "pass": False,
             "error": "stage_failed",
         }
 
@@ -238,22 +234,19 @@ def build_fallback(stage: str) -> dict:
     if stage == "fix-polish":
         return {
             "corrections": [],
-            "clean": True,
+            "clean": False,
             "error": "stage_failed",
         }
 
     if stage == "fix-rereview":
         return {
-            "pass": True,
+            "pass": False,
             "issues": [],
-            "summary": "Fallback: pass",
+            "summary": "Fix re-review failed; human attention is required.",
             "error": "stage_failed",
         }
 
     if stage == "postconditions":
-        # Fail-open: an empty list means Logic treats this PR as if
-        # postconditions extraction was skipped. Safer than blocking
-        # the review on a structured-stage error.
         return {
             "postconditions": [],
             "error": "stage_failed",
@@ -262,8 +255,8 @@ def build_fallback(stage: str) -> dict:
     # Default fallback for agent stages (architecture, security, logic)
     return {
         "findings": [],
-        "summary": f"{stage} stage failed — no findings (auto-pass to avoid blocking)",
-        "pass": True,
+        "summary": f"{stage} stage failed — no review decision was posted",
+        "pass": False,
         "error": "stage_failed",
     }
 
@@ -282,8 +275,13 @@ class StageResult:
 
     @classmethod
     def fallback(cls, stage: str) -> "StageResult":
-        """Fail-open fallback: returns a safe default so the review can continue."""
-        return cls(stage=stage, success=True, data=build_fallback(stage))
+        """Return a schema-compatible failure that callers must not approve."""
+        return cls(
+            stage=stage,
+            success=False,
+            data=build_fallback(stage),
+            error=f"{stage} stage failed",
+        )
 
     @classmethod
     def quota_exhausted(cls, stage: str) -> "StageResult":
@@ -307,6 +305,7 @@ class FixResult:
 
     success: bool
     pushed: bool = False
+    pushed_sha: str = ""
     reason: str = ""
     error: str | None = None
     summary: str = ""
@@ -392,7 +391,7 @@ class Finding:
 
     Required: ``severity``, ``file``, ``message``.
     Optional: everything else. ``source_stage`` is stamped by the
-    verdict aggregator (see prompts/verdict.md); ``finding_id`` is
+    verdict aggregator (see gate/resources/prompts/verdict.md); ``finding_id`` is
     stamped by the orchestrator after verdict.
     """
 

@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-PROFILES: dict[str, dict[str, str]] = {
+PROFILES: dict[str, dict[str, Any]] = {
     "node": {
         "language": "TypeScript/JavaScript",
         "typecheck_cmd": "npx tsc --noEmit",

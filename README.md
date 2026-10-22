@@ -1,3 +1,7 @@
+> **Project status — 2026-10-22:** Portfolio/interview preservation snapshot; not a new release or publication.
+>
+> This branch preserves the local implementation and documentation. Backup preparation did not rerun application tests, install software, call model providers, deploy a service or establish release readiness. Credentials and runtime state are excluded.
+
 # Gate
 
 Gate is a macOS-first review control plane and flight recorder for evidence-backed AI pull-request reviews. It coordinates focused review stages, preserves what each stage observed, and makes the complete decision trail explorable in a terminal UI.
